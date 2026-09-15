@@ -39,7 +39,7 @@
         "name": "In Progress",
         "type": null
       },
-      "title": "Separate Background leaves an empty layer after reload",
+      "title": "Example issue: a saved item is empty after reload",
       "url": null
     }
   },

@@ -66,7 +66,7 @@
         "name": "In Progress",
         "type": "started"
       },
-      "title": "Separate Background leaves an empty layer after reload",
+      "title": "Example issue: a saved item is empty after reload",
       "url": "https://linear.app/example/issue/web-3312/x"
     },
     "WEB-3317": {
@@ -82,7 +82,7 @@
         "name": "Todo",
         "type": "unstarted"
       },
-      "title": "AI tools that run a custom pipeline stop when the drawer is closed",
+      "title": "Example issue: a long task stops when its panel is closed",
       "url": "https://linear.app/example/issue/web-3317/x"
     },
     "WEB-3318": {
@@ -103,7 +103,7 @@
         "name": "Backlog",
         "type": "backlog"
       },
-      "title": "AI Tools drawer is blank when a still-processing layer is selected",
+      "title": "Example issue: a panel is blank while an item is still loading",
       "url": "https://linear.app/example/issue/web-3318/x"
     }
   },

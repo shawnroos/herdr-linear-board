@@ -275,10 +275,15 @@ board linear snapshot <WORKSPACE_ID> [--json]
   `bin/work-snapshot.sh` for that space and attaches a `pane_status` map (`working`, `idle`,
   `blocked`, `done`, `unknown`). Every section carries its own `status` (`ok`, `unavailable`,
   `unknown`, `missing`); exit 0 means a document came back, not that every source was reachable.
-- The daemon finds the plugin through `BOARD_WORK_PLUGIN_ROOT`, then `[daemon] work_plugin_root`
-  in the board config, then the installed `work@shrimpshack` plugin; it needs plugin `0.3.0` or
-  newer. A missing or too-old plugin is protocol code 6 (`work plugin unavailable`), exit 6. The
-  daemon reads those settings at start: run `board daemon stop` after changing them.
+- The daemon finds the plugin through `BOARD_WORK_PLUGIN_ROOT` (yours first, sent with the request,
+  then the daemon's), then `[daemon] work_plugin_root` in the board config, then the installed
+  `work@shrimpshack` plugin; it needs plugin `0.3.0` or newer. A missing or too-old plugin is
+  protocol code 6 (`work plugin unavailable`), exit 6. All of these are read on every request, so a
+  change takes effect without restarting the daemon. The error never includes the script's stderr;
+  it names the command to run by hand to see it.
+- Focusing a pane (`o` in the Linear board) has no CLI verb on purpose: it moves the person's view
+  in herdr, which an agent has no reason to do. An agent that needs a pane's state reads
+  `pane_status` from `board linear snapshot`.
 
 ### TUI, daemon, version, skill
 

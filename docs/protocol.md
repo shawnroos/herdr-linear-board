@@ -507,27 +507,36 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
 
 ### linear
 
-- `linear.snapshot {workspace_id, origin_socket?}` → the work plugin's space snapshot document
+- `linear.snapshot {workspace_id, origin_socket?, plugin_root?}` → the work plugin's space snapshot document
   (`plugins/work/docs/snapshot.md` in the plugin repo; board types `LinearSnapshot` in
   `board-core::protocol`) plus a daemon-attached `pane_status: {pane_id: status}` for every pane id
   the document names in `issues[].bindings[].panes` and `unmapped[].panes`. The daemon resolves the
-  plugin root (`BOARD_WORK_PLUGIN_ROOT`, then `[daemon] work_plugin_root`, then the `user`-scope
-  `installPath` of `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
+  plugin root on every request (`plugin_root`, which the CLI and TUI fill from their own
+  `BOARD_WORK_PLUGIN_ROOT`; then the daemon's `BOARD_WORK_PLUGIN_ROOT`; then `[daemon]
+  work_plugin_root` read from the board config now; then the `user`-scope `installPath` of
+  `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
   `.claude-plugin/plugin.json` version below `0.3.0` naming both versions, and runs
   `bin/work-snapshot.sh <workspace_id>` with a bounded deadline and an environment built from
   scratch: `HOME`, `PATH`, `HERDR_SOCKET_PATH` (the canonicalized `origin_socket`, when given),
   every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, `HERDR_BIN` only when
   `HERDR_BIN_PATH` names an existing file, and the knobs the daemon sets
-  (`HERDR_LINEAR_TIMEOUT_SECONDS=8`, `HERDR_LINEAR_RETRY_MAX=1`, `HERDR_LINEAR_VIEW_PAGE_MAX=10`).
-  The child's argv and environment are never logged. Exit 0 with a document is the only success;
+  (`HERDR_LINEAR_TIMEOUT_SECONDS=8`, `HERDR_LINEAR_RETRY_MAX=1`, `HERDR_LINEAR_VIEW_PAGE_MAX=10`,
+  `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS=5`, `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS=5`). A variable
+  whose name or value is not UTF-8 is left out. The child's argv and environment are never logged,
+  and its stderr is not captured or shown: a plugin tracing its own run would print the credential
+  it resolves. The script is stopped (SIGTERM to its process group, SIGKILL two seconds later) at
+  the deadline, when the daemon is stopping, or when the client that asked closes its connection;
+  a process it leaves in its group after exiting is killed. Clients wait at most
+  `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s), longer than the daemon can take to answer. Exit 0 with a document is the only success;
   the daemon never reads exit 0 as "every source reachable" — each section carries its own status
   and a partial document is returned as partial. Pane status is a best-effort second read: one
-  `session.snapshot` on `origin_socket` when the daemon has a herdr handle; with no handle, no
-  `origin_socket`, or any failure every status is `"unknown"`. Error 1 for an empty
+  `session.snapshot` on `origin_socket`, whether or not the daemon has a herdr handle of its own;
+  with no `origin_socket` or any failure every status is `"unknown"`. Error 1 for an empty
   `workspace_id`; error 6 for no resolvable root (the message names all three sources), a plugin
-  below the floor, a missing script, a timeout (the child is killed and reaped), a non-zero exit
-  (`2` argument refused, `3` no such space, others a crash — each with the sanitised stderr tail),
-  empty stdout, an unparseable document, or a `schema` other than `1`.
+  below the floor, a missing script, a timeout or a stop (the child is stopped and reaped), a
+  non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
+  to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
+  unparseable document, or a `schema` other than `1`.
 
 ## Card statuses & signals
 

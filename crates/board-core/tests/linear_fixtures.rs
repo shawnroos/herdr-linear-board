@@ -123,3 +123,47 @@ fn a_one_byte_change_fails_the_pinned_hash() {
     bytes[last] ^= 0x01;
     assert_ne!(&sha256_hex(&bytes), &hashes[file]);
 }
+
+/// With `BOARD_WORK_PLUGIN_CHECKOUT` naming a work plugin checkout
+/// (`plugins/work`), its fixtures must be these fixtures byte for byte. The
+/// plugin's suite proves `bin/work-snapshot.sh` prints those files, so the two
+/// checks together carry real plugin output to the board's types. Unset, the
+/// test says so and passes: CI here has no plugin checkout.
+#[test]
+fn a_plugin_checkout_carries_exactly_these_fixtures() {
+    let Some(checkout) = std::env::var_os("BOARD_WORK_PLUGIN_CHECKOUT") else {
+        eprintln!("BOARD_WORK_PLUGIN_CHECKOUT unset: plugin fixture parity not checked");
+        return;
+    };
+    let theirs = Path::new(&checkout).join("tests/fixtures/snapshot");
+    let (_, hashes) = pinned();
+    let mut on_their_side: Vec<String> = std::fs::read_dir(&theirs)
+        .unwrap_or_else(|e| panic!("{} is not a plugin checkout: {e}", theirs.display()))
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".json"))
+        .collect();
+    on_their_side.sort();
+    let pinned_names: Vec<String> = hashes.keys().cloned().collect();
+    assert_eq!(
+        on_their_side, pinned_names,
+        "the two fixture sets name different files"
+    );
+    for file in &pinned_names {
+        let mine = std::fs::read(fixture_dir().join(file)).unwrap();
+        let other = std::fs::read(theirs.join(file)).unwrap();
+        assert!(
+            mine == other,
+            "{file} differs from the plugin checkout's copy"
+        );
+        serde_json::from_slice::<LinearSnapshot>(&other)
+            .unwrap_or_else(|e| panic!("the plugin's {file} does not parse: {e}"));
+    }
+    let manifest =
+        std::fs::read_to_string(Path::new(&checkout).join(".claude-plugin/plugin.json")).unwrap();
+    let (version, _) = pinned();
+    assert!(
+        manifest.contains(&format!("\"version\": \"{version}\""))
+            || manifest.contains(&format!("\"version\":\"{version}\"")),
+        "the checkout is not plugin {version}: {manifest}"
+    );
+}

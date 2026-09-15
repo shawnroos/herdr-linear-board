@@ -955,16 +955,21 @@ board tui / board linear snapshot <id>
   ← document + pane_status
 ```
 
-The plugin root is resolved in order: `BOARD_WORK_PLUGIN_ROOT`, then `[daemon] work_plugin_root`
-in the board config, then the `user`-scope `installPath` of `work@shrimpshack` in
-`~/.claude/plugins/installed_plugins.json`. The daemon reads `.claude-plugin/plugin.json` at that
+The plugin root is resolved on every request, in order: the caller's `BOARD_WORK_PLUGIN_ROOT`
+(sent as `plugin_root`), the daemon's, `[daemon] work_plugin_root` read from the board config at
+that moment, then the `user`-scope `installPath` of `work@shrimpshack` in
+`~/.claude/plugins/installed_plugins.json`. None of them needs a daemon restart to take effect. The daemon reads `.claude-plugin/plugin.json` at that
 root and refuses a version below `0.3.0`, naming both versions. The script runs under a bounded
 deadline with an environment built from scratch (`HOME`, `PATH`, the origin socket as
 `HERDR_SOCKET_PATH`, every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, and the retry and
-timeout knobs the daemon sets); neither its argv nor its environment is logged. Exit 0 with a
-document is the only success; each section of the document carries its own status and a partial
-document renders as partial. Pane status is a second read after the script, on the origin socket;
-with no herdr handle (the CLI test daemon) or any failure every status is `unknown`. Every
+timeout knobs the daemon sets, including the bounds on the plugin's herdr and keychain reads);
+neither its argv nor its environment is logged, and its stderr is not shown anywhere, because a
+plugin tracing its own run would print the Linear credential. The script runs in its own process
+group and is stopped with SIGTERM (so its temp directory is removed), then SIGKILL, at the
+deadline, when the daemon stops, or when the asking client disconnects. Exit 0 with a document is
+the only success; each section of the document carries its own status and a partial document
+renders as partial. Pane status is a second read after the script, on the origin socket; with no
+origin socket or any failure every status is `unknown`. Every
 plugin-side failure is protocol error `6`, which the CLI passes through as exit code `6`.
 
 `board linear snapshot <workspace-id> [--json]` is the same read from the command line and prints
