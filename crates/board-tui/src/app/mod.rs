@@ -113,6 +113,20 @@ pub enum Screen {
     LinearStaleDaemon,
 }
 
+impl Screen {
+    /// A Linear-mode screen, drawn by `view::linear` only.
+    pub fn is_linear(&self) -> bool {
+        matches!(
+            self,
+            Screen::LinearBoard
+                | Screen::LinearDetail
+                | Screen::LinearNotBound
+                | Screen::LinearError
+                | Screen::LinearStaleDaemon
+        )
+    }
+}
+
 /// Which board this process renders. `Linear` is chosen by the CLI from the
 /// herdr space id before any store row exists; the upstream reducer and view
 /// never run in it, and it never reads `App::board`.

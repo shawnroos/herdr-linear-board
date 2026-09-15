@@ -61,17 +61,17 @@ pub struct FakeBoardClient {
 #[derive(Debug, Clone)]
 pub struct FakeLinear {
     pub snapshot: Result<LinearSnapshot, String>,
-    pub focus: PaneFocusResult,
+    pub focus: Result<PaneFocusResult, String>,
 }
 
 impl Default for FakeLinear {
     fn default() -> Self {
         FakeLinear {
             snapshot: Err("no linear snapshot fixture configured".into()),
-            focus: PaneFocusResult {
+            focus: Ok(PaneFocusResult {
                 focused: true,
                 gone: false,
-            },
+            }),
         }
     }
 }
@@ -146,7 +146,14 @@ impl FakeBoardClient {
 
     /// Seed what `pane.focus` answers.
     pub fn with_pane_focus(mut self, result: PaneFocusResult) -> FakeBoardClient {
-        self.linear.focus = result;
+        self.linear.focus = Ok(result);
+        self
+    }
+
+    /// Make `pane.focus` fail with `message`, as the daemon answers when herdr
+    /// cannot be reached (code 4).
+    pub fn with_pane_focus_error(mut self, message: &str) -> FakeBoardClient {
+        self.linear.focus = Err(message.to_string());
         self
     }
 
@@ -729,7 +736,10 @@ fake_methods!(db, config, linear, params, {
     },
     "pane.focus" => {
         let _: PaneFocusParams = serde_json::from_value(params)?;
-        serde_json::to_value(linear.focus.clone())?
+        match &linear.focus {
+            Ok(result) => serde_json::to_value(result.clone())?,
+            Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
+        }
     },
     "linear.snapshot" => {
         let p: LinearSnapshotParams = serde_json::from_value(params)?;

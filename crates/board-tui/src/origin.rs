@@ -11,6 +11,9 @@ pub struct OriginContext {
     pub session: Option<String>,
     pub plugin_id: Option<String>,
     pub pane_id: Option<String>,
+    /// `BOARD_WORK_PLUGIN_ROOT` as the board was started with it, sent with
+    /// every `linear.snapshot` so the daemon need not be restarted to see it.
+    pub plugin_root: Option<String>,
 }
 
 impl OriginContext {
@@ -26,6 +29,9 @@ impl OriginContext {
                 .ok()
                 .filter(|value| !value.is_empty()),
             pane_id: std::env::var("HERDR_PANE_ID")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            plugin_root: std::env::var("BOARD_WORK_PLUGIN_ROOT")
                 .ok()
                 .filter(|value| !value.is_empty()),
         }

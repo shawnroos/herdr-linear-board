@@ -1,12 +1,13 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
+assertion_line: 244
 expression: frame
 ---
 " Linear  AI Canvas Tools · view: Canvas board · space: Plugins · fetched 0s ago                                         "
-" E┌ WEB-3312 — Separate Background leaves an empty layer after reload ───────────────────────────────────────────────┐  "
+" E┌ WEB-3312 — Example issue: a saved item is empty after reload ────────────────────────────────────────────────────┐  "
 "┌ │state: In Progress · priority: P2 · assignee: Example User                                                        │─┐"
 "│W│url: https://linear.app/example/issue/web-3312/x                                                                  │ │"
-"│A│                                                                                                                  │ │"
+"│E│                                                                                                                  │ │"
 "│@│[bound] $SANDBOX/worktrees/web-3312                                                                               │ │"
 "│ │  tab: Plugin PM (wA:t1)                                                                                          │ │"
 "│ │    wA:p1  idle                                                                                                   │ │"

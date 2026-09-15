@@ -40,6 +40,9 @@ pub struct LinearState {
     pub detail: Option<String>,
     pub pane_cursor: usize,
     pub in_flight: bool,
+    /// An automatic refresh (a reconnect) asked for while one was in flight;
+    /// it is sent when that one lands, so it is not lost.
+    pub queued: bool,
     pub error: Option<String>,
     /// `(board_version, daemon_version)` once the daemon answered that it has
     /// no `linear.snapshot` (R25).
@@ -64,6 +67,7 @@ impl LinearState {
             detail: None,
             pane_cursor: 0,
             in_flight: false,
+            queued: false,
             error: None,
             stale_daemon: None,
             fetched_at: None,
@@ -141,6 +145,10 @@ impl LinearState {
     /// The mapping the snapshot reports, when it is not the default (R9).
     pub fn non_default_mapping(&self) -> Option<String> {
         let mapping = &self.snapshot()?.mapping;
+        // A document with no mapping section has nothing to report.
+        if mapping.source.is_empty() {
+            return None;
+        }
         let default = ("default", "project", "work", "session");
         let actual = (
             mapping.source.as_str(),
@@ -168,8 +176,11 @@ impl LinearState {
             "truncated" => out.push("Linear listing truncated".to_string()),
             other => out.push(format!("Linear {other}")),
         }
-        if s.herdr.status != "ok" {
-            out.push("herdr unavailable".to_string());
+        // An empty status is a section the document left out, not a failure.
+        match s.herdr.status.as_str() {
+            "ok" | "" => {}
+            "unavailable" => out.push("herdr unavailable".to_string()),
+            other => out.push(format!("herdr {other}")),
         }
         if s.record.status == "unreadable" {
             out.push("record unreadable".to_string());
@@ -186,7 +197,7 @@ impl LinearState {
             )),
             other => out.push(format!("view {}", other.replace('_', " "))),
         }
-        if s.mapping.status != "ok" {
+        if !matches!(s.mapping.status.as_str(), "ok" | "") {
             out.push(format!("mapping {}", s.mapping.status));
         }
         out
@@ -232,11 +243,8 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
         // `board_changed` never refreshes a Linear board (R21).
         Msg::Refresh | Msg::Mouse(_) => vec![],
-        Msg::LinearRefresh => request_snapshot(app),
-        Msg::LinearArrived(result) => {
-            arrived(app, *result);
-            vec![]
-        }
+        Msg::LinearRefresh => request_or_queue(app),
+        Msg::LinearArrived(result) => arrived(app, *result),
         Msg::Key(k) => linear_key(app, k),
     }
 }
@@ -255,12 +263,25 @@ fn request_snapshot(app: &mut App) -> Vec<Effect> {
     vec![Effect::LinearSnapshot]
 }
 
-fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) {
+/// An automatic refresh: sent now, or queued behind the one in flight.
+fn request_or_queue(app: &mut App) -> Vec<Effect> {
+    match app.linear.as_mut() {
+        Some(state) if state.in_flight => {
+            state.queued = true;
+            vec![]
+        }
+        Some(_) => request_snapshot(app),
+        None => vec![],
+    }
+}
+
+fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<Effect> {
     let now = app.now;
     let Some(state) = app.linear.as_mut() else {
-        return;
+        return vec![];
     };
     state.in_flight = false;
+    let follow_up = std::mem::take(&mut state.queued);
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
@@ -281,6 +302,11 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) {
         }
     };
     app.screen = screen;
+    if follow_up {
+        request_snapshot(app)
+    } else {
+        vec![]
+    }
 }
 
 fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
@@ -450,84 +476,31 @@ fn is_stripped(c: char) -> bool {
     )
 }
 
+/// Every string in the document, keys included, through [`sanitise`]. It walks
+/// the serialised form rather than the struct's fields, so a string field
+/// added to any Linear type is covered without a line here (R22).
 pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
-    fn s(v: &mut String) {
-        *v = sanitise(v);
-    }
-    fn o(v: &mut Option<String>) {
-        if let Some(v) = v {
-            s(v);
+    fn walk(value: serde_json::Value) -> serde_json::Value {
+        use serde_json::Value;
+        match value {
+            Value::String(text) => Value::String(sanitise(&text)),
+            Value::Array(items) => Value::Array(items.into_iter().map(walk).collect()),
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .map(|(key, item)| (sanitise(&key), walk(item)))
+                    .collect(),
+            ),
+            other => other,
         }
     }
-    fn list(v: &mut [String]) {
-        v.iter_mut().for_each(s);
-    }
-    s(&mut snapshot.workspace.id);
-    s(&mut snapshot.workspace.label);
-    s(&mut snapshot.mapping.status);
-    s(&mut snapshot.mapping.source);
-    s(&mut snapshot.mapping.space);
-    s(&mut snapshot.mapping.tab);
-    s(&mut snapshot.mapping.pane);
-    s(&mut snapshot.record.status);
-    o(&mut snapshot.record.state);
-    o(&mut snapshot.record.project_id);
-    o(&mut snapshot.project.id);
-    o(&mut snapshot.project.name);
-    o(&mut snapshot.project.team_key);
-    o(&mut snapshot.project.url);
-    s(&mut snapshot.view.status);
-    o(&mut snapshot.view.id);
-    o(&mut snapshot.view.name);
-    if let Some(layout) = snapshot.view.layout.as_mut() {
-        s(&mut layout.grouping);
-        list(&mut layout.column_order);
-        list(&mut layout.hidden);
-    }
-    s(&mut snapshot.linear.status);
-    s(&mut snapshot.herdr.status);
-    o(&mut snapshot.herdr.version);
-    for group in &mut snapshot.groups {
-        s(&mut group.key);
-        s(&mut group.label);
-        list(&mut group.issues);
-    }
-    let issues = std::mem::take(&mut snapshot.issues);
-    for (key, mut issue) in issues {
-        o(&mut issue.id);
-        s(&mut issue.identifier);
-        s(&mut issue.title);
-        o(&mut issue.url);
-        o(&mut issue.state.id);
-        o(&mut issue.state.name);
-        o(&mut issue.state.kind);
-        if let Some(assignee) = issue.assignee.as_mut() {
-            o(&mut assignee.id);
-            o(&mut assignee.name);
-        }
-        list(&mut issue.labels);
-        for binding in &mut issue.bindings {
-            s(&mut binding.worktree_path);
-            s(&mut binding.state);
-            if let Some(tab) = binding.tab.as_mut() {
-                s(&mut tab.id);
-                o(&mut tab.label);
-            }
-            list(&mut binding.panes);
-        }
-        snapshot.issues.insert(sanitise(&key), issue);
-    }
-    for tab in &mut snapshot.unmapped {
-        s(&mut tab.tab_id);
-        o(&mut tab.label);
-        s(&mut tab.reason);
-        list(&mut tab.panes);
-    }
-    let statuses = std::mem::take(&mut snapshot.pane_status);
-    for (key, value) in statuses {
-        snapshot
-            .pane_status
-            .insert(sanitise(&key), sanitise(&value));
+    let cleaned = serde_json::to_value(&*snapshot)
+        .map(walk)
+        .and_then(serde_json::from_value::<LinearSnapshot>);
+    match cleaned {
+        Ok(cleaned) => *snapshot = cleaned,
+        // The document round-trips through its own types, so this does not
+        // happen; if it did, nothing unsanitised may reach the screen.
+        Err(_) => *snapshot = LinearSnapshot::default(),
     }
 }
 

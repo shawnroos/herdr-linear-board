@@ -56,10 +56,17 @@ impl PlatformActions for RealPlatform {
             else {
                 continue;
             };
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
+            // Fed and reaped off the TUI thread: a clipboard helper wedged on
+            // a broken X or Wayland session would otherwise freeze the board.
+            // OSC 52 above has already copied for any terminal that honours it.
+            let stdin = child.stdin.take();
+            let owned = text.to_string();
+            std::thread::spawn(move || {
+                if let Some(mut stdin) = stdin {
+                    let _ = stdin.write_all(owned.as_bytes());
+                }
+                let _ = child.wait();
+            });
             break;
         }
         Ok(())

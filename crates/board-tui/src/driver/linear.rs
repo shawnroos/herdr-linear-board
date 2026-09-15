@@ -6,7 +6,9 @@
 use std::sync::mpsc;
 
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
-use board_core::protocol::{LinearSnapshot, LinearSnapshotParams, PaneFocusParams};
+use board_core::protocol::{
+    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+};
 
 use crate::app::{LinearFailure, Mode, Msg};
 use crate::Driver;
@@ -35,6 +37,21 @@ pub(crate) fn classify(result: anyhow::Result<LinearSnapshot>) -> LinearArrival 
         let rpc = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<RpcClientError>());
+        let timed_out = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+            .any(|io| {
+                matches!(
+                    io.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                )
+            });
+        if rpc.is_none() && timed_out {
+            return LinearFailure::Failed(format!(
+                "the daemon did not answer within {}s; press r to try again",
+                LINEAR_SNAPSHOT_CLIENT_TIMEOUT.as_secs()
+            ));
+        }
         match rpc {
             Some(rpc) if rpc.code == 1 && rpc.message.contains("unknown method") => {
                 LinearFailure::MethodNotFound
@@ -51,18 +68,20 @@ impl Driver {
             *pending += 1;
             return;
         }
-        let Some(workspace_id) = self.app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
+        let Some(params) = self.linear_params() else {
             return;
-        };
-        let params = LinearSnapshotParams {
-            workspace_id,
-            origin_socket: self.origin.origin_socket.clone(),
         };
         match (self.client.reconnect_path(), self.linear_tx.clone()) {
             (Some(path), Some(tx)) => {
+                // Bounded, so a daemon that never answers cannot hold the
+                // header on "refreshing" and refuse every later refresh. The
+                // connection is dropped with the thread, which tells the
+                // daemon to stop the script.
                 std::thread::spawn(move || {
-                    let result = UnixClient::connect(&path)
-                        .and_then(|mut client| client.linear_snapshot(&params));
+                    let result = UnixClient::connect(&path).and_then(|mut client| {
+                        client.set_read_timeout(Some(LINEAR_SNAPSHOT_CLIENT_TIMEOUT))?;
+                        client.linear_snapshot(&params)
+                    });
                     let _ = tx.send(classify(result));
                 });
             }
@@ -71,6 +90,15 @@ impl Driver {
                 self.handle(Msg::LinearArrived(Box::new(classify(result))));
             }
         }
+    }
+
+    fn linear_params(&self) -> Option<LinearSnapshotParams> {
+        let workspace_id = self.app.linear.as_ref()?.workspace_id.clone();
+        Some(LinearSnapshotParams {
+            workspace_id,
+            origin_socket: self.origin.origin_socket.clone(),
+            plugin_root: self.origin.plugin_root.clone(),
+        })
     }
 
     /// Feed every snapshot the worker delivered since the last call.
@@ -102,12 +130,8 @@ impl Driver {
             return false;
         }
         *pending -= 1;
-        let Some(workspace_id) = self.app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
+        let Some(params) = self.linear_params() else {
             return false;
-        };
-        let params = LinearSnapshotParams {
-            workspace_id,
-            origin_socket: self.origin.origin_socket.clone(),
         };
         let result = self.client.linear_snapshot(&params);
         self.handle(Msg::LinearArrived(Box::new(classify(result))));
@@ -191,4 +215,32 @@ pub(crate) fn is_http_url(url: &str) -> bool {
 
 pub(super) fn arrival_channel() -> (mpsc::Sender<LinearArrival>, mpsc::Receiver<LinearArrival>) {
     mpsc::channel()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_read_timeout_is_named_as_no_answer_from_the_daemon() {
+        let io = std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable",
+        );
+        match classify(Err(anyhow::Error::new(io))) {
+            Err(LinearFailure::Failed(text)) => {
+                assert!(text.contains("did not answer within"), "{text}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_daemon_error_is_not_mistaken_for_a_timeout() {
+        let rpc = RpcClientError::new(6, None, "plugin unavailable".into(), None);
+        match classify(Err(anyhow::Error::new(rpc))) {
+            Err(LinearFailure::Failed(text)) => assert_eq!(text, "plugin unavailable"),
+            other => panic!("{other:?}"),
+        }
+    }
 }

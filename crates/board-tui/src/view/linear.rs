@@ -80,7 +80,7 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
         Some(("none", _)) | None => "no view chosen: /work:bind".to_string(),
         // The record still names the view Linear no longer has, so say which
         // one failed and that a new choice is needed (AE9).
-        Some((status @ ("not_found" | "archived"), Some(name))) => format!(
+        Some((status @ ("not_found" | "archived" | "not_in_project"), Some(name))) => format!(
             "view {} {} · no view chosen: /work:bind",
             line(&name),
             status.replace('_', " ")

@@ -7,8 +7,9 @@ use board_core::client::{BoardClient, FakeBoardClient};
 use board_core::protocol::{CardCreateParams, Event, LinearSnapshot, PaneFocusResult};
 use board_tui::app::{Effect, Mode, Msg, Screen};
 use board_tui::testkit::{
-    draw, hostile_origin, key, linear_driver, linear_driver_deferred, linear_fixture, linear_start,
-    methods, render_at, MethodNotFoundClient, RecordingClient,
+    draw, hostile_origin, key, linear_driver, linear_driver_deferred,
+    linear_driver_failing_platform, linear_fixture, linear_start, methods, render_at,
+    MethodNotFoundClient, RecordingClient,
 };
 use board_tui::{Driver, LinearStart, OriginContext};
 use crossterm::event::KeyCode;
@@ -293,12 +294,12 @@ fn help_sheet_lists_the_linear_keys_and_any_key_closes_it() {
 fn control_characters_never_reach_the_frame() {
     let mut snapshot = bound_with_view();
     let issue = snapshot.issues.get_mut("WEB-3318").unwrap();
-    issue.title = "AI Tools\u{202E} drawer\u{1b}[2J is blank".into();
+    issue.title = "Example\u{202E} panel\u{1b}[2J is blank".into();
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     press(&mut d, KeyCode::Enter);
     let frame = draw(&d.app, W, H);
     assert!(
-        frame.contains("WEB-3318 — AI Tools drawer[2J is blank"),
+        frame.contains("WEB-3318 — Example panel[2J is blank"),
         "{frame}"
     );
     assert!(
@@ -637,4 +638,151 @@ fn mouse_input_is_ignored_in_linear_mode() {
     d.handle(board_tui::testkit::left_down(3, 3));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert!(d.app.toast.is_none());
+}
+
+#[test]
+fn an_opener_or_clipboard_failure_is_toasted() {
+    let mut d = linear_driver_failing_platform(fake_with(bound_with_view()), linear_start());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('u'));
+    assert!(toast(&d).starts_with("open failed:"), "{}", toast(&d));
+    press(&mut d, KeyCode::Char('y'));
+    assert!(toast(&d).starts_with("copy failed:"), "{}", toast(&d));
+}
+
+#[test]
+fn a_focus_the_daemon_cannot_carry_out_is_toasted_with_its_reason() {
+    let client = fake_with(bound_with_view()).with_pane_focus_error("herdr is not running");
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('o'));
+    let text = toast(&d);
+    assert!(text.starts_with("pane wA:p2:"), "{text}");
+    assert!(text.contains("herdr is not running"), "{text}");
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+}
+
+#[test]
+fn a_reconnect_while_a_snapshot_is_in_flight_is_sent_when_that_one_lands() {
+    let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
+    let mut d = linear_driver_deferred(client, linear_start());
+    assert!(d.app.linear.as_ref().unwrap().in_flight);
+    d.on_daemon_signals(false, true);
+    assert!(
+        d.app.toast.is_none(),
+        "an automatic refresh is not refused with a toast"
+    );
+    assert!(d.app.linear.as_ref().unwrap().queued);
+    assert!(d.deliver_pending_linear_snapshot());
+    assert!(
+        d.deliver_pending_linear_snapshot(),
+        "the queued refresh was sent"
+    );
+    assert!(!d.deliver_pending_linear_snapshot());
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.snapshot"]);
+    let state = d.app.linear.as_ref().unwrap();
+    assert!(!state.in_flight && !state.queued);
+}
+
+#[test]
+fn a_document_without_herdr_or_mapping_sections_warns_about_neither() {
+    let mut doc = bound_with_view();
+    doc.herdr = Default::default();
+    doc.mapping = Default::default();
+    let (d, _, _) = linear_driver(fake_with(doc), linear_start());
+    let state = d.app.linear.as_ref().unwrap();
+    assert_eq!(state.source_warnings(), Vec::<String>::new());
+    assert_eq!(state.non_default_mapping(), None);
+}
+
+#[test]
+fn every_string_in_the_document_is_sanitised_including_ones_no_code_names() {
+    const POISON: &str = "\u{202E}\u{1b}[2J\u{200B}";
+    fn poison(value: Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(format!("{text}{POISON}")),
+            Value::Array(items) => Value::Array(items.into_iter().map(poison).collect()),
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .map(|(key, item)| (key, poison(item)))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+    fn dirty(value: &Value) -> bool {
+        let bad = |text: &str| {
+            text.chars()
+                .any(|c| POISON.contains(c) && c != '[' && c != '2' && c != 'J')
+        };
+        match value {
+            Value::String(text) => bad(text),
+            Value::Array(items) => items.iter().any(dirty),
+            Value::Object(map) => map.iter().any(|(key, item)| bad(key) || dirty(item)),
+            _ => false,
+        }
+    }
+    let mut doc = poison(serde_json::to_value(bound_with_view()).unwrap());
+    // The two maps keyed by data: their keys are document text too.
+    for section in ["issues", "pane_status"] {
+        let map = doc[section].as_object().unwrap().clone();
+        doc[section] = Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (format!("{key}{POISON}"), item))
+                .collect(),
+        );
+    }
+    let mut snapshot: LinearSnapshot = serde_json::from_value(doc).unwrap();
+    assert!(
+        dirty(&serde_json::to_value(&snapshot).unwrap()),
+        "the poison did not take"
+    );
+    let strings_before = serde_json::to_string(&snapshot)
+        .unwrap()
+        .matches('"')
+        .count();
+    board_tui::app::sanitise_snapshot(&mut snapshot);
+    let after = serde_json::to_value(&snapshot).unwrap();
+    assert!(!dirty(&after), "{after:#}");
+    assert_eq!(snapshot.issues.len(), 3);
+    assert_eq!(
+        serde_json::to_string(&snapshot)
+            .unwrap()
+            .matches('"')
+            .count(),
+        strings_before,
+        "sanitising dropped or added strings"
+    );
+}
+
+#[test]
+fn a_view_whose_filter_left_the_project_is_named_and_asks_for_a_new_choice() {
+    let mut doc = linear_fixture("bound-no-view");
+    doc.view.status = "not_in_project".into();
+    doc.view.id = Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".into());
+    doc.view.name = Some("Canvas board".into());
+    let (d, _, _) = linear_driver(fake_with(doc), linear_start());
+    let frame = draw(&d.app, W, H);
+    assert!(
+        frame.contains("view Canvas board not in project"),
+        "{frame}"
+    );
+    assert!(frame.contains("no view chosen: /work:bind"), "{frame}");
+}
+
+#[test]
+fn the_board_sends_its_plugin_root_with_every_snapshot_request() {
+    let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
+    let start = LinearStart {
+        origin: OriginContext {
+            plugin_root: Some("/plugins/work".into()),
+            ..OriginContext::default()
+        },
+        ..linear_start()
+    };
+    let (_d, _, _) = linear_driver(client, start);
+    let sent = log.lock().unwrap();
+    let (method, params) = &sent[0];
+    assert_eq!(method, "linear.snapshot");
+    assert_eq!(params["plugin_root"], "/plugins/work");
 }

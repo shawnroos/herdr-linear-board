@@ -321,10 +321,13 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
 /// snapshots stay byte-identical.
 pub const LINEAR_HELP_SENTINEL: &str = "-- linear mode --";
 
+/// The first Linear-mode section marker: a `"--"` row on a Linear screen. Found
+/// by the marker convention every section uses, not by its description, so
+/// copy-editing the section title cannot fold the Linear rows into `?`.
 pub fn upstream_help_rows() -> usize {
     HELP_KEYS
         .iter()
-        .position(|(_, _, what)| *what == LINEAR_HELP_SENTINEL)
+        .position(|(screen, key, _)| *key == "--" && screen.is_linear())
         .unwrap_or(HELP_KEYS.len())
 }
 

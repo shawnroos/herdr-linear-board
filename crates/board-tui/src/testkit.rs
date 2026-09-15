@@ -112,6 +112,7 @@ pub fn hostile_origin() -> OriginContext {
         session: Some("hostile-session".into()),
         plugin_id: Some("hostile-plugin-sentinel".into()),
         pane_id: Some("hostile-pane-sentinel".into()),
+        plugin_root: Some("/hostile/plugin-root".into()),
     }
 }
 
@@ -676,6 +677,22 @@ pub fn linear_driver<C: BoardClient + 'static>(
         false,
     );
     (driver, opened, copied)
+}
+
+/// Same, with a platform whose opener and clipboard both fail.
+pub fn linear_driver_failing_platform<C: BoardClient + 'static>(
+    client: C,
+    start: LinearStart,
+) -> Driver {
+    let (mut platform, _, _) = FakePlatform::new();
+    platform.fail = true;
+    Driver::linear_with_platform(
+        Box::new(client),
+        Box::new(FakeEditor::new("x")),
+        Box::new(platform),
+        start,
+        false,
+    )
 }
 
 /// Same, with fetches held so the first request is observable.

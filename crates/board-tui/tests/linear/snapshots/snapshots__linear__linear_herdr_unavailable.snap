@@ -1,12 +1,13 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
+assertion_line: 194
 expression: frame
 ---
 " Linear  AI Canvas Tools · view: Canvas board · space: wA · fetched 0s ago                                              "
 " ! herdr unavailable                                                                                                    "
 "┌ Backlog (1) ─────────┐┌ Todo (1) ────────────┐┌ In Progress (1) ─────┐┌ Dev Done (0) ────────┐┌ Done (0) ────────────┐"
 "│WEB-3318  P0          ││WEB-3317  P3          ││WEB-3312  P2          ││                      ││                      │"
-"│AI Tools drawer is bl…││AI tools that run a c…││Separate Background l…││                      ││                      │"
+"│Example issue: a pane…││Example issue: a long…││Example issue: a save…││                      ││                      │"
 "│@Example User         ││unassigned            ││@Example User         ││                      ││                      │"
 "│                      ││                      ││                      ││                      ││                      │"
 "│                      ││                      ││                      ││                      ││                      │"
