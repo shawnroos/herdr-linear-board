@@ -115,3 +115,17 @@ fn root_config_rejects_bad_values_and_malformed_toml() {
         Err(Error::Config(_))
     ));
 }
+
+#[test]
+fn daemon_work_plugin_root_is_optional_and_parsed_as_a_path() {
+    let root =
+        RootConfig::from_toml("[daemon]\nwork_plugin_root = \"/opt/work-plugin\"\n").unwrap();
+    assert_eq!(
+        root.daemon.work_plugin_root.as_deref(),
+        Some(std::path::Path::new("/opt/work-plugin"))
+    );
+    assert_eq!(
+        RootConfig::from_toml("").unwrap().daemon.work_plugin_root,
+        None
+    );
+}

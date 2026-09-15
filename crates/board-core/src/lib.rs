@@ -67,6 +67,11 @@ pub enum Error {
     #[error("herdr unavailable: {0}")]
     HerdrUnavailable(String),
 
+    /// The work plugin's snapshot script cannot be run or gave no document
+    /// (protocol code 6).
+    #[error("plugin unavailable: {0}")]
+    PluginUnavailable(String),
+
     #[error(transparent)]
     Validation(#[from] ValidationError),
 }
@@ -80,6 +85,7 @@ impl Error {
             Error::InvalidState(_) => 3,
             Error::Validation(v) => v.code(),
             Error::HerdrUnavailable(_) => 4,
+            Error::PluginUnavailable(_) => 6,
             Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => 5,
         }
     }

@@ -11,10 +11,11 @@ use crate::protocol::{
     CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams,
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DeletedResult, Event, PaneSetTitleParams, PaneSetTitleResult,
-    ProjectArchiveParams, ProjectCreateParams, ProjectGetParams, ProjectListParams,
-    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
-    RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult, TemplateApplyParams, Trigger,
+    CommentUpdateParams, DeletedResult, Event, LinearSnapshot, LinearSnapshotParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
+    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
+    RunFocusResult, TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -52,6 +53,27 @@ pub struct FakeBoardClient {
     /// Harness config, so the fake answers the same resume-capability question
     /// the daemon answers (`run.focus`). Defaults mean built-ins only.
     config: crate::config::Config,
+    linear: FakeLinear,
+}
+
+/// What the fake answers for the two Linear-mode methods. There is no plugin
+/// and no herdr here, so a test seeds the document (or the error) it wants.
+#[derive(Debug, Clone)]
+pub struct FakeLinear {
+    pub snapshot: Result<LinearSnapshot, String>,
+    pub focus: PaneFocusResult,
+}
+
+impl Default for FakeLinear {
+    fn default() -> Self {
+        FakeLinear {
+            snapshot: Err("no linear snapshot fixture configured".into()),
+            focus: PaneFocusResult {
+                focused: true,
+                gone: false,
+            },
+        }
+    }
 }
 
 /// Validate an agent actor exactly as the daemon does. The fake harness may
@@ -106,7 +128,26 @@ impl FakeBoardClient {
         Ok(FakeBoardClient {
             db: Db::open_in_memory()?,
             config: crate::config::Config::default(),
+            linear: FakeLinear::default(),
         })
+    }
+
+    /// Seed the document `linear.snapshot` answers with.
+    pub fn with_linear_snapshot(mut self, snapshot: LinearSnapshot) -> FakeBoardClient {
+        self.linear.snapshot = Ok(snapshot);
+        self
+    }
+
+    /// Make `linear.snapshot` fail with `message` (a code-6 plugin failure).
+    pub fn with_linear_snapshot_error(mut self, message: &str) -> FakeBoardClient {
+        self.linear.snapshot = Err(message.to_string());
+        self
+    }
+
+    /// Seed what `pane.focus` answers.
+    pub fn with_pane_focus(mut self, result: PaneFocusResult) -> FakeBoardClient {
+        self.linear.focus = result;
+        self
     }
 
     /// Declare config-defined harnesses (`[harness.NAME]`) so tests can exercise
@@ -127,10 +168,10 @@ impl FakeBoardClient {
 /// The macro emits both the dispatch `match` and [`FAKE_CLIENT_METHODS`], so a
 /// method this fake answers cannot be missing from the exported list, and a
 /// listed method cannot be missing an implementation. The bindings the arms
-/// read (`db`, `config`, `params`) are named at the invocation below so they
+/// read (`db`, `config`, `linear`, `params`) are named at the invocation below so they
 /// keep ordinary call-site scoping.
 macro_rules! fake_methods {
-    ($db:ident, $config:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
+    ($db:ident, $config:ident, $linear:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
         /// Every board method [`FakeBoardClient`] implements.
         ///
         /// The whole board-tui test tier runs against this fake, so its surface
@@ -142,6 +183,7 @@ macro_rules! fake_methods {
             fn call(&mut self, method: &str, $params: Value) -> anyhow::Result<Value> {
                 let $config = self.config.clone();
                 let $db = &self.db;
+                let $linear = &self.linear;
                 let v = match method {
                     $($method => $arm,)*
                     other => anyhow::bail!("FakeBoardClient: unsupported method {other}"),
@@ -191,7 +233,7 @@ fn project_open_result(
     })?)
 }
 
-fake_methods!(db, config, params, {
+fake_methods!(db, config, linear, params, {
     "board.get" => {
         let p: BoardGetParams = serde_json::from_value(params)?;
         let board_id = p.board_id.unwrap_or(BOARD_ID);
@@ -684,6 +726,23 @@ fake_methods!(db, config, params, {
         // the params first keeps a malformed request an error here too.
         let _: PaneSetTitleParams = serde_json::from_value(params)?;
         serde_json::to_value(PaneSetTitleResult { renamed: true })?
+    },
+    "pane.focus" => {
+        let _: PaneFocusParams = serde_json::from_value(params)?;
+        serde_json::to_value(linear.focus.clone())?
+    },
+    "linear.snapshot" => {
+        let p: LinearSnapshotParams = serde_json::from_value(params)?;
+        if p.workspace_id.trim().is_empty() {
+            return Err(crate::Error::BadRequest(
+                "linear.snapshot requires a non-empty workspace_id".into(),
+            )
+            .into());
+        }
+        match &linear.snapshot {
+            Ok(snapshot) => serde_json::to_value(snapshot)?,
+            Err(message) => return Err(crate::Error::PluginUnavailable(message.clone()).into()),
+        }
     },
 });
 

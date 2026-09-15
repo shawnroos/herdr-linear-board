@@ -6,6 +6,6 @@ mod traits;
 mod unix;
 
 #[cfg(feature = "fake-client")]
-pub use fake::{FakeBoardClient, FAKE_CLIENT_METHODS};
+pub use fake::{FakeBoardClient, FakeLinear, FAKE_CLIENT_METHODS};
 pub use traits::BoardClient;
 pub use unix::{BoardRpcError, EventStream, RpcClientError, RpcError, UnixClient};

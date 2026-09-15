@@ -12,12 +12,13 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DaemonStatus, DeletedResult, Event, HarnessCapabilitiesParams,
-    HarnessListResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
-    ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
-    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
-    RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
-    RunPaneExitedParams, SessionListResult, SpaceListParams, SpaceListResult, StopResult,
-    TemplateApplyParams, Visibility,
+    HarnessListResult, LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult,
+    PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
+    ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
+    ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
+    RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams,
+    SessionListResult, SpaceListParams, SpaceListResult, StopResult, TemplateApplyParams,
+    Visibility,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -504,6 +505,18 @@ pub trait BoardClient {
         };
         Ok(serde_json::from_value(
             self.call("pane.set_title", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn pane_focus(&mut self, p: &PaneFocusParams) -> anyhow::Result<PaneFocusResult> {
+        Ok(serde_json::from_value(
+            self.call("pane.focus", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_snapshot(&mut self, p: &LinearSnapshotParams) -> anyhow::Result<LinearSnapshot> {
+        Ok(serde_json::from_value(
+            self.call("linear.snapshot", serde_json::to_value(p)?)?,
         )?)
     }
 }

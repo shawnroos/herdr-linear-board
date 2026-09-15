@@ -50,10 +50,12 @@ directories = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 libc = "0.2"
+base64 = "0.22"
 
 # Dev / test
 insta = "1"
 tempfile = "3"
+sha2 = "0.10"
 
 # Internal crates
 board-core = { path = "crates/board-core" }
