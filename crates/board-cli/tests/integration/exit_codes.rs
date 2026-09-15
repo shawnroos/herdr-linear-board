@@ -2,9 +2,10 @@
 //! to branch on `$?` instead of parsing stderr.
 //!
 //! `docs/protocol.md` defines RPC error codes `1` bad request / unknown method,
-//! `2` not found, `3` invalid state, `4` herdr unavailable, `5` internal. Those
-//! pass through to the exit status; anything else the daemon may report is
-//! clamped to `70`, and errors raised by the CLI itself exit `64`.
+//! `2` not found, `3` invalid state, `4` herdr unavailable, `5` internal, `6`
+//! work plugin unavailable. Those pass through to the exit status; anything
+//! else the daemon may report is clamped to `70`, and errors raised by the CLI
+//! itself exit `64`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;

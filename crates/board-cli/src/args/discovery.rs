@@ -1,4 +1,5 @@
-//! Read-only discovery subcommands: harness capabilities, spaces, sessions.
+//! Read-only discovery subcommands: harness capabilities, spaces, sessions,
+//! the Linear-mode snapshot.
 
 use clap::Subcommand;
 
@@ -31,6 +32,16 @@ pub(crate) enum SpaceCmd {
     List {
         #[arg(long)]
         session: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LinearCmd {
+    /// Print the work plugin's snapshot of one herdr space (the Linear-mode
+    /// board's read), with live pane status attached.
+    Snapshot {
+        /// The herdr space id (`HERDR_WORKSPACE_ID` inside a pane).
+        workspace_id: String,
     },
 }
 

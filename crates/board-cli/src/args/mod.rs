@@ -20,7 +20,7 @@ pub(crate) use board::{BoardCmd, TemplateCmd};
 pub(crate) use card::{CardCmd, CommentCmd};
 pub(crate) use column::ColumnCmd;
 pub(crate) use common::ConfirmArgs;
-pub(crate) use discovery::{HarnessCmd, SessionCmd, SpaceCmd};
+pub(crate) use discovery::{HarnessCmd, LinearCmd, SessionCmd, SpaceCmd};
 pub(crate) use project::ProjectCmd;
 pub(crate) use run::RunCmd;
 
@@ -144,6 +144,11 @@ pub(crate) enum Cmd {
     Session {
         #[command(subcommand)]
         sub: SessionCmd,
+    },
+    /// Linear-mode reads (a herdr space bound to a Linear project).
+    Linear {
+        #[command(subcommand)]
+        sub: LinearCmd,
     },
 }
 
