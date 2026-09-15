@@ -640,12 +640,12 @@ fn promotion_with_captured_session_replaces_a_prior_enqueue_id_on_both_rows() {
         db.get_card(card.id).unwrap().unwrap().session_id.as_deref(),
         Some("thread-new")
     );
-    assert!(!db
+    assert!(db
         .get_run(run.id)
         .unwrap()
         .session_id
         .as_deref()
-        .is_some_and(|id| id == "thread-1"));
+        .is_none_or(|id| id != "thread-1"));
 }
 
 #[test]
@@ -753,10 +753,10 @@ fn captured_session_promotion_replaces_a_prior_resume_id_on_both_rows() {
         Some("thread-new")
     );
     // The prior id survives nowhere.
-    assert!(!db
+    assert!(db
         .get_run(run.id)
         .unwrap()
         .session_id
         .as_deref()
-        .is_some_and(|id| id == "thread-1"));
+        .is_none_or(|id| id != "thread-1"));
 }
