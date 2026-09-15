@@ -4,7 +4,7 @@
 //! module only applies the environment overrides, after parsing, so malformed
 //! config cannot be hidden by a second best-effort parse.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use board_core::config::SpawnerKind;
 use board_core::config::{DaemonConfig, RootConfig};
@@ -49,6 +49,9 @@ pub struct DaemonSettings {
     pub local_poll_ms: u64,
     /// Timeout/idle ticker interval (ms). Default 1000.
     pub tick_ms: u64,
+    /// `[daemon] work_plugin_root`, the TOML step of the plugin root
+    /// resolution `ops::linear` performs.
+    pub work_plugin_root: Option<PathBuf>,
 }
 
 impl Default for DaemonSettings {
@@ -58,6 +61,7 @@ impl Default for DaemonSettings {
             timeout_unit_secs: 60,
             local_poll_ms: 2000,
             tick_ms: 1000,
+            work_plugin_root: None,
         }
     }
 }
@@ -71,6 +75,7 @@ impl DaemonSettings {
             timeout_unit_secs: config.timeout_unit_secs.max(1),
             local_poll_ms: config.local_poll_ms.max(1),
             tick_ms: config.tick_ms.max(1),
+            work_plugin_root: config.work_plugin_root.clone(),
         };
 
         if let Some(value) = env.var("BOARD_SPAWNER") {

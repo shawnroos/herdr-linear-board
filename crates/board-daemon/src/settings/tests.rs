@@ -52,3 +52,14 @@ fn malformed_file_is_not_replaced_with_defaults() {
         Err(Error::Config(_))
     ));
 }
+
+#[test]
+fn work_plugin_root_passes_through_from_typed_config() {
+    let root =
+        RootConfig::from_toml("[daemon]\nwork_plugin_root = \"/opt/work-plugin\"\n").unwrap();
+    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(
+        settings.work_plugin_root.as_deref(),
+        Some(std::path::Path::new("/opt/work-plugin"))
+    );
+}

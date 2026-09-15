@@ -16,6 +16,7 @@ mod columns;
 mod comments;
 mod discovery;
 mod errors;
+mod linear;
 mod panes;
 mod projects;
 mod runs;
@@ -117,6 +118,8 @@ routes!(d, params, {
     "space.list" => discovery::space_list(d, from(params)?),
     "session.list" => discovery::session_list(d),
     "pane.set_title" => panes::pane_set_title(from(params)?),
+    "pane.focus" => panes::pane_focus(from(params)?),
+    "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
 });
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
