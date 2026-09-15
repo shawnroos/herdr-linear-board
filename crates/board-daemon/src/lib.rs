@@ -4,6 +4,7 @@
 //! socket server. Started by `board daemon`; talks to herdr (or a local child
 //! spawner) to launch agents.
 
+mod cancel;
 mod dispatch;
 mod herdr_conn;
 mod herdr_snapshot;

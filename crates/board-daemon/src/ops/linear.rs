@@ -7,11 +7,12 @@
 use super::*;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread::JoinHandle;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use board_herdr::AgentStatus;
@@ -35,21 +36,33 @@ pub(crate) const LINEAR_RETRY_MAX: u64 = 1;
 pub(crate) const LINEAR_VIEW_PAGE_MAX: u64 = 10;
 
 // Worst case the knobs allow: the project and view reads plus one Linear call
-// per issue page, each bounded by curl's --max-time; two herdr reads (space
-// list and session snapshot) the plugin budgets at 5s each; and a margin for
-// jq and process startup.
+// per issue page, each bounded by curl's --max-time; the plugin's three herdr
+// reads (server status, space list, session snapshot) and one keychain read,
+// each bounded by the timeouts set below (the plugin skips the keychain for
+// the rest of a run once that read times out); and a margin for process
+// startup and the binding scan.
 const LINEAR_CALLS_MAX: u64 = 2 + LINEAR_VIEW_PAGE_MAX;
-const HERDR_CALLS_MAX: u64 = 2;
-const HERDR_CALL_BUDGET_SECONDS: u64 = 5;
+pub(crate) const HERDR_CALLS_MAX: u64 = 3;
+pub(crate) const HERDR_CALL_BUDGET_SECONDS: u64 = 5;
+pub(crate) const KEYCHAIN_BUDGET_SECONDS: u64 = 5;
 const DEADLINE_MARGIN_SECONDS: u64 = 10;
 pub(crate) const SCRIPT_WORST_CASE: Duration = Duration::from_secs(
-    LINEAR_CALLS_MAX * LINEAR_TIMEOUT_SECONDS + HERDR_CALLS_MAX * HERDR_CALL_BUDGET_SECONDS,
+    LINEAR_CALLS_MAX * LINEAR_TIMEOUT_SECONDS
+        + HERDR_CALLS_MAX * HERDR_CALL_BUDGET_SECONDS
+        + KEYCHAIN_BUDGET_SECONDS,
 );
 pub(crate) const SCRIPT_DEADLINE: Duration =
     Duration::from_secs(SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
+/// SIGTERM first so the script's EXIT trap removes its temp directory; SIGKILL
+/// after this long.
+pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
+/// A real project's document is about 200 KB; anything past this is not one.
+pub(crate) const STDOUT_CAP_BYTES: u64 = 32 * 1024 * 1024;
+/// How long the output pipe may stay open after the script and its group are
+/// gone before the run is reported as failed.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 const CHILD_POLL: Duration = Duration::from_millis(20);
-const STDERR_TAIL_BYTES: usize = 2048;
 const EXIT_ARGUMENT_REFUSED: i32 = 2;
 const EXIT_NO_SUCH_SPACE: i32 = 3;
 
@@ -60,20 +73,50 @@ pub(crate) struct SnapshotRunner {
     pub env: BTreeMap<String, String>,
     pub config_root: Option<PathBuf>,
     pub deadline: Duration,
+    /// Polled while the script runs: true stops it (the daemon is stopping, or
+    /// the client that asked has gone).
+    pub cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl SnapshotRunner {
-    pub(crate) fn from_process(settings: &crate::settings::DaemonSettings) -> SnapshotRunner {
+    pub(crate) fn from_daemon(d: &Arc<Daemon>) -> SnapshotRunner {
+        let daemon = d.clone();
+        let request = crate::cancel::current();
         SnapshotRunner {
-            env: std::env::vars().collect(),
-            config_root: settings.work_plugin_root.clone(),
+            env: utf8_env(std::env::vars_os()),
+            config_root: fresh_config_root(&d.settings),
             deadline: SCRIPT_DEADLINE,
+            cancelled: Arc::new(move || {
+                daemon.is_shutdown() || request.as_ref().is_some_and(|r| r.is_cancelled())
+            }),
         }
     }
 }
 
+/// The process environment without the pairs that are not UTF-8. `env::vars`
+/// panics on one, and the panic would answer every snapshot with code 5 until
+/// the daemon restarts; a variable that cannot be read as text is not one the
+/// child is given anyway.
+pub(crate) fn utf8_env(
+    vars: impl Iterator<Item = (OsString, OsString)>,
+) -> BTreeMap<String, String> {
+    vars.filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// `[daemon] work_plugin_root` read from the board config now, not when the
+/// daemon started, so the code-6 remedy of setting it applies without a
+/// restart. The value the daemon started with stands when the file cannot be
+/// read.
+fn fresh_config_root(settings: &crate::settings::DaemonSettings) -> Option<PathBuf> {
+    match board_core::config::RootConfig::load() {
+        Ok(root) => root.daemon.work_plugin_root,
+        Err(_) => settings.work_plugin_root.clone(),
+    }
+}
+
 pub(super) fn linear_snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Result<Value> {
-    let runner = SnapshotRunner::from_process(&d.settings);
+    let runner = SnapshotRunner::from_daemon(d);
     Ok(json!(snapshot(&runner, p)?))
 }
 
@@ -83,13 +126,13 @@ pub(crate) fn snapshot(runner: &SnapshotRunner, p: LinearSnapshotParams) -> Resu
             "linear.snapshot requires a non-empty workspace_id".into(),
         ));
     }
-    let root = resolve_plugin_root(runner)?;
+    let root = resolve_plugin_root(runner, p.plugin_root.as_deref())?;
     let version = plugin_version(&root)?;
     if semver_triple(&version) < semver_triple(PLUGIN_VERSION_FLOOR) {
         return Err(Error::PluginUnavailable(format!(
             "work plugin {version} at {} is older than the {PLUGIN_VERSION_FLOOR} this board needs; \
-             update the plugin or point {PLUGIN_ROOT_ENV} at a newer checkout (the daemon reads \
-             {PLUGIN_ROOT_ENV} and the board config at start: run `board daemon stop` after changing them)",
+             update the plugin or point {PLUGIN_ROOT_ENV} at a newer checkout (read on every request, \
+             from the caller's environment first)",
             root.display()
         )));
     }
@@ -116,12 +159,21 @@ pub(crate) fn snapshot(runner: &SnapshotRunner, p: LinearSnapshotParams) -> Resu
     Ok(document)
 }
 
-fn resolve_plugin_root(runner: &SnapshotRunner) -> Result<PathBuf> {
-    if let Some(root) = runner
-        .env
-        .get(PLUGIN_ROOT_ENV)
-        .map(|s| s.trim())
+/// The caller's `BOARD_WORK_PLUGIN_ROOT` (sent as `plugin_root`), then the
+/// daemon's, then the board config, then the installed-plugins record. The
+/// client is the same user over the same-user socket, so naming the script
+/// the daemon runs grants it nothing it could not run itself.
+fn resolve_plugin_root(runner: &SnapshotRunner, requested: Option<&str>) -> Result<PathBuf> {
+    if let Some(root) = requested
+        .map(str::trim)
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            runner
+                .env
+                .get(PLUGIN_ROOT_ENV)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+        })
     {
         return Ok(PathBuf::from(root));
     }
@@ -137,8 +189,8 @@ fn resolve_plugin_root(runner: &SnapshotRunner) -> Result<PathBuf> {
         Some(root) => Ok(root),
         None => Err(Error::PluginUnavailable(format!(
             "work plugin root not found: set {PLUGIN_ROOT_ENV}, or {PLUGIN_ROOT_TOML_KEY} in the \
-             board config, or install `{PLUGIN_ID}` so {} lists it (the daemon reads {PLUGIN_ROOT_ENV} and \
-             the board config at start: run `board daemon stop` after changing them)",
+             board config, or install `{PLUGIN_ID}` so {} lists it (each is read on every request, \
+             {PLUGIN_ROOT_ENV} from the caller's environment first)",
             installed
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| format!("$HOME/{INSTALLED_PLUGINS_RELATIVE}"))
@@ -232,28 +284,80 @@ pub(crate) fn child_env(
         "HERDR_LINEAR_VIEW_PAGE_MAX".into(),
         LINEAR_VIEW_PAGE_MAX.to_string(),
     );
+    child.insert(
+        "HERDR_LINEAR_HERDR_TIMEOUT_SECONDS".into(),
+        HERDR_CALL_BUDGET_SECONDS.to_string(),
+    );
+    child.insert(
+        "HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS".into(),
+        KEYCHAIN_BUDGET_SECONDS.to_string(),
+    );
     child
 }
 
-fn kill_group(child: &mut std::process::Child) {
-    // SIGKILL to the group the child leads (`process_group(0)` above); the pid
-    // is the pgid. Then reap the leader so no zombie outlives the request.
-    let pgid = child.id() as libc::pid_t;
+/// Whether the child has exited, without reaping it. An exited but unreaped
+/// leader keeps its pid, and so its process-group id, from being reused, which
+/// is what makes the group signals below safe to send.
+fn exited_unreaped(child: &std::process::Child) -> bool {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    rc == 0 && siginfo_pid(&info) != 0
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn siginfo_pid(info: &libc::siginfo_t) -> libc::pid_t {
+    unsafe { info.si_pid() }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn siginfo_pid(info: &libc::siginfo_t) -> libc::pid_t {
+    info.si_pid
+}
+
+fn signal_group(child: &std::process::Child, signal: libc::c_int) {
+    // The pid is the pgid: the child leads its group (`process_group(0)`).
     unsafe {
-        libc::kill(-pgid, libc::SIGKILL);
+        libc::kill(-(child.id() as libc::pid_t), signal);
     }
-    let _ = child.kill();
+}
+
+/// SIGTERM to the group so the script's EXIT trap runs, SIGKILL to whatever
+/// is left after `TERM_GRACE`, then reap the leader.
+fn stop_group(child: &mut std::process::Child) {
+    signal_group(child, libc::SIGTERM);
+    let until = Instant::now() + TERM_GRACE;
+    while !exited_unreaped(child) && Instant::now() < until {
+        std::thread::sleep(CHILD_POLL);
+    }
+    signal_group(child, libc::SIGKILL);
     let _ = child.wait();
 }
 
-fn drain<R: Read + Send + 'static>(reader: Option<R>) -> JoinHandle<Vec<u8>> {
+/// Read up to `cap` bytes and keep draining past it, so a child writing more
+/// cannot block on a full pipe; the second value says the cap was passed.
+fn drain<R: Read + Send + 'static>(reader: Option<R>, cap: u64) -> mpsc::Receiver<(Vec<u8>, bool)> {
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
+        let mut over = false;
         if let Some(mut reader) = reader {
-            let _ = reader.read_to_end(&mut buf);
+            let _ = (&mut reader).take(cap + 1).read_to_end(&mut buf);
+            if buf.len() as u64 > cap {
+                over = true;
+                buf.truncate(cap as usize);
+                let _ = std::io::copy(&mut reader, &mut std::io::sink());
+            }
         }
-        buf
-    })
+        let _ = tx.send((buf, over));
+    });
+    rx
 }
 
 fn run_script(
@@ -263,8 +367,10 @@ fn run_script(
     runner: &SnapshotRunner,
 ) -> Result<LinearSnapshot> {
     let mut command = Command::new(script);
-    // Its own process group, so the deadline kill below reaches curl, jq and
-    // any other grandchild holding the pipes; `child.kill()` alone would not.
+    // Its own process group, so a stop reaches curl, jq and any other
+    // grandchild holding the pipe. stderr is not captured: nothing of it is
+    // shown, because a plugin tracing its own run would print the credential
+    // it resolves, and no filter can know every shape of that.
     command
         .arg(workspace_id)
         .process_group(0)
@@ -272,40 +378,48 @@ fn run_script(
         .envs(child_env(&runner.env, origin_socket))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::null());
     let mut child = command
         .spawn()
         .map_err(|e| Error::PluginUnavailable(format!("running {}: {e}", script.display())))?;
-
-    // Drained on threads so a child that fills a pipe cannot stall until the
-    // deadline; the threads are not joined on the kill path so a grandchild
-    // holding the write end cannot extend it.
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
+    let stdout = drain(child.stdout.take(), STDOUT_CAP_BYTES);
+    let by_hand = format!(
+        "run `{} {workspace_id}` in a shell to see its output",
+        script.display()
+    );
 
     let deadline = Instant::now() + runner.deadline;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                kill_group(&mut child);
-                return Err(Error::PluginUnavailable(format!(
-                    "work-snapshot.sh timed out after {:?} and was killed",
-                    runner.deadline
-                )));
-            }
-            Ok(None) => std::thread::sleep(CHILD_POLL),
-            Err(e) => {
-                kill_group(&mut child);
-                return Err(Error::PluginUnavailable(format!(
-                    "waiting for work-snapshot.sh: {e}"
-                )));
-            }
+    loop {
+        if exited_unreaped(&child) {
+            break;
         }
-    };
-
-    let stdout = stdout.join().unwrap_or_default();
-    let stderr_tail = stderr_tail(&stderr.join().unwrap_or_default());
+        if (runner.cancelled)() {
+            stop_group(&mut child);
+            return Err(Error::PluginUnavailable(
+                "work-snapshot.sh was stopped: the daemon is stopping or the client went away"
+                    .into(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            stop_group(&mut child);
+            return Err(Error::PluginUnavailable(format!(
+                "work-snapshot.sh timed out after {:?} and was stopped",
+                runner.deadline
+            )));
+        }
+        std::thread::sleep(CHILD_POLL);
+    }
+    // The script is done; a grandchild it left behind is not part of the
+    // answer and would hold the pipe open.
+    signal_group(&child, libc::SIGKILL);
+    let status = child
+        .wait()
+        .map_err(|e| Error::PluginUnavailable(format!("waiting for work-snapshot.sh: {e}")))?;
+    let (stdout, over_cap) = stdout.recv_timeout(DRAIN_GRACE).map_err(|_| {
+        Error::PluginUnavailable(format!(
+            "work-snapshot.sh {workspace_id} exited and its output stayed open; {by_hand}"
+        ))
+    })?;
 
     if !status.success() {
         let reason = match status.code() {
@@ -317,18 +431,22 @@ fn run_script(
             None => "the script was killed by a signal".to_string(),
         };
         return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id}: {reason}; stderr: {stderr_tail}"
+            "work-snapshot.sh {workspace_id}: {reason}; {by_hand}"
+        )));
+    }
+    if over_cap {
+        return Err(Error::PluginUnavailable(format!(
+            "work-snapshot.sh {workspace_id} printed more than {STDOUT_CAP_BYTES} bytes; {by_hand}"
         )));
     }
     if stdout.iter().all(u8::is_ascii_whitespace) {
         return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} exited 0 and printed no document; stderr: {stderr_tail}"
+            "work-snapshot.sh {workspace_id} exited 0 and printed no document; {by_hand}"
         )));
     }
     let document: LinearSnapshot = serde_json::from_slice(&stdout).map_err(|e| {
         Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} printed a document the board cannot parse: {e}; \
-             stderr: {stderr_tail}"
+            "work-snapshot.sh {workspace_id} printed a document the board cannot parse: {e}; {by_hand}"
         ))
     })?;
     if document.schema != 1 {
@@ -338,35 +456,6 @@ fn run_script(
         )));
     }
     Ok(document)
-}
-
-/// The last ~2 KB of stderr with every C0/C1 control except newline removed,
-/// so the tail can be shown in a terminal and logged without escape sequences.
-fn is_format_or_bidi(c: char) -> bool {
-    matches!(
-        c as u32,
-        0xAD | 0x061C | 0x180E | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x206F | 0xFEFF
-            | 0xFFF9..=0xFFFB | 0xE0000..=0xE007F
-    )
-}
-
-pub(crate) fn stderr_tail(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    // Cc plus the format and bidi codepoints the TUI's sanitiser strips: the
-    // tail reaches the CLI's error output raw.
-    let cleaned: String = text
-        .chars()
-        .filter(|c| *c == '\n' || !(c.is_control() || is_format_or_bidi(*c)))
-        .collect();
-    let trimmed = cleaned.trim();
-    if trimmed.is_empty() {
-        return "(empty)".to_string();
-    }
-    let mut start = trimmed.len().saturating_sub(STDERR_TAIL_BYTES);
-    while start > 0 && !trimmed.is_char_boundary(start) {
-        start += 1;
-    }
-    trimmed[start..].to_string()
 }
 
 fn agent_status_name(status: AgentStatus) -> &'static str {

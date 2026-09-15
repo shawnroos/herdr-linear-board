@@ -80,10 +80,18 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             let origin_socket = std::env::var("HERDR_SOCKET_PATH")
                 .ok()
                 .filter(|socket| !socket.is_empty());
-            let document = ctx.client()?.linear_snapshot(&LinearSnapshotParams {
+            let plugin_root = std::env::var("BOARD_WORK_PLUGIN_ROOT")
+                .ok()
+                .filter(|root| !root.is_empty());
+            let client = ctx.client()?;
+            client.set_read_timeout(Some(board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT))?;
+            let document = client.linear_snapshot(&LinearSnapshotParams {
                 workspace_id,
                 origin_socket,
-            })?;
+                plugin_root,
+            });
+            client.set_read_timeout(None)?;
+            let document = document?;
             let text = serde_json::to_string_pretty(&document)?;
             emit_line(&document, json, text)
         }

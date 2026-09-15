@@ -11,6 +11,10 @@ if [ -z "$space" ] || ! [[ "$space" =~ ^[A-Za-z0-9_:-]+$ ]]; then
   exit 2
 fi
 
+if [ -n "${FAKE_WORK_SNAPSHOT_PID_FILE:-}" ]; then
+  echo $$ > "$FAKE_WORK_SNAPSHOT_PID_FILE"
+fi
+
 if [ -n "${FAKE_WORK_SNAPSHOT_ENV_FILE:-}" ]; then
   env > "$FAKE_WORK_SNAPSHOT_ENV_FILE"
 fi

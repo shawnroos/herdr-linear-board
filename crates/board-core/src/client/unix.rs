@@ -117,6 +117,14 @@ impl UnixClient {
     pub fn connect_default() -> anyhow::Result<UnixClient> {
         UnixClient::connect(&crate::paths::socket_path())
     }
+
+    /// Bound how long one call waits for its response. A call that reaches
+    /// the bound fails with an I/O timeout error, and the connection should be
+    /// dropped: a late response would otherwise be read as the next call's.
+    pub fn set_read_timeout(&mut self, timeout: Option<std::time::Duration>) -> anyhow::Result<()> {
+        self.reader.get_mut().set_read_timeout(timeout)?;
+        Ok(())
+    }
 }
 
 impl BoardClient for UnixClient {

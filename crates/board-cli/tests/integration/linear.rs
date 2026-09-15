@@ -14,8 +14,9 @@ fn code(out: &Output) -> i32 {
     out.status.code().expect("board exits, never signals")
 }
 
-/// A daemon whose environment names `root`: the daemon resolves the plugin
-/// root from its own process, never from the CLI's.
+/// A daemon whose environment names `root`. The CLI's own
+/// `BOARD_WORK_PLUGIN_ROOT` is removed by the test runner, so the daemon's is
+/// the one that answers.
 fn daemon_with_root(root: &std::path::Path) -> TestDaemon {
     TestDaemon::start(&[("BOARD_WORK_PLUGIN_ROOT", root.to_str().unwrap())])
 }
@@ -96,7 +97,12 @@ fn a_script_exit_3_names_no_such_space() {
     let td = daemon_with_root(root.path());
     let message = plugin_error(&snapshot(&td));
     assert!(message.contains("no such space"), "{message}");
-    assert!(message.contains("wA is not a space here"), "{message}");
+    // The script's stderr is never shown; the message says how to see it.
+    assert!(!message.contains("wA is not a space here"), "{message}");
+    assert!(
+        message.contains("in a shell to see its output"),
+        "{message}"
+    );
 }
 
 /// (e) `[daemon] work_plugin_root` alone resolves the root.
@@ -148,4 +154,153 @@ fn snapshot_without_json_prints_the_document() {
     );
     let doc: Value = serde_json::from_slice(&out.stdout).expect("JSON document");
     assert_eq!(doc["workspace"]["id"], "wA");
+}
+
+/// The CLI's `BOARD_WORK_PLUGIN_ROOT` reaches the daemon with the request, so
+/// setting it needs no daemon restart.
+#[test]
+fn the_callers_plugin_root_is_used_by_a_daemon_started_without_one() {
+    let td = TestDaemon::start(&[]);
+    plugin_error(&snapshot(&td));
+    let root = fake_plugin_root("0.3.0", &[]);
+    let out = td.board_with_env(
+        &["linear", "snapshot", "wA", "--json"],
+        &[("BOARD_WORK_PLUGIN_ROOT", root.path().to_str().unwrap())],
+    );
+    assert_eq!(json_output(&out)["schema"], 1);
+}
+
+/// `[daemon] work_plugin_root` written after the daemon started is read on
+/// the next request.
+#[test]
+fn a_toml_key_added_after_start_is_read_without_a_restart() {
+    let td = TestDaemon::start(&[]);
+    plugin_error(&snapshot(&td));
+    let root = fake_plugin_root("0.3.0", &[]);
+    let cfg = td._dir.path().join("config.toml");
+    let mut text = std::fs::read_to_string(&cfg).unwrap();
+    text.push_str(&format!(
+        "work_plugin_root = \"{}\"\n",
+        root.path().display()
+    ));
+    std::fs::write(&cfg, text).unwrap();
+    assert_eq!(json_output(&snapshot(&td))["schema"], 1);
+}
+
+fn pid_gone(pid: i32) -> bool {
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+fn wait_for(what: &str, limit: std::time::Duration, mut done: impl FnMut() -> bool) {
+    let until = std::time::Instant::now() + limit;
+    while !done() {
+        assert!(
+            std::time::Instant::now() < until,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A client that sends `linear.snapshot` and goes away stops the script,
+/// rather than leaving it to run to the daemon's deadline.
+#[test]
+fn a_client_that_disconnects_mid_snapshot_stops_the_script() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let root = fake_plugin_root(
+        "0.3.0",
+        &[
+            ("FAKE_WORK_SNAPSHOT_PID_FILE", pid_file.to_str().unwrap()),
+            ("FAKE_WORK_SNAPSHOT_SLEEP", "90"),
+        ],
+    );
+    let td = daemon_with_root(root.path());
+    let mut stream = std::os::unix::net::UnixStream::connect(&td.socket).unwrap();
+    stream
+        .write_all(
+            b"{\"id\":\"1\",\"method\":\"linear.snapshot\",\"params\":{\"workspace_id\":\"wA\"}}\n",
+        )
+        .unwrap();
+    wait_for(
+        "the script to start",
+        std::time::Duration::from_secs(15),
+        || std::fs::read_to_string(&pid_file).is_ok_and(|t| !t.trim().is_empty()),
+    );
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    drop(stream);
+    wait_for(
+        "the script to stop",
+        std::time::Duration::from_secs(15),
+        || pid_gone(pid),
+    );
+    // The daemon still serves the next client.
+    let root_ok = fake_plugin_root("0.3.0", &[]);
+    let out = td.board_with_env(
+        &["linear", "snapshot", "wA", "--json"],
+        &[("BOARD_WORK_PLUGIN_ROOT", root_ok.path().to_str().unwrap())],
+    );
+    assert_eq!(json_output(&out)["schema"], 1);
+}
+
+/// `board daemon --stop` while a snapshot runs stops the script and the
+/// daemon exits promptly, not after the script's deadline.
+#[test]
+fn stopping_the_daemon_mid_snapshot_stops_the_script() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let root = fake_plugin_root(
+        "0.3.0",
+        &[
+            ("FAKE_WORK_SNAPSHOT_PID_FILE", pid_file.to_str().unwrap()),
+            ("FAKE_WORK_SNAPSHOT_SLEEP", "90"),
+        ],
+    );
+    let mut td = daemon_with_root(root.path());
+    let socket = td.socket.clone();
+    let asker = std::thread::spawn(move || {
+        let mut client = board_core::client::UnixClient::connect(&socket).unwrap();
+        let _ = board_core::client::BoardClient::linear_snapshot(
+            &mut client,
+            &board_core::protocol::LinearSnapshotParams {
+                workspace_id: "wA".into(),
+                origin_socket: None,
+                plugin_root: None,
+            },
+        );
+    });
+    wait_for(
+        "the script to start",
+        std::time::Duration::from_secs(15),
+        || std::fs::read_to_string(&pid_file).is_ok_and(|t| !t.trim().is_empty()),
+    );
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let started = std::time::Instant::now();
+    super::run_board_stop(&td.socket);
+    wait_for(
+        "the script to stop",
+        std::time::Duration::from_secs(15),
+        || pid_gone(pid),
+    );
+    wait_for(
+        "the daemon to exit",
+        std::time::Duration::from_secs(20),
+        || td.try_exited(),
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = asker.join();
 }

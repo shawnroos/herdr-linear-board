@@ -252,6 +252,7 @@ fn board_rpc_success_and_error_emit_redacted_completion_metadata() {
             method: "board.list".into(),
             params: json!({"secret": "BOARD_PARAMS_SENTINEL_9fd1"}),
         },
+        crate::cancel::RequestCancel::default(),
     ));
     assert!(success.error.is_none());
     assert_eq!(success.id, "credential-in-request-id-S3CR3T");
@@ -264,6 +265,7 @@ fn board_rpc_success_and_error_emit_redacted_completion_metadata() {
             method: "not.a.method".into(),
             params: json!({"secret": "BOARD_RESULT_SENTINEL_531a"}),
         },
+        crate::cancel::RequestCancel::default(),
     ));
     assert!(failure.error.is_some());
 

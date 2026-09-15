@@ -97,6 +97,11 @@ impl TestDaemon {
         }
     }
 
+    /// Whether the daemon process has exited (and is reaped).
+    pub(crate) fn try_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
     pub(crate) fn client(&self) -> UnixClient {
         UnixClient::connect(&self.socket).expect("connect")
     }
@@ -133,6 +138,9 @@ impl TestDaemon {
             .env("HOME", self._dir.path())
             .env_remove("BOARD_SCOPE_PATH")
             .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
+            // The CLI sends its own plugin root with a snapshot request; one
+            // set in the shell running the suite would answer for the daemon.
+            .env_remove("BOARD_WORK_PLUGIN_ROOT")
             // The suite may itself run inside a herdr pane; `board tui`
             // would read the ambient space id and open Linear mode.
             .env_remove("HERDR_WORKSPACE_ID")

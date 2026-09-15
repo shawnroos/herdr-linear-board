@@ -4,13 +4,17 @@
 
 use super::*;
 use crate::ops::linear::{
-    child_env, snapshot, stderr_tail, SnapshotRunner, INSTALLED_PLUGINS_RELATIVE, LINEAR_RETRY_MAX,
-    LINEAR_TIMEOUT_SECONDS, LINEAR_VIEW_PAGE_MAX, PLUGIN_ROOT_ENV, PLUGIN_ROOT_TOML_KEY,
-    PLUGIN_VERSION_FLOOR, SCRIPT_DEADLINE, SCRIPT_WORST_CASE,
+    child_env, snapshot, utf8_env, SnapshotRunner, HERDR_CALLS_MAX, HERDR_CALL_BUDGET_SECONDS,
+    INSTALLED_PLUGINS_RELATIVE, KEYCHAIN_BUDGET_SECONDS, LINEAR_RETRY_MAX, LINEAR_TIMEOUT_SECONDS,
+    LINEAR_VIEW_PAGE_MAX, PLUGIN_ROOT_ENV, PLUGIN_ROOT_TOML_KEY, PLUGIN_VERSION_FLOOR,
+    SCRIPT_DEADLINE, SCRIPT_WORST_CASE, STDOUT_CAP_BYTES, TERM_GRACE,
 };
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -54,13 +58,29 @@ fn runner(root: Option<&Path>, home: &Path, extra: &[(&str, &str)]) -> SnapshotR
         env,
         config_root: None,
         deadline: Duration::from_secs(5),
+        cancelled: Arc::new(|| false),
     }
+}
+
+fn gone(pid: i32) -> bool {
+    // A zombie still answers signal 0; only a reaped process is gone.
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+fn read_pid(path: &Path) -> i32 {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
 }
 
 fn params(origin_socket: Option<&Path>) -> LinearSnapshotParams {
     LinearSnapshotParams {
         workspace_id: "wA".into(),
         origin_socket: origin_socket.map(|p| p.display().to_string()),
+        plugin_root: None,
     }
 }
 
@@ -134,12 +154,17 @@ fn snapshot_is_routed_and_rejects_missing_params_as_a_bad_request() {
 }
 
 #[test]
-fn a_script_past_the_deadline_is_killed_and_reaped() {
+fn a_script_past_the_deadline_gets_sigterm_so_its_exit_trap_runs_and_is_reaped() {
     let home = tempfile::tempdir().unwrap();
     let pid_file = home.path().join("pid");
+    let trap_ran = home.path().join("trap-ran");
     let plugin = fake_plugin(
         "0.3.0",
-        &format!("echo $$ > {}\nexec sleep 30", pid_file.display()),
+        &format!(
+            "trap 'touch {}' EXIT\necho $$ > {}\nsleep 30",
+            trap_ran.display(),
+            pid_file.display()
+        ),
     );
     let mut runner = runner(Some(plugin.path()), home.path(), &[]);
     // The pid file must exist before the deadline fires: bash startup took
@@ -150,16 +175,114 @@ fn a_script_past_the_deadline_is_killed_and_reaped() {
 
     assert_eq!(err.code(), 6);
     assert!(err.to_string().contains("timed out"), "message: {err}");
-    let pid: i32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    // A zombie still answers signal 0; only a reaped process is gone.
-    let rc = unsafe { libc::kill(pid, 0) };
-    let errno = std::io::Error::last_os_error().raw_os_error();
-    assert_eq!(rc, -1, "pid {pid} still exists (zombie or running)");
-    assert_eq!(errno, Some(libc::ESRCH));
+    let pid = read_pid(&pid_file);
+    assert!(gone(pid), "pid {pid} still exists (zombie or running)");
+    assert!(
+        trap_ran.exists(),
+        "the EXIT trap did not run: SIGKILL came first"
+    );
+}
+
+#[test]
+fn a_script_that_ignores_sigterm_is_killed_after_the_grace() {
+    let home = tempfile::tempdir().unwrap();
+    let pid_file = home.path().join("pid");
+    let plugin = fake_plugin(
+        "0.3.0",
+        &format!(
+            "trap '' TERM\necho $$ > {}\nwhile :; do sleep 0.1; done",
+            pid_file.display()
+        ),
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    // As above: the pid file has to exist before the deadline on a loaded box.
+    runner.deadline = Duration::from_millis(6000);
+
+    let started = Instant::now();
+    let err = snapshot(&runner, params(None)).unwrap_err();
+
+    assert!(err.to_string().contains("timed out"), "message: {err}");
+    assert!(gone(read_pid(&pid_file)));
+    assert!(started.elapsed() < runner.deadline + TERM_GRACE + Duration::from_secs(3));
+}
+
+#[test]
+fn a_cancelled_request_stops_the_script_before_its_deadline() {
+    let home = tempfile::tempdir().unwrap();
+    let pid_file = home.path().join("pid");
+    let plugin = fake_plugin(
+        "0.3.0",
+        &format!("echo $$ > {}\nsleep 60", pid_file.display()),
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    runner.deadline = Duration::from_secs(60);
+    let flag = pid_file.clone();
+    // Cancelled once the script has written its pid, as a client that went
+    // away mid-run would be.
+    runner.cancelled = Arc::new(move || flag.exists());
+
+    let started = Instant::now();
+    let err = snapshot(&runner, params(None)).unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    assert!(err.to_string().contains("was stopped"), "message: {err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(gone(read_pid(&pid_file)));
+}
+
+#[test]
+fn a_grandchild_left_holding_the_output_does_not_hold_the_answer() {
+    let home = tempfile::tempdir().unwrap();
+    let pid_file = home.path().join("straggler");
+    let plugin = fake_plugin(
+        "0.3.0",
+        &format!(
+            "sleep 30 &\necho $! > {}\n{}",
+            pid_file.display(),
+            cat_fixture()
+        ),
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    runner.deadline = Duration::from_secs(20);
+
+    let started = Instant::now();
+    let doc = snapshot(&runner, params(None)).unwrap();
+
+    assert_eq!(doc.issues.len(), 3);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    let straggler = read_pid(&pid_file);
+    let until = Instant::now() + Duration::from_secs(2);
+    while !gone(straggler) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        gone(straggler),
+        "the backgrounded sleep {straggler} outlived the run"
+    );
+}
+
+#[test]
+fn output_past_the_cap_is_refused_and_the_run_still_ends() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = fake_plugin(
+        "0.3.0",
+        &format!("head -c {} /dev/zero", STDOUT_CAP_BYTES + 100),
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    runner.deadline = Duration::from_secs(30);
+
+    let err = snapshot(&runner, params(None)).unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    assert!(err.to_string().contains("more than"), "message: {err}");
 }
 
 #[test]
@@ -178,10 +301,26 @@ fn a_script_that_uses_the_whole_budget_is_not_killed() {
 
 #[test]
 fn the_production_deadline_exceeds_the_worst_case_the_knobs_allow() {
-    let worst = (2 + LINEAR_VIEW_PAGE_MAX) * LINEAR_TIMEOUT_SECONDS + 2 * 5;
+    // Three herdr reads (server status, space list, session snapshot) and one
+    // keychain read, each bounded by a timeout the daemon sets in the child.
+    assert_eq!(HERDR_CALLS_MAX, 3);
+    let worst = (2 + LINEAR_VIEW_PAGE_MAX) * LINEAR_TIMEOUT_SECONDS
+        + HERDR_CALLS_MAX * HERDR_CALL_BUDGET_SECONDS
+        + KEYCHAIN_BUDGET_SECONDS;
     assert_eq!(SCRIPT_WORST_CASE, Duration::from_secs(worst));
     assert!(SCRIPT_DEADLINE > SCRIPT_WORST_CASE);
     assert_eq!(LINEAR_RETRY_MAX, 1, "one attempt: no backoff sleep can run");
+}
+
+#[test]
+fn a_client_waits_longer_than_the_daemon_can_take_to_answer() {
+    let daemon_longest = SCRIPT_DEADLINE + TERM_GRACE + Duration::from_secs(2);
+    assert!(
+        board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT > daemon_longest,
+        "client {:?} vs daemon {:?}",
+        board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+        daemon_longest
+    );
 }
 
 #[test]
@@ -196,11 +335,12 @@ fn truncated_json_is_a_parse_error_not_a_panic() {
 }
 
 #[test]
-fn exit_1_with_empty_stdout_carries_the_sanitised_stderr_tail() {
+fn a_crash_names_its_exit_code_and_how_to_see_its_output_and_never_shows_stderr() {
     let home = tempfile::tempdir().unwrap();
+    // What a plugin tracing its own run would print.
     let plugin = fake_plugin(
         "0.3.0",
-        r#"printf 'boom: \033[31mred\033[0m\n' >&2; exit 1"#,
+        r#"echo '+ curl -H "Authorization: lin_api_TRACEDTRACEDTRACED"' >&2; exit 1"#,
     );
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
@@ -208,12 +348,19 @@ fn exit_1_with_empty_stdout_carries_the_sanitised_stderr_tail() {
     assert_eq!(err.code(), 6);
     let msg = err.to_string();
     assert!(msg.contains("exit code 1"), "message: {msg}");
-    assert!(msg.contains("boom: [31mred[0m"), "message: {msg}");
-    assert!(!msg.contains('\u{1b}'), "escape leaked: {msg:?}");
+    assert!(
+        msg.contains("work-snapshot.sh wA` in a shell"),
+        "message: {msg}"
+    );
+    assert!(!msg.contains("TRACED"), "stderr reached the error: {msg}");
+    assert!(
+        !msg.contains("Authorization"),
+        "stderr reached the error: {msg}"
+    );
 }
 
 #[test]
-fn exit_0_with_empty_stdout_is_an_error_carrying_stderr() {
+fn exit_0_with_empty_stdout_is_an_error_that_shows_no_stderr() {
     let home = tempfile::tempdir().unwrap();
     let plugin = fake_plugin("0.3.0", "echo nothing-to-say >&2; exit 0");
 
@@ -221,7 +368,43 @@ fn exit_0_with_empty_stdout_is_an_error_carrying_stderr() {
 
     let msg = err.to_string();
     assert!(msg.contains("printed no document"), "message: {msg}");
-    assert!(msg.contains("nothing-to-say"), "message: {msg}");
+    assert!(!msg.contains("nothing-to-say"), "message: {msg}");
+}
+
+#[test]
+fn a_non_utf8_environment_value_is_dropped_rather_than_panicking() {
+    let env = utf8_env(
+        vec![
+            (OsString::from("HOME"), OsString::from("/h")),
+            (
+                OsString::from("LINEAR_BAD"),
+                OsString::from_vec(vec![0x66, 0xff, 0x6f]),
+            ),
+            (OsString::from_vec(vec![0xfe]), OsString::from("value")),
+        ]
+        .into_iter(),
+    );
+    assert_eq!(env.len(), 1, "{env:?}");
+    assert_eq!(env["HOME"], "/h");
+}
+
+#[test]
+fn the_callers_plugin_root_is_preferred_over_the_daemons() {
+    let home = tempfile::tempdir().unwrap();
+    let old = fake_plugin("0.2.0", &cat_fixture());
+    let new = fake_plugin("0.3.0", &cat_fixture());
+    let runner = runner(Some(old.path()), home.path(), &[]);
+    let mut p = params(None);
+    p.plugin_root = Some(new.path().display().to_string());
+
+    let doc = snapshot(&runner, p).unwrap();
+    assert_eq!(doc.issues.len(), 3);
+
+    let err = snapshot(&runner, params(None)).unwrap_err();
+    assert!(
+        err.to_string().contains("0.2.0"),
+        "the daemon's own root is still the fallback: {err}"
+    );
 }
 
 #[test]
@@ -412,6 +595,8 @@ fn the_child_environment_is_built_from_scratch_and_filtered_by_prefix() {
     assert_eq!(seen["HERDR_LINEAR_TIMEOUT_SECONDS"], "8");
     assert_eq!(seen["HERDR_LINEAR_RETRY_MAX"], "1");
     assert_eq!(seen["HERDR_LINEAR_VIEW_PAGE_MAX"], "10");
+    assert_eq!(seen["HERDR_LINEAR_HERDR_TIMEOUT_SECONDS"], "5");
+    assert_eq!(seen["HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS"], "5");
     assert_eq!(seen["HERDR_LINEAR_STORE_DIR"], "/stores/here");
     assert_eq!(seen["LINEAR_CACHE_DIR"], "/cache/here");
     assert!(!seen.contains_key("UNRELATED_SECRET"), "{seen:?}");
@@ -471,18 +656,5 @@ fn child_env_without_herdr_bin_path_sets_no_herdr_bin() {
     let child = child_env(&env, None);
     assert!(!child.contains_key("HERDR_BIN"));
     assert!(!child.contains_key("HERDR_BIN_PATH"));
-    assert_eq!(child.len(), 5, "{child:?}");
-}
-
-#[test]
-fn stderr_tail_strips_controls_and_keeps_the_end() {
-    assert_eq!(stderr_tail(b""), "(empty)");
-    assert_eq!(stderr_tail(b"  a\x1b[1mb\x07c\xc2\x85d\n "), "a[1mbcd");
-    assert_eq!(stderr_tail("x\u{202E}y\u{200B}z".as_bytes()), "xyz");
-    let long: Vec<u8> = std::iter::repeat_n(b'x', 5000)
-        .chain(b"END".iter().copied())
-        .collect();
-    let tail = stderr_tail(&long);
-    assert!(tail.len() <= 2048);
-    assert!(tail.ends_with("END"));
+    assert_eq!(child.len(), 7, "{child:?}");
 }

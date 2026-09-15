@@ -1050,7 +1050,15 @@ pub struct LinearSnapshotParams {
     pub workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
+    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<String>,
 }
+
+/// How long a client waits for a `linear.snapshot` answer. Longer than the
+/// daemon's script deadline plus its stop grace, so a slow run is answered by
+/// the daemon; only a daemon that never answers reaches it.
+pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
 /// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
 /// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
