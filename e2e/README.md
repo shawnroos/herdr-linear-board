@@ -9,7 +9,7 @@ exercises the herdr wire integration end to end.
 For the layers below this one (unit, daemon+CLI integration, TUI snapshots), the
 isolation/safety design, and the **how-to-write-a-scenario** guide, see
 [`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v15:
-every numbered scenario from **01 through 39** must appear here and in `run-all.sh`. The provider-free
+every numbered scenario from **01 through 40** must appear here and in `run-all.sh`. The provider-free
 safe boundary is `fake-agent.sh`,
 `fake-bin/{pi,claude,codex,opencode,agy}`, and `test-harness.sh`; prompt/system-prompt contents are never logged.
 Scenario 21 is the active-run timer/event-refresh characterization. The CI live gate is configured to
@@ -58,6 +58,7 @@ exercise the complete catalog after the cheaper static checks succeed.
 | Managed Antigravity CLI (agy) mint captures its self-minted conversation id from `agent.get.agent_session` ({agent: agy, kind: id, source: herdr:antigravity_cli}; mint persists NULL at enqueue, the captured id atomically at promotion) and receives ONE delimited system+task `agent.prompt` block; retry re-attaches to the SAME conversation (`--conversation <id>` — agy has no fork) in a FRESH pane with the task alone; every `--conversation` hop launches a fresh pane by design (never-reuse, even across a non-fresh auto hop); a rescue reopens the dead pane with `agy --conversation <id>` without re-sending the task; when the recorded conversation no longer exists agy starts a new one and the daemon persists the NEW id plus a visible `system` card warning naming both; a missing session report degrades the capture (mint completes NULL, warning explains the missing integration) and rescue fails closed with an actionable refusal; the three permission modes are pinned (`current` = no flag, `sandbox` = `--sandbox`, `always-proceed` = `--dangerously-skip-permissions`) and a fixed-effort model never receives `--effort`; every managed tab converges anchorless to exactly one agy pane | `36-managed-antigravity.sh` | live, checked-in fake `agy`, zero provider cost |
 | Boards and projects archive and restore: `archived_at` durável, `active|all|archived` visibility default `active`, nomes/paths reservados, `Global` nunca arquivável, projeto só arquiva com boards arquivados, recusa atômica com open run, destinos arquivados rejeitam card/envio/template, `board board archive|restore` e `board project archive|restore` com `--visibility`, `active_runs` e `archived_at` em human/JSON, eventos `BoardArchived/BoardRestored/ProjectArchived/ProjectRestored`, seleção recai para board/projeto ativo mais recente e sobrevive a restart, TUI pickers padrão ACTIVE ciclo `v` e `a` confirma/`r` restaura | `38-board-project-archive.sh` | live, zero provider cost |
 | Slow-provider Pi still receives the card prompt after a provider credential delay: idle lifecycle reported first (so Herdr flips interactive), `FAKE_PI_SLOW_PROVIDER` sleep with tty drain (dropped pre-init input), then session identity; `agent.prompt` delivered only after readiness and exactly one tty prompt matched via `agent_session` | `39-managed-slow-provider.sh` | live, checked-in fake `pi`, zero provider cost; slow-provider `FAKE_PI_SLOW_PROVIDER` knob |
+| `board linear snapshot <ws>` runs the work plugin's `bin/work-snapshot.sh` (a stand-in root at the 0.3.0 floor) for a disposable workspace and attaches LIVE pane status read from the origin herdr session; the script receives only the allowlisted environment plus the origin socket; a refused workspace id and a plugin below the version floor both surface as protocol code 6 / exit 6 without a herdr call | `40-linear-mode.sh` | live, provider-free; no Linear call |
 
 ### How the live scenario produces Herdr `done`
 
@@ -130,7 +131,7 @@ unmarked, or out-of-root paths. Named-session sockets must be at most 92 bytes, 
 short `/tmp/hb-e2e.XXXXXX` isolated root. `TMPDIR` is pinned to that exact marker-owned root, so
 generated configured-harness scripts remain contained even if asynchronous `pane run` never opens
 their normal self-removing script. The forced-build standard suite is configured and required to exercise
-scenarios 01–39 without provider calls; this is a coverage requirement, not a claim that a live run
+scenarios 01–40 without provider calls; this is a coverage requirement, not a claim that a live run
 has completed. Scenarios 18–29 use only the configured or managed
 fake harnesses and never record prompt or system-prompt bodies.
 
@@ -208,7 +209,7 @@ personal Claude state. Its intended contract is one authorized attempt with no r
 | `12-cwd-boards.sh` | Scoped project identity/isolation plus real TUI title, the board→project picker drill-down (`b` → `⇄ Other projects…` → Global last), and heterogeneous-workspace cwd override/fail-closed dispatch. |
 | `13-jump-to-pane.sh` | Canonical CLI and same-session TUI focus of a deliberately selected run through a real plugin overlay. |
 | `NN-*.sh` | The scenarios above. |
-| `run-all.sh` | Builds once, runs scenarios 01–39 as environment-scrubbed children with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). | with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). |
+| `run-all.sh` | Builds once, runs scenarios 01–40 as environment-scrubbed children with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). | with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). |
 | `ci.sh` | Pins, caches, and verifies Herdr for Linux x86_64; runs the complete suite with `--require-all`; exports only its exact private artifact root to `e2e-artifacts/`. |
 
 Columns have no `board` CLI verb, so scenarios configure them over the boardd
