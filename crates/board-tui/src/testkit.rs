@@ -8,13 +8,15 @@
 //! binaries just call it.
 
 use board_core::capability::{claude_capabilities, pi_capabilities};
-use board_core::client::{BoardClient, FakeBoardClient};
+use std::sync::{Arc, Mutex};
+
+use board_core::client::{BoardClient, FakeBoardClient, RpcClientError};
 use board_core::db::{EnqueueRun, FinalizeRun};
 use board_core::harness::BUILTIN_HARNESSES;
 use board_core::protocol::{
     AwaitingReason, CardCreateParams, CardStatus, ColumnCreateParams, Effort, Event,
-    HarnessListResult, RunOutcome, SessionInfo, SessionListResult, SpaceInfo, SpaceKind,
-    SpaceListResult, Trigger,
+    HarnessListResult, LinearSnapshot, RunOutcome, SessionInfo, SessionListResult, SpaceInfo,
+    SpaceKind, SpaceListResult, Trigger,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
@@ -26,7 +28,7 @@ use crate::app::{App, Msg};
 use crate::editor::FakeEditor;
 use crate::forms::{Field, FieldId, FieldKind, Form};
 use crate::view::view;
-use crate::{Driver, OriginContext};
+use crate::{Driver, LinearStart, OriginContext, PlatformActions};
 
 // -- form introspection ------------------------------------------------------
 
@@ -525,4 +527,174 @@ pub fn demo_client() -> anyhow::Result<DemoClient> {
     c.board_open("/Volumes/archive/project")?;
 
     Ok(DemoClient::new(c))
+}
+
+// -- Linear mode ------------------------------------------------------------
+
+/// Every request a [`RecordingClient`] saw: `(method, params)` in order.
+pub type RequestLog = Arc<Mutex<Vec<(String, Value)>>>;
+
+/// What a [`FakePlatform`] recorded: opened URLs or copied texts, in order.
+pub type PlatformLog = Arc<Mutex<Vec<String>>>;
+
+/// Records every request a client is asked for, in order. Wrap any client so
+/// a test can assert which requests left the driver (and which never did).
+pub struct RecordingClient<C> {
+    inner: C,
+    log: RequestLog,
+}
+
+impl<C: BoardClient> RecordingClient<C> {
+    pub fn new(inner: C) -> (RecordingClient<C>, RequestLog) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        (
+            RecordingClient {
+                inner,
+                log: log.clone(),
+            },
+            log,
+        )
+    }
+}
+
+impl<C: BoardClient> BoardClient for RecordingClient<C> {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        self.log
+            .lock()
+            .unwrap()
+            .push((method.to_string(), params.clone()));
+        self.inner.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.inner.subscribe()
+    }
+
+    fn reconnect_path(&self) -> Option<std::path::PathBuf> {
+        self.inner.reconnect_path()
+    }
+}
+
+/// A client whose daemon predates `linear.snapshot`: the exact protocol
+/// error boardd returns for an unknown method. Everything else delegates.
+pub struct MethodNotFoundClient(pub FakeBoardClient);
+
+impl BoardClient for MethodNotFoundClient {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        if method == "linear.snapshot" {
+            return Err(anyhow::Error::new(RpcClientError::new(
+                1,
+                None,
+                format!("bad request: unknown method: {method}"),
+                None,
+            )));
+        }
+        self.0.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.0.subscribe()
+    }
+}
+
+/// Records URL opens and clipboard writes instead of touching the platform.
+#[derive(Default)]
+pub struct FakePlatform {
+    pub opened: PlatformLog,
+    pub copied: PlatformLog,
+    pub fail: bool,
+}
+
+impl FakePlatform {
+    pub fn new() -> (FakePlatform, PlatformLog, PlatformLog) {
+        let platform = FakePlatform::default();
+        (
+            FakePlatform {
+                opened: platform.opened.clone(),
+                copied: platform.copied.clone(),
+                fail: false,
+            },
+            platform.opened,
+            platform.copied,
+        )
+    }
+}
+
+impl PlatformActions for FakePlatform {
+    fn open_url(&mut self, url: &str) -> anyhow::Result<()> {
+        if self.fail {
+            anyhow::bail!("opener stubbed failure");
+        }
+        self.opened.lock().unwrap().push(url.to_string());
+        Ok(())
+    }
+
+    fn copy_text(&mut self, text: &str) -> anyhow::Result<()> {
+        if self.fail {
+            anyhow::bail!("clipboard stubbed failure");
+        }
+        self.copied.lock().unwrap().push(text.to_string());
+        Ok(())
+    }
+}
+
+/// One of the vendored plugin fixtures (`bound-with-view`, `unbound`, …),
+/// parsed. The fixtures carry no `pane_status`; tests attach one.
+pub fn linear_fixture(name: &str) -> LinearSnapshot {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../board-core/tests/fixtures/linear-snapshot/"
+    );
+    let text = std::fs::read_to_string(format!("{path}{name}.json"))
+        .unwrap_or_else(|e| panic!("fixture {name}: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("fixture {name} parses: {e}"))
+}
+
+/// A `LinearStart` for space `wA` (every fixture's space) with a default
+/// origin and equal versions.
+pub fn linear_start() -> LinearStart {
+    LinearStart {
+        workspace_id: "wA".to_string(),
+        origin: OriginContext::default(),
+        board_version: "0.17.0".to_string(),
+        daemon_version: Some("0.17.0".to_string()),
+    }
+}
+
+/// A Linear-mode driver over `client` with a fake editor and a fake
+/// platform; returns the platform's URL and clipboard logs.
+pub fn linear_driver<C: BoardClient + 'static>(
+    client: C,
+    start: LinearStart,
+) -> (Driver, PlatformLog, PlatformLog) {
+    let (platform, opened, copied) = FakePlatform::new();
+    let driver = Driver::linear_with_platform(
+        Box::new(client),
+        Box::new(FakeEditor::new("x")),
+        Box::new(platform),
+        start,
+        false,
+    );
+    (driver, opened, copied)
+}
+
+/// Same, with fetches held so the first request is observable.
+pub fn linear_driver_deferred<C: BoardClient + 'static>(client: C, start: LinearStart) -> Driver {
+    let (platform, _, _) = FakePlatform::new();
+    Driver::linear_with_platform(
+        Box::new(client),
+        Box::new(FakeEditor::new("x")),
+        Box::new(platform),
+        start,
+        true,
+    )
+}
+
+/// The method names of a [`RequestLog`], in order.
+pub fn methods(log: &RequestLog) -> Vec<String> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .map(|(method, _)| method.clone())
+        .collect()
 }

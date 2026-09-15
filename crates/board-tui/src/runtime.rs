@@ -20,6 +20,7 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use crate::app::Msg;
+use crate::driver::LinearStart;
 use crate::editor::RealEditor;
 use crate::view::view;
 use crate::{Driver, OriginContext};
@@ -61,6 +62,13 @@ pub fn run_with_board(client: Box<dyn BoardClient>, board: BoardSnapshot) -> Res
         board,
         OriginContext::from_environment(),
     )?;
+    run_driver(&mut driver)
+}
+
+/// The `board tui` entry point in Linear mode: no board row is read or
+/// written; the first `linear.snapshot` leaves from the driver constructor.
+pub fn run_linear(client: Box<dyn BoardClient>, start: LinearStart) -> Result<()> {
+    let mut driver = Driver::linear(client, Box::new(RealEditor), start);
     run_driver(&mut driver)
 }
 
@@ -118,6 +126,7 @@ fn event_loop(
         driver.app.now = epoch_secs();
         driver.app.now_ms = epoch_millis();
         driver.expire_toast();
+        driver.drain_linear_arrivals();
 
         let size = terminal.size()?;
         let new_area = Rect::new(0, 0, size.width, size.height);
@@ -151,15 +160,7 @@ fn event_loop(
                     SubscriptionSignal::Reconnected => reconnected = true,
                 }
             }
-            if reconnected {
-                refreshed = driver
-                    .reconnect_path()
-                    .as_deref()
-                    .is_some_and(|path| driver.reconnect(path));
-            }
-            if refreshed {
-                driver.handle(Msg::Refresh);
-            }
+            driver.on_daemon_signals(refreshed, reconnected);
         }
 
         if driver.app.should_quit {

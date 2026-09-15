@@ -7,7 +7,8 @@
 
 use anyhow::Result;
 
-use crate::app::{CardFilter, CommentHistoryView, Effect, Screen};
+use super::linear::linear_allows;
+use crate::app::{CardFilter, CommentHistoryView, Effect, Mode, Msg, Screen};
 use crate::view::pane_title;
 use crate::Driver;
 use board_core::protocol::{RunFocusAction, RunFocusResult};
@@ -59,7 +60,14 @@ impl Driver {
     }
 
     pub(super) fn dispatch(&mut self, eff: Effect) {
+        // KTD8: the closed allow set is the gate; a refused effect never
+        // builds a request.
+        if self.app.mode == Mode::Linear && !linear_allows(&eff) {
+            self.app.set_toast("not available in Linear mode", true);
+            return;
+        }
         match eff {
+            Effect::Refetch if self.app.mode == Mode::Linear => self.handle(Msg::LinearRefresh),
             Effect::Refetch => self.refetch(),
             Effect::LoadProjects => self.refresh_projects(),
             Effect::LoadProjectPicker => self.load_project_picker(),
@@ -264,6 +272,10 @@ impl Driver {
             Effect::LoadFormOptions => self.load_form_options(),
             Effect::SetPaneTitle(filter) => self.set_pane_title(filter),
             Effect::Quit => self.app.should_quit = true,
+            Effect::LinearSnapshot => self.fetch_linear_snapshot(),
+            Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
+            Effect::OpenIssueUrl(url) => self.open_issue_url(url),
+            Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),
         }
     }
 

@@ -38,6 +38,7 @@ mod drag;
 mod effect;
 mod forms;
 mod help;
+mod linear;
 mod mouse;
 mod move_column;
 mod nav;
@@ -47,6 +48,7 @@ mod state;
 mod switcher;
 
 pub use effect::Effect;
+pub use linear::{sanitise, sanitise_snapshot, LinearFailure, LinearState, PaneRow};
 pub use nav::clamp_selection;
 pub use state::{
     CardFilter, CommentHistoryView, Confirm, ConfirmPurpose, DetailScrollTarget, DragKind,
@@ -103,6 +105,22 @@ pub enum Screen {
     /// A focused comment's audit trail (`comment.history`), reached via `h`
     /// from `CardDetail`.
     CommentHistory,
+    /// Linear mode (`Mode::Linear`) screens; drawn by `view::linear` only.
+    LinearBoard,
+    LinearDetail,
+    LinearNotBound,
+    LinearError,
+    LinearStaleDaemon,
+}
+
+/// Which board this process renders. `Linear` is chosen by the CLI from the
+/// herdr space id before any store row exists; the upstream reducer and view
+/// never run in it, and it never reads `App::board`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mode {
+    #[default]
+    Upstream,
+    Linear,
 }
 
 /// The single archive/restore gate, shared by the board `a` key and the card
@@ -128,10 +146,18 @@ pub enum Msg {
     Mouse(MouseEvent),
     /// A `board_changed` (or fallback) notification: refetch the board.
     Refresh,
+    /// Linear mode: ask for a fresh snapshot (a key, the daemon reconnect
+    /// signal, or start-up). The reducer drops it while one is in flight.
+    LinearRefresh,
+    /// Linear mode: the snapshot worker's answer.
+    LinearArrived(Box<Result<board_core::protocol::LinearSnapshot, LinearFailure>>),
 }
 
 /// The whole TUI state.
 pub struct App {
+    pub mode: Mode,
+    /// Linear-mode state; `None` in `Mode::Upstream`.
+    pub linear: Option<LinearState>,
     pub board: BoardSnapshot,
     /// The project the current board belongs to. Kept in sync from
     /// `project.list` (see `Driver::refresh_projects`) and used by the
@@ -217,6 +243,8 @@ impl App {
             archived_at: board.board.archived_at.clone(),
         };
         App {
+            mode: Mode::Upstream,
+            linear: None,
             board,
             project,
             projects: Vec::new(),
@@ -254,6 +282,29 @@ impl App {
             help_return_to: Screen::Board,
             hit_map: RefCell::new(HitMap::default()),
         }
+    }
+
+    /// A Linear-mode app. `board` is a placeholder no Linear-mode code reads;
+    /// it exists only because the upstream field is not optional.
+    pub fn linear(state: LinearState, origin_context: OriginContext) -> App {
+        let placeholder = BoardSnapshot {
+            board: board_core::model::Board {
+                id: 0,
+                project_id: 0,
+                name: String::new(),
+                scope_path: None,
+                archived_at: None,
+            },
+            columns: Vec::new(),
+            cards: Vec::new(),
+            active_runs: Vec::new(),
+        };
+        let mut app = App::with_origin_context(placeholder, origin_context);
+        app.mode = Mode::Linear;
+        app.linear = Some(state);
+        app.screen = Screen::LinearBoard;
+        app.help_return_to = Screen::LinearBoard;
+        app
     }
 
     pub fn replace_board(&mut self, board: BoardSnapshot) {
@@ -425,10 +476,14 @@ impl App {
 
 /// The pure reducer. Mutates `app` and returns effects for the driver.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
+    if app.mode == Mode::Linear {
+        return linear::update_linear(app, msg);
+    }
     match msg {
         Msg::Refresh => vec![Effect::Refetch],
         Msg::Key(k) => on_key(app, k),
         Msg::Mouse(m) => mouse::on_mouse(app, m),
+        Msg::LinearRefresh | Msg::LinearArrived(_) => vec![],
     }
 }
 
@@ -478,5 +533,10 @@ fn on_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         Screen::Help => help::help_key(app, k),
         Screen::Switcher => switcher::switcher_key(app, k),
         Screen::CommentHistory => comment_history::comment_history_key(app, k),
+        Screen::LinearBoard
+        | Screen::LinearDetail
+        | Screen::LinearNotBound
+        | Screen::LinearError
+        | Screen::LinearStaleDaemon => vec![],
     }
 }

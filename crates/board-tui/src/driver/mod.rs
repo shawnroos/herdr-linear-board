@@ -9,7 +9,11 @@
 //!   card detail, and form catalog metadata.
 
 mod dispatch;
+mod linear;
 mod load;
+mod platform;
+
+pub use platform::{PlatformActions, RealPlatform};
 
 use anyhow::Result;
 use board_core::client::{BoardClient, UnixClient};
@@ -17,9 +21,22 @@ use board_core::protocol::{BoardSnapshot, Event};
 use ratatui::layout::Rect;
 use std::path::{Path, PathBuf};
 
-use crate::app::{update, App, CardFilter, Msg};
+use std::sync::mpsc;
+
+use crate::app::{update, App, CardFilter, Effect, LinearState, Msg};
 use crate::editor::{EditorLauncher, RealEditor};
 use crate::OriginContext;
+
+/// What the CLI hands the TUI to start in Linear mode: the herdr space id
+/// (`space_identity`), the invoking context, and the two versions the R25
+/// screen shows when the daemon predates `linear.snapshot`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinearStart {
+    pub workspace_id: String,
+    pub origin: OriginContext,
+    pub board_version: String,
+    pub daemon_version: Option<String>,
+}
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
 /// produced by `update`.
@@ -36,9 +53,62 @@ pub struct Driver {
     /// `event_loop` iteration calls `terminal.clear()` before drawing so every
     /// cell is repainted, then resets this.
     needs_full_redraw: bool,
+    platform: Box<dyn PlatformActions>,
+    /// Linear mode: the snapshot worker's delivery channel. `None` upstream.
+    linear_tx: Option<mpsc::Sender<linear::LinearArrival>>,
+    linear_rx: Option<mpsc::Receiver<linear::LinearArrival>>,
+    /// Test hook: `Some(pending)` holds snapshot fetches instead of running
+    /// them. See `defer_linear_snapshots`.
+    deferred_linear: Option<usize>,
 }
 
 impl Driver {
+    /// A Linear-mode driver: no `board_get`, no `pane.set_title`; the first
+    /// `linear.snapshot` request leaves in this constructor.
+    pub fn linear(
+        client: Box<dyn BoardClient>,
+        editor: Box<dyn EditorLauncher>,
+        start: LinearStart,
+    ) -> Driver {
+        Driver::linear_with_platform(client, editor, Box::new(RealPlatform), start, false)
+    }
+
+    /// `defer_snapshots` starts the driver with fetches held (see
+    /// `defer_linear_snapshots`), so the first request is observable.
+    pub fn linear_with_platform(
+        client: Box<dyn BoardClient>,
+        editor: Box<dyn EditorLauncher>,
+        platform: Box<dyn PlatformActions>,
+        start: LinearStart,
+        defer_snapshots: bool,
+    ) -> Driver {
+        let (tx, rx) = linear::arrival_channel();
+        let state = LinearState::new(
+            start.workspace_id,
+            start.board_version,
+            start.daemon_version,
+        );
+        let mut driver = Driver {
+            app: App::linear(state, start.origin.clone()),
+            client,
+            editor,
+            origin: start.origin,
+            needs_full_redraw: false,
+            platform,
+            linear_tx: Some(tx),
+            linear_rx: Some(rx),
+            deferred_linear: defer_snapshots.then_some(0),
+        };
+        driver.handle(Msg::LinearRefresh);
+        driver
+    }
+
+    /// Apply one effect as if the reducer had emitted it. Exposed so tests
+    /// can prove the Linear-mode allow set refuses a card-owning effect.
+    pub fn apply_effect(&mut self, eff: Effect) {
+        self.dispatch(eff);
+    }
+
     /// Build a driver, fetching the initial board.
     pub fn new(client: Box<dyn BoardClient>) -> Result<Driver> {
         Driver::with_editor_and_origin(
@@ -84,6 +154,10 @@ impl Driver {
             editor,
             origin,
             needs_full_redraw: false,
+            platform: Box::new(RealPlatform),
+            linear_tx: None,
+            linear_rx: None,
+            deferred_linear: None,
         };
         driver.set_pane_title(CardFilter::Active);
         Ok(driver)

@@ -12,8 +12,8 @@ use crate::widgets::{
 };
 
 use super::{
-    detail::wrapped_row_count, sheet_area_for_app, truncate, LayoutMode, HELP_GUTTER_WIDTH,
-    HELP_KEYS,
+    detail::wrapped_row_count, sheet_area_for_app, truncate, upstream_help_keys, LayoutMode,
+    HELP_GUTTER_WIDTH,
 };
 
 // -- shared sheet chrome -----------------------------------------------------
@@ -427,7 +427,7 @@ pub(super) fn draw_reorder_card(app: &App, f: &mut Frame, area: Rect) {
 /// Inner content rect of the help sheet's stacked section-card list. The
 /// content fills the sheet; no persistent hint row is reserved.
 pub fn help_list_rect(app: &App, area: Rect) -> Rect {
-    let content_h = HELP_KEYS.len().div_ceil(2) as u16 + 2;
+    let content_h = upstream_help_keys().len().div_ceil(2) as u16 + 2;
     let box_area = sheet_area_for_app(app, app.layout_mode(), 110, content_h, area);
     Rect::new(
         box_area.x + 1,
@@ -459,17 +459,17 @@ pub fn help_sections() -> Vec<HelpSection<'static>> {
     let mut out: Vec<HelpSection<'static>> = Vec::new();
     let mut title = "Board".to_string();
     let mut start = 0usize;
-    for (i, (_, k, d)) in HELP_KEYS.iter().enumerate() {
+    for (i, (_, k, d)) in upstream_help_keys().iter().enumerate() {
         if *k == "--" {
             if i > start {
-                out.push((title.clone(), &HELP_KEYS[start..i]));
+                out.push((title.clone(), &upstream_help_keys()[start..i]));
             }
             title = capitalize(d.trim_matches(|c| c == '-' || c == ' '));
             start = i + 1;
         }
     }
-    if start < HELP_KEYS.len() {
-        out.push((title, &HELP_KEYS[start..]));
+    if start < upstream_help_keys().len() {
+        out.push((title, &upstream_help_keys()[start..]));
     }
     out
 }
@@ -542,7 +542,7 @@ pub fn help_regular_max_scroll(app: &App, area: Rect) -> usize {
         return help_wrapped_rows(help_content_width(rect))
             .saturating_sub(rect.height.max(1) as usize);
     }
-    let content_h = HELP_KEYS.len().div_ceil(2) as u16 + 2;
+    let content_h = upstream_help_keys().len().div_ceil(2) as u16 + 2;
     let box_area = sheet_area_for_app(app, app.layout_mode(), 110, content_h, area);
     let inner = Rect::new(
         box_area.x + 1,
@@ -659,7 +659,7 @@ pub(super) fn draw_help(app: &App, f: &mut Frame, area: Rect) {
         draw_help_wrapped(app, f, area);
         return;
     }
-    let content_h = HELP_KEYS.len().div_ceil(2) as u16 + 2;
+    let content_h = upstream_help_keys().len().div_ceil(2) as u16 + 2;
     let box_area = sheet_area_for_app(app, app.layout_mode(), 110, content_h, area);
     f.render_widget(Clear, box_area);
     let mut hit_map = app.hit_map.borrow_mut();
@@ -695,7 +695,7 @@ pub(super) fn draw_help(app: &App, f: &mut Frame, area: Rect) {
 }
 
 fn draw_help_wrapped(app: &App, f: &mut Frame, area: Rect) {
-    let content_h = HELP_KEYS.len().div_ceil(2) as u16 + 2;
+    let content_h = upstream_help_keys().len().div_ceil(2) as u16 + 2;
     let box_area = sheet_area_for_app(app, app.layout_mode(), 110, content_h, area);
     f.render_widget(Clear, box_area);
     let mut hit_map = app.hit_map.borrow_mut();

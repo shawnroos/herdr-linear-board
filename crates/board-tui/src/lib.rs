@@ -33,6 +33,6 @@ pub mod testkit;
 pub mod view;
 pub mod widgets;
 
-pub use driver::Driver;
+pub use driver::{Driver, LinearStart, PlatformActions, RealPlatform};
 pub use origin::OriginContext;
-pub use runtime::{run, run_with_board};
+pub use runtime::{run, run_linear, run_with_board};

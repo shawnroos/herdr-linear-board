@@ -70,6 +70,13 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         "move_column.rs" => vec!["MoveColumn"],
         "reorder_card.rs" => vec!["ReorderCard"],
         "comment_history.rs" => vec!["CommentHistory"],
+        "linear.rs" => vec![
+            "LinearBoard",
+            "LinearDetail",
+            "LinearNotBound",
+            "LinearError",
+            "LinearStaleDaemon",
+        ],
         // `mod.rs` holds the global pre-dispatch (`?`) and `nav.rs` the shared
         // `↑/↓`+`k/j` decoder every list screen reads through. Neither belongs
         // to one screen, so any row documenting the key will do.
@@ -85,6 +92,11 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
             "MoveColumn",
             "ReorderCard",
             "CommentHistory",
+            "LinearBoard",
+            "LinearDetail",
+            "LinearNotBound",
+            "LinearError",
+            "LinearStaleDaemon",
         ],
         // `mouse.rs` *synthesizes* key events to reuse a screen's handler (for
         // example, the Card Detail comment `[ Edit ]` action replays `e`); it
@@ -162,6 +174,11 @@ fn every_screen_with_bindings_has_help_rows() {
         Screen::Help,
         Screen::Switcher,
         Screen::CommentHistory,
+        Screen::LinearBoard,
+        Screen::LinearDetail,
+        Screen::LinearNotBound,
+        Screen::LinearError,
+        Screen::LinearStaleDaemon,
     ] {
         assert!(
             screens_with_rows.contains(&format!("{screen:?}")),
