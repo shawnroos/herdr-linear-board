@@ -927,3 +927,63 @@ herdr panes are fully drivable from the CLI (`pane send-keys` with named keys, `
 | 4. Full E2E | real Herdr wiring | collision-resistant ephemeral named Herdr session plus disposable workspace; the standard suite uses checked-in fake Pi/Claude/Codex/OpenCode/Antigravity (`agy`)/configured harnesses and asserts pane-first placement/prompt/argv contracts against the current Herdr 0.9.0 / protocol 22 gate with zero provider cost. Separate opt-in real-Claude Haiku/low, real-Codex low, and real-OpenCode low smokes are never in `run-all.sh`; each intended contract is one authorized attempt with no retry or fallback (and may incur cost). |
 
 Isolation rules for level 3–4: `BOARD_DB=/tmp/…` + dedicated daemon socket per test run so tests never touch the real board; every interactive/live test must create and use a collision-resistant ephemeral named Herdr session plus a disposable workspace, never a user's session, workspace, or tab. The session may run headlessly in CI, but it must retain the same named-session and workspace requirements.
+
+## 13. Linear mode
+
+Linear mode is the board rendered for one herdr space that the work plugin (`work@shrimpshack`)
+has bound to a Linear project. It is a read-only view over the plugin's snapshot document; the
+upstream kanban, its SQLite rows, and its dispatch engine are not involved.
+
+**Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
+`workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
+ignored in Linear mode with one line on stderr. Outside herdr neither variable is set and the
+upstream board runs unchanged.
+
+**Mode decision.** `board tui` decides the mode before any store write. With a space id the CLI
+opens the daemon client and starts the TUI in Linear mode; the upstream path, which persists a
+project row for the cwd before the terminal exists, is never entered. A Linear-mode board holds no
+project, board, or card id, so the daemon has no row for it and no mutating method can name one.
+
+**The read path.** One request, `linear.snapshot {workspace_id, origin_socket?}`, is the whole
+read:
+
+```text
+board tui / board linear snapshot <id>
+  → boardd  linear.snapshot
+      → plugin root / bin/work-snapshot.sh <id>      (document on stdout, per-section status)
+      → herdr  session.snapshot on origin_socket       (best effort: pane_status per named pane)
+  ← document + pane_status
+```
+
+The plugin root is resolved in order: `BOARD_WORK_PLUGIN_ROOT`, then `[daemon] work_plugin_root`
+in the board config, then the `user`-scope `installPath` of `work@shrimpshack` in
+`~/.claude/plugins/installed_plugins.json`. The daemon reads `.claude-plugin/plugin.json` at that
+root and refuses a version below `0.3.0`, naming both versions. The script runs under a bounded
+deadline with an environment built from scratch (`HOME`, `PATH`, the origin socket as
+`HERDR_SOCKET_PATH`, every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, and the retry and
+timeout knobs the daemon sets); neither its argv nor its environment is logged. Exit 0 with a
+document is the only success; each section of the document carries its own status and a partial
+document renders as partial. Pane status is a second read after the script, on the origin socket;
+with no herdr handle (the CLI test daemon) or any failure every status is `unknown`. Every
+plugin-side failure is protocol error `6`, which the CLI passes through as exit code `6`.
+
+`board linear snapshot <workspace-id> [--json]` is the same read from the command line and prints
+the document as JSON either way; it exists so the CLI-to-daemon-to-script path is provable
+without a terminal.
+
+**Effects.** In Linear mode the driver executes only refetch, the snapshot request, pane focus,
+opening the issue URL, copying the worktree path, and quit; every other effect is refused with a
+toast before a request is built. The refusal is the gate, not the hidden keys.
+
+**Pane title.** Linear mode never sends `pane.set_title`. The plugin pane keeps the title herdr
+gave it.
+
+**Refresh.** Refresh is manual. A reconnect to the daemon is the one automatic refresh and sends
+exactly one snapshot request; `board_changed` events are ignored, since no board row can change.
+One snapshot is in flight at a time and a refresh requested while one is running is dropped with a
+toast. A failed refresh keeps the last good snapshot on screen.
+
+**Fixture contract.** `crates/board-core/tests/fixtures/linear-snapshot/` vendors the plugin's
+canonical snapshot documents. `VERSION` there records the plugin version and a sha256 per file; a
+board test asserts the on-disk files match those hashes, and the plugin's own suite asserts the same
+hashes from its side, so a drift between the repos is a failing test on whichever side moved.
