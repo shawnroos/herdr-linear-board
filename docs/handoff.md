@@ -54,7 +54,7 @@ dispatches agents into visible panes.
 ## Key decisions already made (in the work plugin — do not relitigate)
 
 - **Bindings are authoritative; labels never are.** On Shawn's machine the only bound
-  space is labelled `AI-Editor` and carries the project `Cue MVP Launch`. A board
+  space is labelled `Editor` and carries the project `Example Launch`. A board
   that matches a space to a project by label shows the wrong project.
 - **One resolution rule** for team, repository, space and tab. Exactly one known
   answer: resolve it and state the fact and its source. More than one: ask, naming

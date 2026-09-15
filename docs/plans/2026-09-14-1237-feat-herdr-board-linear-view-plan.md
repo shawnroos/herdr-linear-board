@@ -278,10 +278,10 @@ The snapshot document, directional:
 ```json
 {
   "schema": 1,
-  "workspace": {"id": "wR", "label": "AI-Editor", "live": true},
+  "workspace": {"id": "wR", "label": "Editor", "live": true},
   "mapping": {"status": "ok", "space": "project", "tab": "work", "pane": "session", "source": "default"},
   "record": {"status": "ok", "state": "bound", "project_id": "…"},
-  "project": {"id": "…", "name": "Cue MVP Launch", "team_key": "AI", "url": "…"},
+  "project": {"id": "…", "name": "Example Launch", "team_key": "AI", "url": "…"},
   "view": {"status": "ok|none|not_found|archived|unreadable", "id": "…", "name": "…",
            "layout": {"grouping": "workflowState", "column_order": ["…"], "hidden": ["…"]}},
   "linear": {"status": "ok|unavailable", "cache_age_seconds": 0},
