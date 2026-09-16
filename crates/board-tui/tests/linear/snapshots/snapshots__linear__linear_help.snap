@@ -1,15 +1,14 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
-assertion_line: 288
 expression: frame
 ---
 " Linear  AI Canvas Tools · view: Canvas board · space: Plugins · fetched 0s ago                                         "
 " Enter detail · r refresh · ? help · q quit                                                                             "
-"┌ Backlog (1) ─┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐) ────────────┐"
+"┌ Backlog (1) ─┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐──────────────┐"
 "│WEB-3318  P0  │board                                                                                   │              │"
-"│Example issue:│  ←/→ h/l      focus column                                                             │              │"
-"│@Example User │  ↑/↓ k/j      focus card                                                               │              │"
-"│              │  Enter        card detail                                                              │              │"
+"│Example issue:│  ←/→ h/l      focus column                                                             │tem is empty  │"
+"│an item is sti│  ↑/↓ k/j      focus card                                                               │              │"
+"│@Example User │  Enter        card detail                                                              │              │"
 "│              │  r / R        refresh snapshot                                                         │              │"
 "│              │  ?            this help (any screen)                                                   │              │"
 "│              │  q / Esc      quit                                                                     │              │"

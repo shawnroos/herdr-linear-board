@@ -1,0 +1,23 @@
+---
+source: crates/board-tui/tests/linear/mod.rs
+expression: "rows.join(\"\\n\")"
+---
+ Linear  AI Canvas Tools · view: Can
+ Enter detail · r refresh · ? help ·
+┌ Backlog (1) ─────────────────────┐
+│WEB-3318  P0                      │
+│Example issue: the panel stays    │
+│blank while a long list of items …│
+│@Example User                     │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+└──────────────────────────────────┘
+ Unmapped tabs (live tabs no binding
+  Elsewhere (wA:t2) · no_binding · …

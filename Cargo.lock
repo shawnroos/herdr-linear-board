@@ -183,6 +183,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tui-textarea",
+ "unicode-width",
 ]
 
 [[package]]

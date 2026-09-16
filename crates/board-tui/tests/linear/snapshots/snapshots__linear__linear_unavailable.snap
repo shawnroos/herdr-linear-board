@@ -1,6 +1,5 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
-assertion_line: 174
 expression: frame
 ---
 " Linear  AI Canvas Tools · view: Canvas board (unreadable) · space: Plugins · fetched 0s ago                            "
@@ -8,8 +7,8 @@ expression: frame
 "┌ In Progress (1) ─────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│WEB-3312  ~stale  ⧉2                                                                                                  │"
 "│Example issue: a saved item is empty after reload                                                                     │"
-"│unassigned                                                                                                            │"
 "│                                                                                                                      │"
+"│unassigned                                                                                                            │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"

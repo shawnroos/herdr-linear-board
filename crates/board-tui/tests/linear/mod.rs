@@ -108,9 +108,11 @@ fn bound_no_view_renders_team_states_and_the_bind_hint() {
     let (d, _, _) = linear_driver(fake_with(linear_fixture("bound-no-view")), linear_start());
     let frame = draw(&d.app, W, H);
     assert!(frame.contains("no view chosen: /work:bind"), "{frame}");
+    // Five 36-cell columns need 180 cells; at W only the first three fit.
+    let wide = draw(&d.app, 180, H);
     assert!(
-        frame.contains("Backlog (1)") && frame.contains("Done (0)"),
-        "{frame}"
+        wide.contains("Backlog (1)") && wide.contains("Done (0)"),
+        "{wide}"
     );
     insta::assert_snapshot!("linear_bound_no_view", frame);
 }
@@ -128,9 +130,10 @@ fn a_view_linear_no_longer_has_falls_back_and_says_no_view_is_chosen() {
         "{frame}"
     );
     assert!(frame.contains("! view not found"), "{frame}");
+    let wide = draw(&d.app, 180, H);
     assert!(
-        frame.contains("Backlog (1)") && frame.contains("Done (0)"),
-        "{frame}"
+        wide.contains("Backlog (1)") && wide.contains("Done (0)"),
+        "{wide}"
     );
 }
 
@@ -785,4 +788,130 @@ fn the_board_sends_its_plugin_root_with_every_snapshot_request() {
     let (method, params) = &sent[0];
     assert_eq!(method, "linear.snapshot");
     assert_eq!(params["plugin_root"], "/plugins/work");
+}
+
+// -- card and column geometry (R1, R2, R3, AE2) ------------------------------
+
+/// A 36-cell frame is one column; rows come back without the quotes the
+/// backend wraps each row in.
+fn narrow_rows(title: &str, assignee: Option<&str>) -> Vec<String> {
+    let mut snapshot = bound_with_view();
+    let issue = snapshot.issues.get_mut("WEB-3318").unwrap();
+    issue.title = title.into();
+    issue.assignee = assignee.map(|name| board_core::protocol::LinearAssignee {
+        id: None,
+        name: Some(name.into()),
+    });
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    render_at(&mut d, 36, 20).lines().map(backend_row).collect()
+}
+
+/// The backend quotes each row and appends a note after the closing quote
+/// when a row holds wide glyphs.
+fn backend_row(row: &str) -> String {
+    row.split("\" Hidden by multi-width symbols")
+        .next()
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string()
+}
+
+/// The inside of the column's border on frame row `row`.
+fn cell(rows: &[String], row: usize) -> String {
+    let chars: Vec<char> = rows[row].chars().collect();
+    assert_eq!(chars.first(), Some(&'│'), "row {row}: {rows:#?}");
+    assert_eq!(chars.last(), Some(&'│'), "row {row}: {rows:#?}");
+    chars[1..chars.len() - 1]
+        .iter()
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+const NINETY: &str =
+    "Example issue: the panel stays blank while a long list of items is still loading from disk";
+
+#[test]
+fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellipsis() {
+    assert_eq!(NINETY.chars().count(), 90);
+    let rows = narrow_rows(NINETY, Some("Example User"));
+    assert!(cell(&rows, 3).starts_with("WEB-3318"), "{rows:#?}");
+    let first = cell(&rows, 4);
+    let second = cell(&rows, 5);
+    assert!(
+        NINETY.starts_with(&first) && !first.ends_with('…'),
+        "{rows:#?}"
+    );
+    assert!(second.ends_with('…'), "{rows:#?}");
+    assert_eq!(cell(&rows, 6), "@Example User", "{rows:#?}");
+    insta::assert_snapshot!("linear_card_two_line_title_36", rows.join("\n"));
+}
+
+#[test]
+fn a_one_word_title_longer_than_the_column_breaks_mid_word() {
+    let word = "Exampleissuewithoutanyspacesthatrunsfarpastthecolumnedge";
+    let rows = narrow_rows(word, None);
+    let first = cell(&rows, 4);
+    assert_eq!(first.chars().count(), 34, "{rows:#?}");
+    assert!(word.starts_with(&first), "{rows:#?}");
+    let second = cell(&rows, 5);
+    assert!(word[34..].starts_with(&second), "{rows:#?}");
+}
+
+#[test]
+fn a_title_of_wide_glyphs_wraps_by_display_width() {
+    let title = "例".repeat(40);
+    let rows = narrow_rows(&title, None);
+    assert_eq!(cell(&rows, 4), "例".repeat(17), "{rows:#?}");
+    assert_eq!(cell(&rows, 5), format!("{}…", "例".repeat(16)), "{rows:#?}");
+    assert_eq!(cell(&rows, 6), "unassigned", "{rows:#?}");
+}
+
+#[test]
+fn a_one_line_title_leaves_the_second_title_row_blank() {
+    let rows = narrow_rows("Example short title", Some("Example User"));
+    assert_eq!(cell(&rows, 4), "Example short title", "{rows:#?}");
+    assert_eq!(cell(&rows, 5), "", "{rows:#?}");
+    assert_eq!(cell(&rows, 6), "@Example User", "{rows:#?}");
+}
+
+#[test]
+fn an_empty_title_and_a_missing_assignee_render_placeholders() {
+    let rows = narrow_rows("", None);
+    assert_eq!(cell(&rows, 4), "(no title)", "{rows:#?}");
+    assert_eq!(cell(&rows, 5), "", "{rows:#?}");
+    assert_eq!(cell(&rows, 6), "unassigned", "{rows:#?}");
+}
+
+#[test]
+fn cards_in_a_column_are_separated_by_a_blank_row() {
+    let mut snapshot = bound_with_view();
+    snapshot.groups[0].issues = vec!["WEB-3318".into(), "WEB-3317".into()];
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
+    assert_eq!(cell(&rows, 7), "", "{rows:#?}");
+    assert!(cell(&rows, 8).starts_with("WEB-3317"), "{rows:#?}");
+}
+
+#[test]
+fn a_column_of_zero_cards_renders_its_header_and_nothing_else() {
+    let mut snapshot = bound_with_view();
+    snapshot.groups[0].issues.clear();
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
+    assert!(rows[2].contains("Backlog (0)"), "{rows:#?}");
+    let bottom = rows.iter().position(|r| r.starts_with('└')).unwrap();
+    for row in 3..bottom {
+        assert_eq!(cell(&rows, row), "", "{rows:#?}");
+    }
+}
+
+#[test]
+fn a_body_36_cells_wide_draws_one_column_and_72_draws_two() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    for (width, columns) in [(36u16, 1usize), (71, 1), (72, 2)] {
+        let frame = render_at(&mut d, width, 20);
+        let top = frame.lines().nth(2).unwrap();
+        assert_eq!(top.matches('┌').count(), columns, "{width}:\n{frame}");
+    }
 }

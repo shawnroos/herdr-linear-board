@@ -9,13 +9,15 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{sanitise, App, LinearState, Screen};
 
 use super::{centered_rect_abs, linear_help_keys, truncate};
 
-const CARD_H: u16 = 3;
-const MIN_COL_W: u16 = 18;
+// Identifier, two title lines, assignee, then the blank separator row.
+const CARD_H: u16 = 5;
+const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
 
 pub(super) fn draw(app: &App, f: &mut Frame) {
@@ -130,6 +132,61 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
     vec![Line::from(first), second]
 }
 
+fn split_at_width(s: &str, max: usize) -> (&str, &str) {
+    let mut used = 0;
+    for (i, c) in s.char_indices() {
+        used += c.width().unwrap_or(0);
+        if used > max {
+            return (&s[..i], &s[i..]);
+        }
+    }
+    (s, "")
+}
+
+/// Truncation by display cells: `view::truncate` counts chars, which lets a
+/// wide glyph push the ellipsis past the column edge.
+fn fit(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    format!("{}…", split_at_width(s, max - 1).0)
+}
+
+/// Two title lines: the first breaks at a word boundary (mid-word only when
+/// one word is wider than the column), the second takes the rest and ends in
+/// an ellipsis when it does not fit.
+fn title_lines(title: &str, width: usize) -> [String; 2] {
+    let words: Vec<&str> = title.split_whitespace().collect();
+    if words.is_empty() {
+        return ["(no title)".to_string(), String::new()];
+    }
+    let text = words.join(" ");
+    if text.width() <= width {
+        return [text, String::new()];
+    }
+    let mut first_len = 0;
+    for word in &words {
+        let end = if first_len == 0 {
+            word.len()
+        } else {
+            first_len + 1 + word.len()
+        };
+        if text[..end].width() > width {
+            break;
+        }
+        first_len = end;
+    }
+    let (first, rest) = if first_len == 0 {
+        split_at_width(&text, width)
+    } else {
+        (&text[..first_len], &text[first_len..])
+    };
+    [first.to_string(), fit(rest.trim_start(), width)]
+}
+
 fn card_lines(issue: &LinearIssue, width: usize) -> Vec<String> {
     let mut first = line(&issue.identifier);
     if let Some(p) = issue.priority {
@@ -148,10 +205,12 @@ fn card_lines(issue: &LinearIssue, width: usize) -> Vec<String> {
         .and_then(|a| a.name.as_deref())
         .map(|n| format!("@{}", line(n)))
         .unwrap_or_else(|| "unassigned".to_string());
+    let [title_first, title_second] = title_lines(&line(&issue.title), width);
     vec![
-        truncate(&first, width),
-        truncate(&line(&issue.title), width),
-        truncate(&assignee, width),
+        fit(&first, width),
+        title_first,
+        title_second,
+        fit(&assignee, width),
     ]
 }
 
@@ -255,7 +314,8 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
             });
         let inner = block.inner(rect);
         f.render_widget(block, rect);
-        let per_col = (inner.height / CARD_H).max(1) as usize;
+        // The last card may drop its separator row at the column's bottom edge.
+        let per_col = ((inner.height + 1) / CARD_H).max(1) as usize;
         let first = if focused {
             state.sel_card.saturating_sub(per_col - 1)
         } else {
@@ -267,7 +327,7 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
                 inner.x,
                 y,
                 inner.width,
-                CARD_H.min(inner.bottom().saturating_sub(y)),
+                (CARD_H - 1).min(inner.bottom().saturating_sub(y)),
             );
             let selected = focused && row == state.sel_card;
             let lines: Vec<Line> = match snapshot.issues.get(identifier) {
@@ -275,7 +335,7 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
                     .into_iter()
                     .map(Line::from)
                     .collect(),
-                None => vec![Line::from(truncate(
+                None => vec![Line::from(fit(
                     &format!("{identifier} (missing)"),
                     inner.width as usize,
                 ))],
