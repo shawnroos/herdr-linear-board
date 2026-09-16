@@ -270,7 +270,8 @@ impl LinearState {
 pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
         // `board_changed` never refreshes a Linear board (R21).
-        Msg::Refresh | Msg::Mouse(_) => vec![],
+        Msg::Refresh => vec![],
+        Msg::Mouse(m) => super::mouse::on_mouse(app, m),
         Msg::LinearRefresh => request_or_queue(app),
         Msg::LinearArrived(arrival) => match *arrival {
             LinearArrival::Snapshot(result) => arrived(app, *result),
@@ -357,7 +358,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     effects
 }
 
-fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     // Same rule as the upstream reducer: a fast `Esc <key>` arrives as
     // `Alt+<key>`, which would otherwise open the browser or focus a pane.
     if k.modifiers.intersects(
@@ -455,6 +456,38 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// Selects the card drawn under the click, found again by identifier because
+/// the snapshot may have changed since that frame, then opens it the way
+/// `Enter` does (KTD9). A card no longer in the snapshot is left alone.
+pub(super) fn click_card(app: &mut App, group: &str, identifier: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let position = |g: &LinearGroup| g.issues.iter().position(|id| id == identifier);
+    let groups = state.groups();
+    let found = groups
+        .iter()
+        .position(|g| g.key == group && position(g).is_some())
+        .or_else(|| groups.iter().position(|g| position(g).is_some()))
+        .and_then(|g| Some((g, position(&groups[g])?)));
+    let Some((sel_group, sel_card)) = found else {
+        return vec![];
+    };
+    state.sel_group = sel_group;
+    state.sel_card = sel_card;
+    linear_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+}
+
+pub(super) fn click_group(app: &mut App, group: &str) {
+    let Some(state) = app.linear.as_mut() else {
+        return;
+    };
+    if let Some(index) = state.groups().iter().position(|g| g.key == group) {
+        state.sel_group = index;
+        state.clamp();
+    }
 }
 
 fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {

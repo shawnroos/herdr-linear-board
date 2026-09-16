@@ -303,6 +303,8 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "?", "this help (any screen)"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearBoard, "click", "open card / focus column"),
+    (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
     (Screen::LinearDetail, "u", "open issue in Linear"),

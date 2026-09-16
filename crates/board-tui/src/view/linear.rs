@@ -12,6 +12,7 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{sanitise, App, LinearState, Screen};
+use crate::widgets::{HitMap, Zone};
 
 use super::{centered_rect_abs, linear_help_keys, truncate};
 
@@ -61,7 +62,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         }
         Screen::LinearDetail => {
             draw_board(app, state, f, area);
-            draw_detail(state, f, area);
+            draw_detail(app, state, f, area);
         }
         Screen::Help => {
             draw_board(app, state, f, area);
@@ -270,7 +271,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         .height
         .saturating_sub(HEADER_ROWS + unmapped_h + footer_h);
     let body = Rect::new(area.x, area.y + HEADER_ROWS, area.width, body_h);
-    draw_columns(state, snapshot, f, body);
+    draw_columns(state, snapshot, f, body, &mut app.hit_map.borrow_mut());
 
     // The strip is clamped to the frame: at a tiny height the body saturates
     // to zero rows and an unclamped rect would index past the buffer.
@@ -307,7 +308,13 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, body: Rect) {
+fn draw_columns(
+    state: &LinearState,
+    snapshot: &LinearSnapshot,
+    f: &mut Frame,
+    body: Rect,
+    hit_map: &mut HitMap,
+) {
     let groups = &snapshot.groups;
     if body.height == 0 {
         return;
@@ -373,6 +380,10 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
             });
         let inner = block.inner(rect);
         f.render_widget(block, rect);
+        hit_map.push(
+            Rect::new(x, body.y, col_w, 1),
+            Zone::LinearGroup(group.key.clone()),
+        );
         // The last card may drop its separator row at the column's bottom edge.
         let per_col = ((inner.height + 1) / CARD_H).max(1) as usize;
         let first = if focused {
@@ -405,6 +416,13 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
                 Style::default()
             };
             f.render_widget(Paragraph::new(lines).style(style), card);
+            hit_map.push(
+                card,
+                Zone::LinearCard {
+                    group: group.key.clone(),
+                    identifier: identifier.clone(),
+                },
+            );
         }
     }
 }
@@ -519,7 +537,7 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
     out
 }
 
-fn draw_detail(state: &LinearState, f: &mut Frame, area: Rect) {
+fn draw_detail(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let Some(issue) = state.detail_issue() else {
         return;
     };
@@ -529,6 +547,7 @@ fn draw_detail(state: &LinearState, f: &mut Frame, area: Rect) {
         area,
     );
     f.render_widget(Clear, rect);
+    app.hit_map.borrow_mut().push(rect, Zone::Shield);
     let title = truncate(
         &format!(" {} — {} ", line(&issue.identifier), line(&issue.title)),
         rect.width.saturating_sub(2) as usize,

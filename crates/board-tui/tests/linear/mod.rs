@@ -6,13 +6,15 @@
 use board_core::client::{BoardClient, FakeBoardClient};
 use board_core::protocol::{CardCreateParams, Event, LinearSnapshot, PaneFocusResult};
 use board_tui::app::{Effect, Mode, Msg, Screen};
+use board_tui::testkit::left_down;
 use board_tui::testkit::{
     draw, hostile_origin, key, linear_driver, linear_driver_deferred,
     linear_driver_failing_platform, linear_fixture, linear_start, methods, render_at,
     MethodNotFoundClient, RecordingClient,
 };
+use board_tui::widgets::Zone;
 use board_tui::{Driver, LinearStart, OriginContext};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, MouseEventKind};
 use serde_json::Value;
 
 const W: u16 = 120;
@@ -754,14 +756,6 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
     assert_eq!(methods(&log), vec!["linear.snapshot"]);
-}
-
-#[test]
-fn mouse_input_is_ignored_in_linear_mode() {
-    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    d.handle(board_tui::testkit::left_down(3, 3));
-    assert_eq!(d.app.screen, Screen::LinearBoard);
-    assert!(d.app.toast.is_none());
 }
 
 #[test]
@@ -1655,4 +1649,208 @@ fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
         .collect();
     assert_eq!(ids, vec![Value::from("proj-a"), Value::from("proj-b")]);
     assert_eq!(selected(&d).as_deref(), Some("v1"));
+}
+
+// -- mouse on the board (R21, R22, KTD9) -------------------------------------
+
+/// `bound_with_view` with three more cards under In Progress, so a second card
+/// sits at frame rows 8..=11 of the third column at `W`×`H`.
+fn four_in_progress() -> LinearSnapshot {
+    let mut snapshot = bound_with_view();
+    let template = snapshot.issues["WEB-3312"].clone();
+    let group = snapshot
+        .groups
+        .iter_mut()
+        .find(|g| g.key == "st-prog")
+        .unwrap();
+    for identifier in ["WEB-9001", "WEB-9002", "WEB-9003"] {
+        group.issues.push(identifier.to_string());
+        let mut issue = template.clone();
+        issue.identifier = identifier.to_string();
+        issue.bindings.clear();
+        snapshot.issues.insert(identifier.to_string(), issue);
+    }
+    snapshot
+}
+
+fn mouse_driver() -> Driver {
+    let (d, _, _) = linear_driver(fake_with(four_in_progress()), linear_start());
+    d
+}
+
+fn wheel(d: &mut Driver, kind: MouseEventKind) {
+    d.handle(board_tui::testkit::mouse(kind, 90, 10));
+}
+
+fn selection(d: &Driver) -> (usize, usize, Option<String>) {
+    let state = d.app.linear.as_ref().unwrap();
+    (state.sel_group, state.sel_card, state.detail.clone())
+}
+
+/// Frame row `row` as the screen shows it, without the backend's quoting.
+fn frame_row(frame: &str, row: usize) -> String {
+    backend_row(frame.lines().nth(row).unwrap_or_default())
+}
+
+/// The In Progress column at `W`×`H`: x 80..120, title row 2, first card rows
+/// 3..=6, separator row 7, second card rows 8..=11.
+fn assert_in_progress_geometry(frame: &str) {
+    let title: String = frame_row(frame, 2).chars().skip(80).collect();
+    assert!(title.contains("In Progress (4)"), "{frame}");
+    let first: String = frame_row(frame, 3).chars().skip(80).collect();
+    assert!(first.contains("WEB-3312"), "{frame}");
+    let gap: String = frame_row(frame, 7).chars().skip(81).take(38).collect();
+    assert!(gap.trim().is_empty(), "{frame}");
+    let second: String = frame_row(frame, 8).chars().skip(80).collect();
+    assert!(second.contains("WEB-9001"), "{frame}");
+}
+
+#[test]
+fn a_click_on_a_card_selects_it_and_opens_its_detail() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    d.handle(left_down(90, 9));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
+}
+
+#[test]
+fn a_click_on_a_column_header_selects_that_group_without_opening_anything() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    d.handle(left_down(95, 2));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(selection(&d), (2, 0, None));
+}
+
+#[test]
+fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    for (x, y) in [(90, 7), (90, 25), (10, 0), (80, 5)] {
+        d.handle(left_down(x, y));
+        assert_eq!(d.app.screen, Screen::LinearBoard, "click at {x},{y}");
+        assert_eq!(selection(&d), (0, 0, None), "click at {x},{y}");
+    }
+}
+
+#[test]
+fn a_card_click_in_the_stacked_layout_opens_that_card() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let frame = render_at(&mut d, 70, 20);
+    assert!(frame_row(&frame, 3).contains("WEB-3318"), "{frame}");
+    d.handle(left_down(10, 4));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selection(&d), (0, 0, Some("WEB-3318".into())));
+}
+
+#[test]
+fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
+    let group = snapshot
+        .groups
+        .iter_mut()
+        .find(|g| g.key == "st-prog")
+        .unwrap();
+    group.issues.retain(|id| id != "WEB-3312");
+    d.handle(left_down(90, 9));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selection(&d), (2, 0, Some("WEB-9001".into())));
+}
+
+#[test]
+fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
+    for group in snapshot.groups.iter_mut() {
+        group.issues.retain(|id| id != "WEB-9001");
+    }
+    let todo = snapshot
+        .groups
+        .iter_mut()
+        .find(|g| g.key == "st-todo")
+        .unwrap();
+    todo.issues.push("WEB-9001".into());
+    d.handle(left_down(90, 9));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selection(&d), (1, 1, Some("WEB-9001".into())));
+}
+
+#[test]
+fn a_click_on_a_card_that_left_the_snapshot_since_the_draw_does_nothing() {
+    let mut d = mouse_driver();
+    let frame = render_at(&mut d, W, H);
+    assert_in_progress_geometry(&frame);
+    let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
+    for group in snapshot.groups.iter_mut() {
+        group.issues.retain(|id| id != "WEB-9001");
+    }
+    snapshot.issues.remove("WEB-9001");
+    d.handle(left_down(90, 9));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(selection(&d), (0, 0, None));
+}
+
+#[test]
+fn scrolling_moves_the_card_selection_and_stops_at_the_ends() {
+    let mut d = mouse_driver();
+    press(&mut d, KeyCode::Char('l'));
+    press(&mut d, KeyCode::Char('l'));
+    render_at(&mut d, W, H);
+    wheel(&mut d, MouseEventKind::ScrollDown);
+    assert_eq!(selection(&d), (2, 1, None));
+    for _ in 0..6 {
+        wheel(&mut d, MouseEventKind::ScrollDown);
+    }
+    assert_eq!(selection(&d), (2, 3, None), "stops at the last card");
+    wheel(&mut d, MouseEventKind::ScrollUp);
+    assert_eq!(selection(&d), (2, 2, None));
+    for _ in 0..6 {
+        wheel(&mut d, MouseEventKind::ScrollUp);
+    }
+    assert_eq!(selection(&d), (2, 0, None), "stops at the first card");
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn a_click_while_the_detail_overlay_is_open_does_not_reach_the_board() {
+    let mut d = mouse_driver();
+    open_web_3312(&mut d);
+    let frame = render_at(&mut d, W, H);
+    // Column 1 is outside the overlay, so the first column's card shows there.
+    assert!(frame_row(&frame, 3).starts_with("│W"), "{frame}");
+    for (x, y) in [(1, 4), (90, 9), (95, 2)] {
+        d.handle(left_down(x, y));
+        assert_eq!(d.app.screen, Screen::LinearDetail, "click at {x},{y}");
+        assert_eq!(selection(&d), (2, 0, Some("WEB-3312".into())));
+    }
+    wheel(&mut d, MouseEventKind::ScrollDown);
+    assert_eq!(d.app.linear.as_ref().unwrap().sel_card, 0);
+}
+
+#[test]
+fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
+    let mut d = mouse_driver();
+    render_at(&mut d, W, H);
+    assert!(
+        matches!(
+            d.app.hit_map.borrow().hit(81, 15),
+            Some(Zone::LinearCard { ref identifier, .. }) if identifier == "WEB-9002"
+        ),
+        "a card sits under the picker's body"
+    );
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    let frame = render_at(&mut d, W, H);
+    assert!(frame_row(&frame, 14).contains("Choose a space"), "{frame}");
+    d.handle(left_down(81, 15));
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(selection(&d), (0, 0, None));
 }

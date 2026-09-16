@@ -3,9 +3,12 @@ use ratatui::layout::Rect;
 
 use crate::widgets::{UiAction, Zone};
 
-use super::{App, DetailScrollTarget, Effect, Screen};
+use super::{App, DetailScrollTarget, Effect, Mode, Screen};
 
 pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if app.mode == Mode::Linear {
+        return on_linear_mouse(app, m);
+    }
     // New Compact-mode widgets (header buttons, switcher rows, button bars,
     // sheet close) are checked first, on every screen, via the HitMap the
     // last `view()` call registered. Existing board/detail hit-testing below
@@ -157,6 +160,33 @@ pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// Linear mode is default-deny: the shared zone arms below route through the
+/// kanban reducer (`SheetClose` sends it `Esc`), so a zone this function does
+/// not name is swallowed, which is also how an overlay shadows the board.
+fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if app.screen != Screen::LinearBoard {
+        return vec![];
+    }
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let hit = app.hit_map.borrow().hit(m.column, m.row);
+            match hit {
+                Some(Zone::LinearCard { group, identifier }) => {
+                    super::linear::click_card(app, &group, &identifier)
+                }
+                Some(Zone::LinearGroup(group)) => {
+                    super::linear::click_group(app, &group);
+                    vec![]
+                }
+                _ => vec![],
+            }
+        }
+        MouseEventKind::ScrollDown => super::linear::linear_key(app, key(KeyCode::Down)),
+        MouseEventKind::ScrollUp => super::linear::linear_key(app, key(KeyCode::Up)),
+        _ => vec![],
+    }
 }
 
 /// Move the hovered column's scroll offset, then — if the wheel landed on
