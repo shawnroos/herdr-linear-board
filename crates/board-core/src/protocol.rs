@@ -1060,6 +1060,10 @@ pub struct LinearSnapshotParams {
 /// the daemon; only a daemon that never answers reaches it.
 pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
+/// How long a client waits for a `linear.list` answer: longer than the
+/// daemon's list deadline plus its stop grace, as for the snapshot.
+pub const LINEAR_LIST_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
+
 /// Which plugin list `linear.list` runs: `bin/work-spaces.sh`,
 /// `bin/work-projects.sh` or `bin/work-views.sh`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -120,6 +120,7 @@ routes!(d, params, {
     "pane.set_title" => panes::pane_set_title(from(params)?),
     "pane.focus" => panes::pane_focus(from(params)?),
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
+    "linear.list" => linear::linear_list(d, from(params)?),
 });
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {

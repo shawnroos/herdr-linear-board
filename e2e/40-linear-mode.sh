@@ -17,7 +17,7 @@ e2e_isolate
 PLUGIN_ROOT="$E2E_TMP/work-plugin"
 DOC_PATH="$E2E_TMP/linear-doc.json"
 mkdir -p "$PLUGIN_ROOT/.claude-plugin" "$PLUGIN_ROOT/bin"
-printf '{"name":"work","version":"0.3.0"}\n' >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
+printf '{"name":"work","version":"0.4.0"}\n' >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
 cat >"$PLUGIN_ROOT/bin/work-snapshot.sh" <<SCRIPT
 #!/usr/bin/env bash
 set -u
@@ -122,7 +122,7 @@ set +e
 ERR="$("$BOARD_BIN" linear snapshot "$WS_ID" --json 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" -eq 6 ] || fail "expected exit 6 for an old plugin, got $rc: $ERR"
-printf '%s' "$ERR" | grep -q '0.1.0' && printf '%s' "$ERR" | grep -q '0.3.0' \
+printf '%s' "$ERR" | grep -q '0.1.0' && printf '%s' "$ERR" | grep -q '0.4.0' \
   || fail "the version error did not name both versions: $ERR"
 ok "version floor enforced"
 
