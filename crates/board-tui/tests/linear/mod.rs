@@ -104,10 +104,14 @@ fn bound_with_view_renders_the_views_columns_in_order() {
 }
 
 #[test]
-fn bound_no_view_renders_team_states_and_the_bind_hint() {
+fn bound_no_view_renders_team_states_under_the_default_view() {
     let (d, _, _) = linear_driver(fake_with(linear_fixture("bound-no-view")), linear_start());
     let frame = draw(&d.app, W, H);
-    assert!(frame.contains("no view chosen: /work:bind"), "{frame}");
+    assert!(frame.contains("view: project issues (default)"), "{frame}");
+    assert!(
+        !frame.contains("no view chosen") && !frame.contains("/work:bind"),
+        "{frame}"
+    );
     // Five 36-cell columns need 180 cells; at W only the first three fit.
     let wide = draw(&d.app, 180, H);
     assert!(
@@ -118,18 +122,31 @@ fn bound_no_view_renders_team_states_and_the_bind_hint() {
 }
 
 #[test]
-fn a_view_linear_no_longer_has_falls_back_and_says_no_view_is_chosen() {
+fn a_view_linear_no_longer_has_is_named_with_why_it_is_unusable() {
+    for (status, words) in [
+        ("not_found", "not found"),
+        ("archived", "archived"),
+        ("not_in_project", "not in project"),
+    ] {
+        let mut snapshot = linear_fixture("bound-no-view");
+        snapshot.view.status = status.into();
+        snapshot.view.id = Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".into());
+        snapshot.view.name = Some("Old board".into());
+        let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+        let frame = draw(&d.app, W, H);
+        assert!(
+            frame.contains(&format!(
+                "view Old board {words} · no view chosen: /work:bind"
+            )),
+            "{status}:\n{frame}"
+        );
+        assert!(frame.contains(&format!("! view {words}")), "{frame}");
+        assert!(!frame.contains("(default)"), "{frame}");
+    }
     let mut snapshot = linear_fixture("bound-no-view");
     snapshot.view.status = "not_found".into();
-    snapshot.view.id = Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".into());
     snapshot.view.name = Some("Old board".into());
     let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    let frame = draw(&d.app, W, H);
-    assert!(
-        frame.contains("view Old board not found · no view chosen: /work:bind"),
-        "{frame}"
-    );
-    assert!(frame.contains("! view not found"), "{frame}");
     let wide = draw(&d.app, 180, H);
     assert!(
         wide.contains("Backlog (1)") && wide.contains("Done (0)"),
@@ -914,4 +931,124 @@ fn a_body_36_cells_wide_draws_one_column_and_72_draws_two() {
         let top = frame.lines().nth(2).unwrap();
         assert_eq!(top.matches('┌').count(), columns, "{width}:\n{frame}");
     }
+}
+
+// -- stacked narrow layout (R4, R5, R6, AE1) ---------------------------------
+
+/// The frame's third row: the top border of every drawn column.
+fn column_tops(frame: &str) -> String {
+    frame.lines().nth(2).unwrap_or_default().to_string()
+}
+
+#[test]
+fn a_70_cell_body_shows_one_group_with_its_position_and_the_right_key_moves_on() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let frame = render_at(&mut d, 70, 20);
+    let tops = column_tops(&frame);
+    assert_eq!(tops.matches('┌').count(), 1, "{frame}");
+    assert!(tops.contains("Backlog (1) · 1/5"), "{frame}");
+    assert!(
+        tops.trim_end_matches('"').ends_with('┐'),
+        "fills the width:\n{frame}"
+    );
+    assert!(!frame.contains("Todo (1)"), "{frame}");
+    insta::assert_snapshot!("linear_stacked_70", frame);
+    press(&mut d, KeyCode::Char('l'));
+    let frame = render_at(&mut d, 70, 20);
+    assert!(column_tops(&frame).contains("Todo (1) · 2/5"), "{frame}");
+    assert!(!frame.contains("Backlog (1)"), "{frame}");
+    press(&mut d, KeyCode::Left);
+    let frame = render_at(&mut d, 70, 20);
+    assert!(column_tops(&frame).contains("Backlog (1) · 1/5"), "{frame}");
+}
+
+#[test]
+fn two_columns_at_100_and_all_five_groups_at_200_carry_no_position() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let frame = render_at(&mut d, 100, 20);
+    assert_eq!(column_tops(&frame).matches('┌').count(), 2, "{frame}");
+    assert!(!column_tops(&frame).contains("/5"), "{frame}");
+    insta::assert_snapshot!("linear_two_column_100", frame);
+    let frame = render_at(&mut d, 200, 20);
+    assert_eq!(column_tops(&frame).matches('┌').count(), 5, "{frame}");
+    assert!(!column_tops(&frame).contains("/5"), "{frame}");
+    insta::assert_snapshot!("linear_five_column_200", frame);
+}
+
+#[test]
+fn a_one_group_board_at_full_width_is_not_stacked() {
+    let mut snapshot = bound_with_view();
+    snapshot.groups.truncate(1);
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let frame = render_at(&mut d, 200, 20);
+    assert!(column_tops(&frame).contains("Backlog (1) ─"), "{frame}");
+    assert!(!column_tops(&frame).contains("1/1"), "{frame}");
+}
+
+#[test]
+fn resizing_from_200_to_70_keeps_the_selected_group() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    render_at(&mut d, 200, 20);
+    press(&mut d, KeyCode::Char('l'));
+    let frame = render_at(&mut d, 70, 20);
+    assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 1);
+    assert!(column_tops(&frame).contains("Todo (1) · 2/5"), "{frame}");
+}
+
+#[test]
+fn resizing_from_70_to_200_keeps_the_same_group_in_view() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    render_at(&mut d, 70, 20);
+    press(&mut d, KeyCode::Char('l'));
+    press(&mut d, KeyCode::Char('l'));
+    assert!(column_tops(&render_at(&mut d, 70, 20)).contains("In Progress (1) · 3/5"));
+    let frame = render_at(&mut d, 200, 20);
+    assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 2);
+    assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
+}
+
+#[test]
+fn a_selection_past_the_last_group_is_clamped_when_drawn() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    d.app.linear.as_mut().unwrap().sel_group = 9;
+    let frame = render_at(&mut d, 70, 20);
+    assert!(column_tops(&frame).contains("Done (0) · 5/5"), "{frame}");
+    let state = d.app.linear.as_mut().unwrap();
+    state.sel_group = 2;
+    state.sel_card = 9;
+    let frame = render_at(&mut d, 70, 20);
+    assert!(
+        column_tops(&frame).contains("In Progress (1) · 3/5"),
+        "{frame}"
+    );
+    assert!(
+        frame.contains("WEB-3312"),
+        "scrolled past the only card:\n{frame}"
+    );
+}
+
+#[test]
+fn a_body_two_rows_tall_renders_the_header_and_says_the_body_is_too_short() {
+    let mut snapshot = bound_with_view();
+    snapshot.unmapped.clear();
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let frame = render_at(&mut d, 70, 5);
+    let rows: Vec<&str> = frame.lines().collect();
+    assert!(
+        rows[0].contains(" Linear ") && rows[0].contains("view: Canvas board"),
+        "{frame}"
+    );
+    assert!(rows[2].contains("too short"), "{frame}");
+    assert!(!frame.contains("no columns"), "{frame}");
+    insta::assert_snapshot!("linear_body_too_short", frame);
+}
+
+#[test]
+fn a_stacked_board_with_zero_groups_says_the_snapshot_has_no_columns() {
+    let mut snapshot = bound_with_view();
+    snapshot.groups.clear();
+    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let frame = render_at(&mut d, 70, 20);
+    assert!(frame.contains("no columns in this snapshot"), "{frame}");
+    assert!(!frame.contains("too short"), "{frame}");
 }

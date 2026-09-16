@@ -19,6 +19,7 @@ use super::{centered_rect_abs, linear_help_keys, truncate};
 const CARD_H: u16 = 5;
 const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
+const DEFAULT_VIEW_LABEL: &str = "view: project issues (default)";
 
 pub(super) fn draw(app: &App, f: &mut Frame) {
     app.hit_map.borrow_mut().clear();
@@ -79,7 +80,8 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
         .unwrap_or_else(|| "(no project)".to_string());
     let view = match snapshot.map(|s| (s.view.status.as_str(), s.view.name.clone())) {
         Some(("ok", Some(name))) => format!("view: {}", line(&name)),
-        Some(("none", _)) | None => "no view chosen: /work:bind".to_string(),
+        Some(("none", _)) => DEFAULT_VIEW_LABEL.to_string(),
+        None => "no view chosen: /work:bind".to_string(),
         // The record still names the view Linear no longer has, so say which
         // one failed and that a new choice is needed (AE9).
         Some((status @ ("not_found" | "archived" | "not_in_project"), Some(name))) => format!(
@@ -278,15 +280,34 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
 
 fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, body: Rect) {
     let groups = &snapshot.groups;
-    if groups.is_empty() || body.height < 3 || body.width == 0 {
-        if body.height > 0 {
-            f.render_widget(Paragraph::new(" no columns in this snapshot"), body);
-        }
+    if body.height == 0 {
         return;
     }
-    let visible = ((body.width / MIN_COL_W).max(1) as usize).min(groups.len());
-    let start = state
-        .sel_group
+    if groups.is_empty() {
+        f.render_widget(Paragraph::new(" no columns in this snapshot"), body);
+        return;
+    }
+    if body.height < 3 || body.width == 0 {
+        f.render_widget(
+            Paragraph::new(truncate(
+                " body too short for a card; make the pane taller",
+                body.width as usize,
+            )),
+            body,
+        );
+        return;
+    }
+    let stacked = body.width < 2 * MIN_COL_W;
+    let sel_group = state.sel_group.min(groups.len() - 1);
+    let sel_card = state
+        .sel_card
+        .min(groups[sel_group].issues.len().saturating_sub(1));
+    let visible = if stacked {
+        1
+    } else {
+        ((body.width / MIN_COL_W) as usize).min(groups.len())
+    };
+    let start = sel_group
         .saturating_sub(visible - 1)
         .min(groups.len() - visible);
     let col_w = body.width / visible as u16;
@@ -299,9 +320,18 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
     {
         let x = body.x + slot as u16 * col_w;
         let rect = Rect::new(x, body.y, col_w, body.height);
-        let focused = idx == state.sel_group;
+        let focused = idx == sel_group;
+        let position = if stacked {
+            format!("· {}/{} ", idx + 1, groups.len())
+        } else {
+            String::new()
+        };
         let title = truncate(
-            &format!(" {} ({}) ", line(&group.label), group.issues.len()),
+            &format!(
+                " {} ({}) {position}",
+                line(&group.label),
+                group.issues.len()
+            ),
             col_w.saturating_sub(2) as usize,
         );
         let block = Block::default()
@@ -317,7 +347,7 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
         // The last card may drop its separator row at the column's bottom edge.
         let per_col = ((inner.height + 1) / CARD_H).max(1) as usize;
         let first = if focused {
-            state.sel_card.saturating_sub(per_col - 1)
+            sel_card.saturating_sub(per_col - 1)
         } else {
             0
         };
@@ -329,7 +359,7 @@ fn draw_columns(state: &LinearState, snapshot: &LinearSnapshot, f: &mut Frame, b
                 inner.width,
                 (CARD_H - 1).min(inner.bottom().saturating_sub(y)),
             );
-            let selected = focused && row == state.sel_card;
+            let selected = focused && row == sel_card;
             let lines: Vec<Line> = match snapshot.issues.get(identifier) {
                 Some(issue) => card_lines(issue, inner.width as usize)
                     .into_iter()

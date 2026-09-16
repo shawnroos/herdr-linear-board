@@ -1,0 +1,9 @@
+---
+source: crates/board-tui/tests/linear/mod.rs
+expression: frame
+---
+" Linear  AI Canvas Tools · view: Canvas board · space: Plugins · fetch"
+" Enter detail · r refresh · ? help · q quit                           "
+" body too short for a card; make the pane taller                      "
+"                                                                      "
+"                                                                      "
