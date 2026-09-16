@@ -116,6 +116,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                             origin: board_tui::OriginContext::from_environment(),
                             board_version: env!("CARGO_PKG_VERSION").to_string(),
                             daemon_version,
+                            herdr_keys: board_tui::herdr_keys::from_environment(),
                         },
                     )
                 }

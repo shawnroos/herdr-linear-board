@@ -36,6 +36,7 @@ pub struct LinearStart {
     pub origin: OriginContext,
     pub board_version: String,
     pub daemon_version: Option<String>,
+    pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
 }
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
@@ -83,11 +84,12 @@ impl Driver {
         defer_snapshots: bool,
     ) -> Driver {
         let (tx, rx) = linear::arrival_channel();
-        let state = LinearState::new(
+        let mut state = LinearState::new(
             start.workspace_id,
             start.board_version,
             start.daemon_version,
         );
+        state.herdr_keys = start.herdr_keys;
         let mut driver = Driver {
             app: App::linear(state, start.origin.clone()),
             client,

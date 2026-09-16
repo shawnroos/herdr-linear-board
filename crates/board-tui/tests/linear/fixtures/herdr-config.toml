@@ -1,0 +1,29 @@
+onboarding = false
+
+[ui]
+prompt_new_tab_name = false
+
+# Named actions are listed out of alphabetical order so a test can tell file
+# order from sorted order.
+[keys]
+prefix = "ctrl+b"
+switch_tab = "ctrl+alt+1..9"
+new_tab = "ctrl+alt+t"
+close_tab = "ctrl+alt+q"
+workspace_picker = "ctrl+alt+w"
+
+[[keys.command]]
+key = "ctrl+alt+m"
+type = "shell"
+command = "herdr plugin action invoke open-example --plugin example-viewer"
+
+[[keys.command]]
+key = "ctrl+alt+k"
+type = "shell"
+command = "herdr plugin pane open --plugin example.picker --entrypoint pick"
+
+[[keys.command]]
+key = "ctrl+alt+d"
+type = "shell"
+command = "example-script --run"
+description = "open the example dashboard"

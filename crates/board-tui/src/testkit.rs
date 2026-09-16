@@ -659,6 +659,7 @@ pub fn linear_start() -> LinearStart {
         origin: OriginContext::default(),
         board_version: "0.17.0".to_string(),
         daemon_version: Some("0.17.0".to_string()),
+        herdr_keys: Vec::new(),
     }
 }
 

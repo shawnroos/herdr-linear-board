@@ -65,7 +65,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         }
         Screen::Help => {
             draw_board(app, state, f, area);
-            draw_help(f, area);
+            draw_help(app, state, f, area);
         }
         Screen::LinearPicker => {
             draw_board(app, state, f, area);
@@ -664,7 +664,23 @@ fn draw_error(state: &LinearState, f: &mut Frame, area: Rect) {
     boxed(f, area, "Snapshot failed", Color::LightRed, lines);
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
+const HELP_KEY_W: usize = 12;
+const HERDR_KEY_W_MAX: usize = 24;
+
+fn help_heading(text: &str, width: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        fit(text, width),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn help_row(key: &str, key_w: usize, description: &str, width: usize) -> Line<'static> {
+    let key = fit(key, key_w);
+    let pad = " ".repeat(key_w.saturating_sub(key.width()));
+    Line::from(fit(&format!("  {key}{pad} {description}"), width))
+}
+
+fn help_body(state: &LinearState, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut section: Option<Screen> = None;
     for (screen, key, description) in linear_help_keys() {
@@ -673,7 +689,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         }
         if section != Some(*screen) {
             section = Some(*screen);
-            lines.push(Line::from(Span::styled(
+            lines.push(help_heading(
                 match screen {
                     Screen::LinearBoard => "board",
                     Screen::LinearDetail => "card detail",
@@ -683,16 +699,104 @@ fn draw_help(f: &mut Frame, area: Rect) {
                     Screen::LinearPicker => "picker",
                     _ => "",
                 },
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
+                width,
+            ));
         }
-        lines.push(Line::from(format!("  {key:<12} {description}")));
+        lines.push(help_row(key, HELP_KEY_W, description, width));
     }
-    lines.push(Line::from(Span::styled(
-        "any key closes",
-        Style::default().fg(Color::DarkGray),
-    )));
-    boxed(f, area, "Help — Linear mode", Color::LightBlue, lines);
+    if !state.herdr_keys.is_empty() {
+        let key_w = state
+            .herdr_keys
+            .iter()
+            .map(|row| row.key.width())
+            .max()
+            .unwrap_or(0)
+            .clamp(HELP_KEY_W, HERDR_KEY_W_MAX);
+        lines.push(help_heading("herdr (your config)", width));
+        for row in &state.herdr_keys {
+            lines.push(help_row(&row.key, key_w, &row.label, width));
+        }
+    }
+    lines
+}
+
+struct HelpGeometry {
+    sheet: Rect,
+    body: Rect,
+    footer: Rect,
+}
+
+// One footer row stays pinned below the scrolling body.
+fn help_geometry(area: Rect, body_rows: usize) -> HelpGeometry {
+    let wanted = u16::try_from(body_rows)
+        .unwrap_or(u16::MAX)
+        .saturating_add(3);
+    let sheet = centered_rect_abs(
+        area.width.saturating_sub(4).clamp(20, 90),
+        wanted.min(area.height),
+        area,
+    );
+    let inner = Block::default().borders(Borders::ALL).inner(sheet);
+    let body_h = inner.height.saturating_sub(1);
+    HelpGeometry {
+        sheet,
+        body: Rect::new(inner.x, inner.y, inner.width, body_h),
+        footer: Rect::new(inner.x, inner.y + body_h, inner.width, inner.height.min(1)),
+    }
+}
+
+// The rightmost body column is left for the scrollbar.
+fn help_text_width(area: Rect) -> usize {
+    area.width.saturating_sub(4).clamp(20, 90).saturating_sub(3) as usize
+}
+
+pub fn linear_help_max_scroll(app: &App, area: Rect) -> usize {
+    let Some(state) = app.linear.as_ref() else {
+        return 0;
+    };
+    let rows = help_body(state, help_text_width(area)).len();
+    rows.saturating_sub(help_geometry(area, rows).body.height as usize)
+}
+
+fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
+    let lines = help_body(state, help_text_width(area));
+    let total = lines.len();
+    let geometry = help_geometry(area, total);
+    let visible = geometry.body.height as usize;
+    let max_scroll = total.saturating_sub(visible);
+    let scroll = app.help_scroll.min(max_scroll);
+    f.render_widget(Clear, geometry.sheet);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Help — Linear mode ")
+            .border_style(Style::default().fg(Color::LightBlue)),
+        geometry.sheet,
+    );
+    let shown: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
+    f.render_widget(Paragraph::new(shown), geometry.body);
+    let below = max_scroll - scroll;
+    let footer = if below > 0 {
+        format!("↑/↓ k/j scroll · {below} more below · any other key closes")
+    } else {
+        "any other key closes".to_string()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            fit(&footer, geometry.footer.width as usize),
+            Style::default().fg(Color::DarkGray),
+        )),
+        geometry.footer,
+    );
+    if max_scroll > 0 && geometry.body.width > 0 {
+        let bar = Rect::new(
+            geometry.body.right() - 1,
+            geometry.body.y,
+            1,
+            geometry.body.height,
+        );
+        crate::widgets::vertical_scrollbar(f, bar, total, scroll, visible);
+    }
 }
 
 fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {

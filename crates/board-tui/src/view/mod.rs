@@ -301,6 +301,7 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "Enter", "card detail"),
     (Screen::LinearBoard, "r / R", "refresh snapshot"),
     (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
@@ -356,7 +357,7 @@ pub use detail::{
     detail_layout, detail_toggle_rect, runs_viewport_height, DetailLayout,
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
-pub use linear::linear_pane_title;
+pub use linear::{linear_help_max_scroll, linear_pane_title};
 pub use overlays::{
     comment_history_rect, comment_history_wrapped_rows, help_content_width, help_list_rect,
     help_regular_max_scroll, help_wrapped_rows,

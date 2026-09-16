@@ -299,15 +299,93 @@ fn stale_daemon_screen_hides_equal_versions() {
 
 #[test]
 fn help_sheet_lists_the_linear_keys_and_any_key_closes_it() {
-    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start_with_herdr_fixture());
     press(&mut d, KeyCode::Char('?'));
     assert_eq!(d.app.screen, Screen::Help);
-    let frame = draw(&d.app, W, H);
+    let frame = render_at(&mut d, W, H);
     assert!(frame.contains("Help — Linear mode"), "{frame}");
     assert!(frame.contains("copy worktree path"), "{frame}");
+    assert!(frame.contains("more below"), "{frame}");
     insta::assert_snapshot!("linear_help", frame);
     press(&mut d, KeyCode::Char('x'));
     assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+fn herdr_fixture() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/linear/fixtures/herdr-config.toml")
+}
+
+fn start_with_herdr_fixture() -> LinearStart {
+    LinearStart {
+        herdr_keys: board_tui::herdr_keys::read_file(&herdr_fixture()),
+        ..linear_start()
+    }
+}
+
+fn help_scrolled_to_the_end(start: LinearStart) -> (Driver, String) {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start);
+    press(&mut d, KeyCode::Char('?'));
+    render_at(&mut d, W, H);
+    for _ in 0..200 {
+        press(&mut d, KeyCode::Char('j'));
+    }
+    assert_eq!(d.app.screen, Screen::Help, "scrolling keeps the sheet open");
+    let frame = render_at(&mut d, W, H);
+    (d, frame)
+}
+
+#[test]
+fn the_help_sheet_scrolls_to_a_herdr_section_built_from_the_config() {
+    let (mut d, frame) = help_scrolled_to_the_end(start_with_herdr_fixture());
+    assert!(frame.contains("herdr (your config)"), "{frame}");
+    for text in [
+        "ctrl+alt+w",
+        "workspace picker",
+        "example.picker: pick",
+        "example-viewer: open-example",
+        "open the example dashboard",
+    ] {
+        assert!(frame.contains(text), "{text} missing:\n{frame}");
+    }
+    assert!(!frame.contains("more below"), "{frame}");
+    insta::assert_snapshot!("linear_help_herdr_keys", frame);
+
+    let at_end = d.app.help_scroll;
+    press(&mut d, KeyCode::Down);
+    assert_eq!(
+        d.app.help_scroll, at_end,
+        "the scroll stops at the last row"
+    );
+    press(&mut d, KeyCode::Up);
+    assert_eq!(d.app.help_scroll, at_end - 1);
+    press(&mut d, KeyCode::Char('x'));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn a_missing_herdr_config_leaves_no_herdr_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let start = LinearStart {
+        herdr_keys: board_tui::herdr_keys::read_file(&dir.path().join("config.toml")),
+        ..linear_start()
+    };
+    let (_, frame) = help_scrolled_to_the_end(start);
+    assert!(!frame.contains("herdr (your config)"), "{frame}");
+    assert!(frame.contains("any other key closes"), "{frame}");
+}
+
+#[test]
+fn herdr_keys_never_join_the_board_key_table() {
+    let rows = board_tui::herdr_keys::read_file(&herdr_fixture());
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert!(
+            board_tui::view::HELP_KEYS
+                .iter()
+                .all(|(_, key, description)| *key != row.key && *description != row.label),
+            "{row:?} leaked into HELP_KEYS"
+        );
+    }
 }
 
 #[test]

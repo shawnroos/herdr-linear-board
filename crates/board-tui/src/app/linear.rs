@@ -66,6 +66,8 @@ pub struct LinearState {
     pub lists_in_flight: std::collections::BTreeSet<(LinearListKind, Option<String>)>,
     /// The row last chosen in a Linear picker, for the flow that opened it.
     pub pick: Option<super::LinearPick>,
+    /// Read once at start; shown only in the `?` sheet (KTD14).
+    pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
 }
 
 impl LinearState {
@@ -90,6 +92,7 @@ impl LinearState {
             fetched_at: None,
             lists_in_flight: Default::default(),
             pick: None,
+            herdr_keys: Vec::new(),
         }
     }
 
@@ -382,7 +385,13 @@ fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     }
     match app.screen {
         Screen::Help => {
-            app.screen = app.help_return_to;
+            match nav_delta(k.code) {
+                Some(delta) => {
+                    let max = crate::view::linear_help_max_scroll(app, app.last_area);
+                    app.help_scroll = step_clamped(app.help_scroll, delta, max);
+                }
+                None => app.screen = app.help_return_to,
+            }
             vec![]
         }
         Screen::LinearBoard => board_key(app, k),
