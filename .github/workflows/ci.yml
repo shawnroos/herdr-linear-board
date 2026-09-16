@@ -99,6 +99,9 @@ jobs:
       - name: CLI installer
         run: python3 -m unittest discover -s scripts/tests -p 'test_install_cli.py'
 
+      - name: Board launcher matcher
+        run: python3 -m unittest discover -s scripts/tests -p 'test_open_board.py'
+
       - name: Claude config staging
         run: python3 -m unittest discover -s scripts/tests -p 'test_stage_claude_config.py'
 

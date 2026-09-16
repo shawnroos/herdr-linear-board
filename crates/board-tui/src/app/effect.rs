@@ -98,6 +98,8 @@ pub enum Effect {
     LoadFormOptions,
     /// Keep the Herdr pane border title in sync with the archive filters.
     SetPaneTitle(CardFilter),
+    /// Linear mode: the whole pane title, already built and stripped.
+    SetLinearPaneTitle(String),
     /// Reload the project and board pickers with the given visibilities.
     ReloadPickers,
     Quit,

@@ -346,7 +346,7 @@ fn a_card_create_effect_is_refused_before_any_request_is_built() {
 }
 
 #[test]
-fn no_pane_set_title_or_board_get_across_construction_and_a_session() {
+fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let start = LinearStart {
         origin: OriginContext {
@@ -365,9 +365,29 @@ fn no_pane_set_title_or_board_get_across_construction_and_a_session() {
     press(&mut d, KeyCode::Char('q'));
     assert!(d.app.should_quit);
     let seen = methods(&log);
-    assert!(!seen.iter().any(|m| m == "pane.set_title"), "{seen:?}");
     assert!(!seen.iter().any(|m| m == "board.get"), "{seen:?}");
-    assert_eq!(seen, vec!["linear.snapshot", "linear.snapshot"]);
+    assert_eq!(
+        seen,
+        vec![
+            "linear.snapshot",
+            "pane.set_title",
+            "linear.snapshot",
+            "pane.set_title"
+        ]
+    );
+    let titles: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "pane.set_title")
+        .map(|(_, params)| params.clone())
+        .collect();
+    let expected = serde_json::json!({
+        "pane_id": "hostile-pane-sentinel",
+        "title": "Linear: AI Canvas Tools",
+        "origin_socket": "/hostile/socket",
+    });
+    assert_eq!(titles, vec![expected.clone(), expected]);
 }
 
 #[test]

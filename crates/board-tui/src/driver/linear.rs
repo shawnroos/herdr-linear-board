@@ -15,8 +15,9 @@ use crate::Driver;
 
 pub(crate) type LinearArrival = Result<LinearSnapshot, LinearFailure>;
 
-/// The only effects the driver executes in Linear mode (KTD8). Everything
-/// else is refused before a request is built.
+/// The only effects the driver executes in Linear mode. Everything else is
+/// refused before a request is built. This guards the board's own code, not
+/// what a socket client may ask the daemon for.
 pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
     use crate::app::Effect;
     matches!(
@@ -26,6 +27,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::FocusPane(_)
             | Effect::OpenIssueUrl(_)
             | Effect::CopyWorktreePath { .. }
+            | Effect::SetLinearPaneTitle(_)
             | Effect::Quit
     )
 }

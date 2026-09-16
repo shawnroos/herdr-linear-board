@@ -53,6 +53,7 @@ cargo test --workspace --all-features
 python3 -m unittest discover -s scripts/tests -p 'test_docs.py'
 python3 -m unittest discover -s scripts/tests -p 'test_prepare_release.py'
 python3 -m unittest discover -s scripts/tests -p 'test_install_cli.py'
+python3 -m unittest discover -s scripts/tests -p 'test_open_board.py'
 python3 -m unittest discover -s scripts/tests -p 'test_stage_claude_config.py'
 python3 -m unittest discover -s scripts/tests -p 'test_sandbox.py'
 python3 -m unittest discover -s scripts/tests -p 'test_e2e_*.py'

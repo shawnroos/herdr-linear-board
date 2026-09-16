@@ -26,6 +26,10 @@ use board_herdr::PaneRenameParams;
 /// callers need the diagnosis. Treating a cosmetic pane title as non-fatal is
 /// the *caller's* policy — the TUI drops the result, exactly as it dropped the
 /// subprocess exit status before — and it stays in that one layer.
+///
+/// Control and format characters are stripped here rather than trusted to the
+/// TUI, because any socket client can call this. Brackets survive: the kanban
+/// title is `Board [scope · FILTER]`.
 pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
     if p.pane_id.trim().is_empty() {
         return Err(Error::BadRequest(
@@ -38,7 +42,7 @@ pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
     client
         .pane_rename(&PaneRenameParams {
             pane_id: p.pane_id.clone(),
-            label: p.title,
+            label: board_core::text::strip_control_and_format(&p.title),
         })
         .map_err(|e| Error::HerdrUnavailable(format!("pane.rename {}: {e}", p.pane_id)))?;
     Ok(json!(PaneSetTitleResult { renamed: true }))

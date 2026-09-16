@@ -348,6 +348,7 @@ pub use detail::{
     detail_layout, detail_toggle_rect, runs_viewport_height, DetailLayout,
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
+pub use linear::linear_pane_title;
 pub use overlays::{
     comment_history_rect, comment_history_wrapped_rows, help_content_width, help_list_rect,
     help_regular_max_scroll, help_wrapped_rows,

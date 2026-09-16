@@ -21,6 +21,31 @@ const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
 const DEFAULT_VIEW_LABEL: &str = "view: project issues (default)";
 
+/// `Linear: <bound object>`: the project, else the space label, else the space
+/// id. Brackets go with control and format characters so no name can forge
+/// the kanban's `Board [...]` title or break the launcher's matcher.
+pub fn linear_pane_title(snapshot: &LinearSnapshot, workspace_id: &str) -> String {
+    let clean = |name: &str| {
+        board_core::text::strip_control_and_format(name)
+            .chars()
+            .filter(|c| !matches!(c, '[' | ']'))
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+    let name = [
+        snapshot.project.name.as_deref().unwrap_or_default(),
+        &snapshot.workspace.label,
+        &snapshot.workspace.id,
+        workspace_id,
+    ]
+    .into_iter()
+    .map(clean)
+    .find(|name| !name.is_empty())
+    .unwrap_or_default();
+    format!("Linear: {name}")
+}
+
 pub(super) fn draw(app: &App, f: &mut Frame) {
     app.hit_map.borrow_mut().clear();
     let area = f.area();

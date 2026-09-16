@@ -282,9 +282,14 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     };
     state.in_flight = false;
     let follow_up = std::mem::take(&mut state.queued);
+    let mut effects = vec![];
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
+            effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
+                &snapshot,
+                &state.workspace_id,
+            )));
             state.error = None;
             state.stale_daemon = None;
             state.fetched_at = Some(now);
@@ -303,10 +308,9 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     };
     app.screen = screen;
     if follow_up {
-        request_snapshot(app)
-    } else {
-        vec![]
+        effects.extend(request_snapshot(app));
     }
+    effects
 }
 
 fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
@@ -458,22 +462,7 @@ pub fn sanitise(s: &str) -> String {
 }
 
 fn is_stripped(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x00..=0x08
-            | 0x0B..=0x1F
-            | 0x7F
-            | 0x80..=0x9F
-            | 0xAD
-            | 0x061C
-            | 0x180E
-            | 0x200B..=0x200F
-            | 0x2028..=0x202E
-            | 0x2060..=0x206F
-            | 0xFEFF
-            | 0xFFF9..=0xFFFB
-            | 0xE0000..=0xE007F
-    )
+    (c.is_control() && c != '\t' && c != '\n') || board_core::text::is_format_char(c)
 }
 
 /// Every string in the document, keys included, through [`sanitise`]. It walks
