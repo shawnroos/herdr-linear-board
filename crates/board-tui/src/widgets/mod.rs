@@ -161,6 +161,8 @@ pub enum Zone {
         identifier: String,
     },
     LinearGroup(String),
+    /// A strip row, keyed by the space id it showed.
+    LinearStripRow(String),
 }
 
 /// Rects registered during the current frame's draw, consulted by the mouse

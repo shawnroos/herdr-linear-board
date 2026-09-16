@@ -106,6 +106,12 @@ pub enum Effect {
     /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
     /// production, synchronous against the fake).
     LinearSnapshot,
+    /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
+    /// project id). The reducer marks the read in flight before emitting it.
+    LinearList {
+        kind: board_core::protocol::LinearListKind,
+        id: Option<String>,
+    },
     /// Linear mode: `pane.focus` on the origin session.
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.

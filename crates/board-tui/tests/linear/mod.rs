@@ -38,6 +38,7 @@ fn fake_with(snapshot: LinearSnapshot) -> FakeBoardClient {
     FakeBoardClient::new()
         .unwrap()
         .with_linear_snapshot(snapshot)
+        .with_linear_list(strip_spaces())
 }
 
 fn start_with_socket() -> LinearStart {
@@ -98,10 +99,7 @@ fn bound_with_view_renders_the_views_columns_in_order() {
         frame.contains("WEB-3312") && frame.contains("⧉2"),
         "{frame}"
     );
-    assert!(
-        frame.contains("Elsewhere (wA:t2)") && frame.contains("wA:p9 working"),
-        "{frame}"
-    );
+    assert!(frame.contains("Beta notes (wB)"), "{frame}");
     insta::assert_snapshot!("linear_bound_with_view", frame);
 }
 
@@ -157,14 +155,14 @@ fn a_view_linear_no_longer_has_is_named_with_why_it_is_unusable() {
 }
 
 #[test]
-fn unbound_space_shows_the_not_bound_screen_and_makes_one_request() {
+fn unbound_space_shows_the_not_bound_screen_and_makes_one_snapshot_request() {
     let (client, log) = RecordingClient::new(fake_with(linear_fixture("unbound")));
     let (d, _, _) = linear_driver(client, linear_start());
     assert_eq!(d.app.screen, Screen::LinearNotBound);
     let frame = draw(&d.app, W, H);
     assert!(frame.contains("Space Plugins (wA) is not bound"), "{frame}");
     assert!(frame.contains("/work:bind"), "{frame}");
-    assert_eq!(methods(&log), vec!["linear.snapshot"]);
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
     insta::assert_snapshot!("linear_unbound", frame);
 }
 
@@ -414,14 +412,18 @@ fn control_characters_never_reach_the_frame() {
 fn a_card_create_effect_is_refused_before_any_request_is_built() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
-    assert_eq!(methods(&log), vec!["linear.snapshot"]);
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
     d.apply_effect(Effect::CardCreate(CardCreateParams {
         title: "smuggled".into(),
         ..Default::default()
     }));
     d.apply_effect(Effect::CardDelete(1));
     d.apply_effect(Effect::LoadProjects);
-    assert_eq!(methods(&log), vec!["linear.snapshot"], "no request left");
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list"],
+        "no request left"
+    );
     assert_eq!(toast(&d), "not available in Linear mode");
 }
 
@@ -451,8 +453,10 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
         vec![
             "linear.snapshot",
             "pane.set_title",
+            "linear.list",
             "linear.snapshot",
-            "pane.set_title"
+            "pane.set_title",
+            "linear.list"
         ]
     );
     let titles: Vec<Value> = log
@@ -504,16 +508,24 @@ fn a_refresh_while_one_is_in_flight_is_dropped_with_a_toast() {
 fn board_changed_sends_nothing_and_reconnect_sends_exactly_one_snapshot() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
-    assert_eq!(methods(&log), vec!["linear.snapshot"]);
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
     d.handle(Msg::Refresh);
     d.on_daemon_signals(true, false);
     assert_eq!(
         methods(&log),
-        vec!["linear.snapshot"],
+        vec!["linear.snapshot", "linear.list"],
         "board_changed is ignored"
     );
     d.on_daemon_signals(true, true);
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.snapshot"]);
+    assert_eq!(
+        methods(&log),
+        vec![
+            "linear.snapshot",
+            "linear.list",
+            "linear.snapshot",
+            "linear.list"
+        ]
+    );
 }
 
 #[test]
@@ -660,7 +672,7 @@ fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     open_web_3312(&mut d);
     press(&mut d, KeyCode::Char('o'));
     assert!(toast(&d).contains("HERDR_SOCKET_PATH"), "{}", toast(&d));
-    assert_eq!(methods(&log), vec!["linear.snapshot"]);
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
 }
 
 #[test]
@@ -755,7 +767,7 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
-    assert_eq!(methods(&log), vec!["linear.snapshot"]);
+    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
 }
 
 #[test]
@@ -1127,10 +1139,12 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
 
 #[test]
 fn a_body_two_rows_tall_renders_the_header_and_says_the_body_is_too_short() {
-    let mut snapshot = bound_with_view();
-    snapshot.unmapped.clear();
-    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    let frame = render_at(&mut d, 70, 5);
+    let (mut d, _, _) = linear_driver(
+        fake_with(bound_with_view()).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
+    // Header 2, body 2, the all-bound strip 2, footer 1.
+    let frame = render_at(&mut d, 70, 7);
     let rows: Vec<&str> = frame.lines().collect();
     assert!(
         rows[0].contains(" Linear ") && rows[0].contains("view: Canvas board"),
@@ -1397,6 +1411,7 @@ fn a_list_arriving_again_keeps_the_filter_and_the_selected_identifier() {
     let client = ListSequence {
         inner: fake_with(bound_with_view()),
         lists: [
+            strip_spaces(),
             three_spaces(),
             spaces(vec![
                 space("wZ", "Zeta alpha"),
@@ -1542,6 +1557,7 @@ fn a_picker_opened_before_its_list_arrives_shows_the_loading_line_then_the_rows(
     ]));
     let mut d = linear_driver_deferred(client, linear_start());
     assert!(d.deliver_pending_linear_snapshot());
+    assert!(d.deliver_pending_linear_list(), "the strip's space list");
     d.open_linear_picker(LinearListKind::Projects, None);
     assert!(d
         .app
@@ -1632,6 +1648,7 @@ fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
     let (client, log) = RecordingClient::new(client);
     let mut d = linear_driver_deferred(client, linear_start());
     assert!(d.deliver_pending_linear_snapshot());
+    assert!(d.deliver_pending_linear_list(), "the strip's space list");
     d.open_linear_picker(LinearListKind::Views, Some("proj-a".into()));
     press(&mut d, KeyCode::Esc);
     d.open_linear_picker(LinearListKind::Views, Some("proj-b".into()));
@@ -1647,7 +1664,10 @@ fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
         .filter(|(m, _)| m == "linear.list")
         .map(|(_, p)| p["id"].clone())
         .collect();
-    assert_eq!(ids, vec![Value::from("proj-a"), Value::from("proj-b")]);
+    assert_eq!(
+        ids,
+        vec![Value::Null, Value::from("proj-a"), Value::from("proj-b")]
+    );
     assert_eq!(selected(&d).as_deref(), Some("v1"));
 }
 
@@ -1838,7 +1858,11 @@ fn a_click_while_the_detail_overlay_is_open_does_not_reach_the_board() {
 
 #[test]
 fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
-    let mut d = mouse_driver();
+    // A failed read keeps the picker to its filter and note lines, so the
+    // click lands on the picker's body and on no row.
+    let client = fake_with(four_in_progress())
+        .with_linear_list_error(LinearListKind::Spaces, "herdr socket missing");
+    let (mut d, _, _) = linear_driver(client, linear_start());
     render_at(&mut d, W, H);
     assert!(
         matches!(
@@ -1853,4 +1877,248 @@ fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
     d.handle(left_down(81, 15));
     assert_eq!(d.app.screen, Screen::LinearPicker);
     assert_eq!(selection(&d), (0, 0, None));
+}
+
+// -- the strip: unbound spaces and unmapped tabs (R11, R18, R21, AE6, KTD10) --
+
+/// Two spaces no binding claims around one that is bound.
+fn strip_spaces() -> LinearListResult {
+    spaces(vec![
+        space("wB", "Beta notes"),
+        LinearSpaceRow {
+            state: "bound".into(),
+            project_id: Some("proj-1".into()),
+            project_name: Some("Example project".into()),
+            ..space("wA", "Alpha work")
+        },
+        space("wC", "Gamma docs"),
+    ])
+}
+
+fn strip_client() -> FakeBoardClient {
+    fake_with(bound_with_view()).with_linear_list(projects(vec![
+        project("p1", "WEB", "Example launch"),
+        project("p2", "OPS", "Example rollout"),
+    ]))
+}
+
+fn strip_lines(frame: &str) -> Vec<String> {
+    frame
+        .lines()
+        .map(backend_row)
+        .skip_while(|row| {
+            !row.starts_with(" Spaces with no project") && !row.starts_with(" Unmapped tabs")
+        })
+        .map(|row| row.trim_end().to_string())
+        .filter(|row| !row.is_empty())
+        .collect()
+}
+
+fn bind_space(d: &Driver) -> Option<String> {
+    d.app
+        .linear
+        .as_ref()
+        .unwrap()
+        .bind_space
+        .as_ref()
+        .map(|row| row.id.clone())
+}
+
+#[test]
+fn the_strip_lists_the_unbound_spaces_with_their_ids() {
+    let (mut d, _, _) = linear_driver(strip_client(), linear_start());
+    let frame = render_at(&mut d, W, H);
+    let strip = strip_lines(&frame);
+    assert!(
+        strip.iter().any(|l| l.contains("Beta notes (wB)")),
+        "{frame}"
+    );
+    assert!(
+        strip.iter().any(|l| l.contains("Gamma docs (wC)")),
+        "{frame}"
+    );
+    assert!(
+        !frame.contains("Alpha work"),
+        "a bound space is left out:\n{frame}"
+    );
+    assert!(!frame.contains("Unmapped tabs"), "{frame}");
+    insta::assert_snapshot!("linear_strip_spaces", frame);
+}
+
+#[test]
+fn t_swaps_the_strip_to_todays_unmapped_tabs_and_back() {
+    let (mut d, _, _) = linear_driver(strip_client(), linear_start());
+    press(&mut d, KeyCode::Char('t'));
+    let frame = render_at(&mut d, W, H);
+    assert_eq!(
+        strip_lines(&frame),
+        vec![
+            " Unmapped tabs (live tabs no binding claims)".to_string(),
+            "  Elsewhere (wA:t2) · no_binding · panes: wA:p9 working".to_string(),
+        ],
+        "{frame}"
+    );
+    assert!(!frame.contains("Beta notes"), "{frame}");
+    insta::assert_snapshot!("linear_strip_tabs", frame);
+    press(&mut d, KeyCode::Char('t'));
+    let back = render_at(&mut d, W, H);
+    assert!(back.contains("Beta notes (wB)"), "{back}");
+    assert!(!back.contains("Unmapped tabs"), "{back}");
+}
+
+#[test]
+fn a_failed_space_read_says_the_list_is_unavailable_not_that_every_space_is_bound() {
+    let client = fake_with(bound_with_view())
+        .with_linear_list_error(LinearListKind::Spaces, "herdr socket missing");
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    let frame = render_at(&mut d, W, H);
+    assert!(
+        frame.contains("space list unavailable: plugin unavailable: herdr socket missing"),
+        "{frame}"
+    );
+    assert!(!frame.contains("every space is bound"), "{frame}");
+    assert!(!frame.contains("loading spaces"), "{frame}");
+    insta::assert_snapshot!("linear_strip_spaces_unavailable", frame);
+}
+
+#[test]
+fn an_empty_space_list_says_every_space_is_bound() {
+    let client = fake_with(bound_with_view()).with_linear_list(spaces(vec![]));
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    let frame = render_at(&mut d, W, H);
+    assert!(frame.contains("every space is bound"), "{frame}");
+    assert!(!frame.contains("unavailable"), "{frame}");
+}
+
+#[test]
+fn before_the_first_space_read_lands_the_strip_shows_a_loading_line() {
+    let mut d = linear_driver_deferred(strip_client(), linear_start());
+    assert!(d.deliver_pending_linear_snapshot());
+    let loading = render_at(&mut d, W, H);
+    assert!(loading.contains("loading spaces…"), "{loading}");
+    assert!(
+        !loading.contains("every space is bound") && !loading.contains("unavailable"),
+        "{loading}"
+    );
+    assert!(d.deliver_pending_linear_list());
+    let rows = render_at(&mut d, W, H);
+    assert!(!rows.contains("loading spaces"), "{rows}");
+    assert!(rows.contains("Beta notes (wB)"), "{rows}");
+}
+
+#[test]
+fn a_click_on_a_strip_row_opens_the_space_picker_for_that_space() {
+    let (client, log) = RecordingClient::new(strip_client());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    let frame = render_at(&mut d, W, H);
+    let y = frame
+        .lines()
+        .position(|l| l.contains("Gamma docs (wC)"))
+        .unwrap_or_else(|| panic!("strip row drawn:\n{frame}"));
+    d.handle(left_down(6, y as u16));
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(
+        d.app.picker.as_ref().unwrap().purpose,
+        board_tui::app::PickerPurpose::LinearList(LinearListKind::Projects)
+    );
+    assert_eq!(bind_space(&d).as_deref(), Some("wC"));
+    assert_eq!(
+        selection(&d),
+        (0, 0, None),
+        "the board selection is untouched"
+    );
+    let kinds: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.list")
+        .map(|(_, p)| p["kind"].clone())
+        .collect();
+    assert_eq!(kinds, vec![Value::from("spaces"), Value::from("projects")]);
+    let picker = render_at(&mut d, W, H);
+    assert!(picker.contains("Example rollout"), "{picker}");
+}
+
+#[test]
+fn s_then_down_then_enter_opens_the_space_picker_for_the_second_row() {
+    let (mut d, _, _) = linear_driver(strip_client(), linear_start());
+    press(&mut d, KeyCode::Char('s'));
+    press(&mut d, KeyCode::Down);
+    assert_eq!(
+        selection(&d),
+        (0, 0, None),
+        "down moves the strip, not the board"
+    );
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(bind_space(&d).as_deref(), Some("wC"));
+    assert!(d.app.linear.as_ref().unwrap().detail.is_none());
+}
+
+#[test]
+fn escape_from_the_strip_returns_focus_to_the_board_without_quitting() {
+    let (mut d, _, _) = linear_driver(strip_client(), linear_start());
+    press(&mut d, KeyCode::Char('s'));
+    assert!(d.app.linear.as_ref().unwrap().strip_focus);
+    press(&mut d, KeyCode::Esc);
+    assert!(!d.app.should_quit);
+    assert!(!d.app.linear.as_ref().unwrap().strip_focus);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selection(&d).0, 0);
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "Enter opens a card again"
+    );
+}
+
+#[test]
+fn a_click_inside_an_open_picker_chooses_the_row_under_the_pointer() {
+    let mut d = {
+        let (d, _, _) = linear_driver(strip_client(), linear_start());
+        d
+    };
+    press(&mut d, KeyCode::Char('s'));
+    press(&mut d, KeyCode::Enter);
+    let frame = render_at(&mut d, W, H);
+    let y = frame
+        .lines()
+        .position(|l| l.contains("Example rollout"))
+        .unwrap_or_else(|| panic!("picker row drawn:\n{frame}"));
+    let x = frame.lines().nth(y).unwrap().find("OPS").unwrap();
+    let x = frame.lines().nth(y).unwrap()[..x].chars().count() as u16;
+    d.handle(left_down(x, y as u16));
+    assert!(d.app.picker.is_none());
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().pick,
+        Some(board_tui::app::LinearPick {
+            kind: LinearListKind::Projects,
+            list_id: None,
+            id: "p2".into(),
+        })
+    );
+    assert_eq!(bind_space(&d).as_deref(), Some("wB"));
+    assert_eq!(
+        selection(&d),
+        (0, 0, None),
+        "the click never reached the board"
+    );
+}
+
+#[test]
+fn a_click_on_a_card_while_the_strip_has_focus_opens_the_card() {
+    let client = fake_with(four_in_progress());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    press(&mut d, KeyCode::Char('s'));
+    press(&mut d, KeyCode::Down);
+    render_at(&mut d, W, H);
+    d.handle(left_down(90, 9));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
+    assert!(d.app.picker.is_none());
+    assert!(!d.app.linear.as_ref().unwrap().strip_focus);
+    assert_eq!(bind_space(&d), None);
 }

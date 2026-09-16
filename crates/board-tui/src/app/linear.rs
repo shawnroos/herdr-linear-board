@@ -5,6 +5,7 @@
 
 use board_core::protocol::{
     LinearGroup, LinearIssue, LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot,
+    LinearSpaceRow, LinearSpacesList,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -40,6 +41,23 @@ pub struct PaneRow {
     pub status: String,
 }
 
+/// The space list the strip draws from. A failed read is kept apart from an
+/// empty one, so the strip never reports a failure as "every space is bound".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SpaceList {
+    #[default]
+    NotRead,
+    Read(LinearSpacesList),
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StripView {
+    #[default]
+    Spaces,
+    Tabs,
+}
+
 pub struct LinearState {
     pub workspace_id: String,
     pub board_version: String,
@@ -68,6 +86,15 @@ pub struct LinearState {
     pub pick: Option<super::LinearPick>,
     /// Read once at start; shown only in the `?` sheet (KTD14).
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub spaces: SpaceList,
+    pub strip: StripView,
+    /// Whether up, down, Enter and Escape act on the strip instead of the board.
+    pub strip_focus: bool,
+    /// Index into [`LinearState::unbound_spaces`].
+    pub strip_sel: usize,
+    /// The space chosen on the strip, whose project picker is or was open.
+    /// A project pick (`pick.kind == Projects`) is for this space.
+    pub bind_space: Option<LinearSpaceRow>,
 }
 
 impl LinearState {
@@ -93,6 +120,27 @@ impl LinearState {
             lists_in_flight: Default::default(),
             pick: None,
             herdr_keys: Vec::new(),
+            spaces: SpaceList::NotRead,
+            strip: StripView::Spaces,
+            strip_focus: false,
+            strip_sel: 0,
+            bind_space: None,
+        }
+    }
+
+    /// The rows the strip lists: every read space whose state is not `bound`.
+    pub fn unbound_spaces(&self) -> Vec<&LinearSpaceRow> {
+        match &self.spaces {
+            SpaceList::Read(list) => list.rows.iter().filter(|r| r.state != "bound").collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn clamp_strip(&mut self) {
+        let n = self.unbound_spaces().len();
+        self.strip_sel = self.strip_sel.min(n.saturating_sub(1));
+        if n == 0 {
+            self.strip_focus = false;
         }
     }
 
@@ -292,10 +340,19 @@ fn request_snapshot(app: &mut App) -> Vec<Effect> {
         app.set_toast("refresh already in flight", false);
         return vec![];
     }
-    if let Some(state) = app.linear.as_mut() {
-        state.in_flight = true;
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    state.in_flight = true;
+    let mut effects = vec![Effect::LinearSnapshot];
+    // The strip's space list is read with every snapshot (R11).
+    if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
+        effects.push(Effect::LinearList {
+            kind: LinearListKind::Spaces,
+            id: None,
+        });
     }
-    vec![Effect::LinearSnapshot]
+    effects
 }
 
 /// An automatic refresh: sent now, or queued behind the one in flight.
@@ -330,6 +387,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.fetched_at = Some(now);
             state.last_good = Some(snapshot);
             state.clamp();
+            state.clamp_strip();
             state.home_screen()
         }
         Err(LinearFailure::MethodNotFound) => {
@@ -423,6 +481,27 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
+    match k.code {
+        KeyCode::Char('t') => {
+            state.strip = match state.strip {
+                StripView::Spaces => StripView::Tabs,
+                StripView::Tabs => StripView::Spaces,
+            };
+            state.strip_focus = false;
+            return vec![];
+        }
+        KeyCode::Char('s') => {
+            state.strip = StripView::Spaces;
+            state.strip_focus = !state.unbound_spaces().is_empty();
+            return vec![];
+        }
+        _ => {}
+    }
+    // Ahead of the board's own arms: Escape here returns to the board rather
+    // than quitting, and up/down move the strip rather than the card.
+    if state.strip_focus {
+        return strip_key(app, k);
+    }
     if let Some(delta) = nav_delta(k.code) {
         let cards = state
             .groups()
@@ -458,6 +537,58 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     vec![]
 }
 
+fn strip_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    if let Some(delta) = nav_delta(k.code) {
+        let max = state.unbound_spaces().len().saturating_sub(1);
+        state.strip_sel = step_clamped(state.strip_sel, delta, max);
+        return vec![];
+    }
+    match k.code {
+        KeyCode::Esc => state.strip_focus = false,
+        KeyCode::Char('q') => return vec![Effect::Quit],
+        KeyCode::Enter => {
+            let Some(space) = state
+                .unbound_spaces()
+                .get(state.strip_sel)
+                .map(|r| (*r).clone())
+            else {
+                return vec![];
+            };
+            state.bind_space = Some(space);
+            if super::linear_picker::open_linear_picker(app, LinearListKind::Projects, None) {
+                return vec![Effect::LinearList {
+                    kind: LinearListKind::Projects,
+                    id: None,
+                }];
+            }
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+/// Selects the strip row drawn under the click, found again by space id, then
+/// opens it the way `Enter` does. A space no longer listed is left alone.
+pub(super) fn click_strip_row(app: &mut App, space_id: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(at) = state
+        .unbound_spaces()
+        .iter()
+        .position(|row| row.id == space_id)
+    else {
+        return vec![];
+    };
+    state.strip = StripView::Spaces;
+    state.strip_sel = at;
+    state.strip_focus = true;
+    linear_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+}
+
 /// Selects the card drawn under the click, found again by identifier because
 /// the snapshot may have changed since that frame, then opens it the way
 /// `Enter` does (KTD9). A card no longer in the snapshot is left alone.
@@ -477,6 +608,8 @@ pub(super) fn click_card(app: &mut App, group: &str, identifier: &str) -> Vec<Ef
     };
     state.sel_group = sel_group;
     state.sel_card = sel_card;
+    // Otherwise the Enter below reaches the strip, not the card.
+    state.strip_focus = false;
     linear_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
 }
 
@@ -485,6 +618,7 @@ pub(super) fn click_group(app: &mut App, group: &str) {
         return;
     };
     if let Some(index) = state.groups().iter().position(|g| g.key == group) {
+        state.strip_focus = false;
         state.sel_group = index;
         state.clamp();
     }

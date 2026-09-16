@@ -6,4 +6,6 @@ expression: frame
 " Enter detail · r refresh · ? help · q quit                           "
 " body too short for a card; make the pane taller                      "
 "                                                                      "
+" Spaces with no project · s select · t unmapped tabs                  "
+"  every space is bound                                                "
 "                                                                      "

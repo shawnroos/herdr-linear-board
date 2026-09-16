@@ -51,6 +51,7 @@ mod switcher;
 pub use effect::Effect;
 pub use linear::{
     sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState, PaneRow,
+    SpaceList, StripView,
 };
 pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;

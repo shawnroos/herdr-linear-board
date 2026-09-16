@@ -33,6 +33,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
         eff,
         Effect::Refetch
             | Effect::LinearSnapshot
+            | Effect::LinearList { .. }
             | Effect::FocusPane(_)
             | Effect::OpenIssueUrl(_)
             | Effect::CopyWorktreePath { .. }
@@ -117,7 +118,7 @@ impl Driver {
         );
     }
 
-    fn fetch_linear_list(&mut self, kind: LinearListKind, id: Option<String>) {
+    pub(super) fn fetch_linear_list(&mut self, kind: LinearListKind, id: Option<String>) {
         if let Some(pending) = self.deferred_linear.as_mut() {
             pending.push_back(Pending::List { kind, id });
             return;
@@ -131,8 +132,7 @@ impl Driver {
 
     /// Open the Linear picker for `kind` (`id` is a views list's project id)
     /// and read its list. The read goes straight to the client rather than
-    /// through an effect: Linear mode's allow set does not carry a list
-    /// effect yet.
+    /// through `Effect::LinearList`, which the strip keys use.
     pub fn open_linear_picker(&mut self, kind: LinearListKind, id: Option<String>) {
         if crate::app::open_linear_picker(&mut self.app, kind, id.clone()) {
             self.fetch_linear_list(kind, id);

@@ -303,7 +303,17 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "?", "this help (any screen)"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearBoard, "s", "focus the spaces strip"),
+    (Screen::LinearBoard, "t", "strip: spaces / tabs"),
+    (Screen::LinearBoard, "↑/↓ k/j", "strip: select a space"),
+    (Screen::LinearBoard, "Enter", "strip: choose a project"),
+    (Screen::LinearBoard, "Esc", "strip: back to the board"),
     (Screen::LinearBoard, "click", "open card / focus column"),
+    (
+        Screen::LinearBoard,
+        "click strip",
+        "choose a project for it",
+    ),
     (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
@@ -326,6 +336,7 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     ),
     (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
     (Screen::LinearPicker, "Esc", "clear filter, then close"),
+    (Screen::LinearPicker, "click", "choose that row"),
 ];
 
 /// The upstream `?` sheet renders only the rows before this sentinel, so its

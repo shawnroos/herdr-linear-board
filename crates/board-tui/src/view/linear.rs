@@ -3,7 +3,7 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearIssue, LinearSnapshot};
+use board_core::protocol::{LinearIssue, LinearListStatus, LinearSnapshot};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{sanitise, App, LinearState, Screen};
+use crate::app::{sanitise, App, LinearState, Screen, SpaceList, StripView};
 use crate::widgets::{HitMap, Zone};
 
 use super::{centered_rect_abs, linear_help_keys, truncate};
@@ -261,51 +261,142 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         f.render_widget(Paragraph::new(" waiting for the first snapshot…"), body);
         return;
     };
-    let unmapped_h: u16 = if snapshot.unmapped.is_empty() {
-        0
-    } else {
-        1 + snapshot.unmapped.len().min(3) as u16
-    };
+    let strip = strip_lines(state, snapshot, area.width as usize);
+    let strip_h = strip.len() as u16;
     let footer_h: u16 = 1;
-    let body_h = area
-        .height
-        .saturating_sub(HEADER_ROWS + unmapped_h + footer_h);
+    let body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
     let body = Rect::new(area.x, area.y + HEADER_ROWS, area.width, body_h);
     draw_columns(state, snapshot, f, body, &mut app.hit_map.borrow_mut());
 
     // The strip is clamped to the frame: at a tiny height the body saturates
     // to zero rows and an unclamped rect would index past the buffer.
     let y = body.bottom();
-    let strip_h = unmapped_h.min(area.bottom().saturating_sub(y));
-    if strip_h > 0 {
-        let rect = Rect::new(area.x, y, area.width, strip_h);
-        let mut lines = vec![Line::from(Span::styled(
-            " Unmapped tabs (live tabs no binding claims)",
-            Style::default().add_modifier(Modifier::BOLD),
-        ))];
-        for tab in snapshot.unmapped.iter().take(3) {
+    let shown = strip_h.min(area.bottom().saturating_sub(y));
+    if shown > 0 {
+        let mut hit_map = app.hit_map.borrow_mut();
+        for (at, (line, space_id)) in strip.into_iter().take(shown as usize).enumerate() {
+            let rect = Rect::new(area.x, y + at as u16, area.width, 1);
+            f.render_widget(Paragraph::new(line), rect);
+            if let Some(space_id) = space_id {
+                hit_map.push(rect, Zone::LinearStripRow(space_id));
+            }
+        }
+    }
+}
+
+const STRIP_ROWS: usize = 3;
+
+/// The strip's rows, each with the space id a click on it opens. Empty when
+/// the tabs view has no unmapped tabs, as before the spaces view existed.
+fn strip_lines(
+    state: &LinearState,
+    snapshot: &LinearSnapshot,
+    width: usize,
+) -> Vec<(Line<'static>, Option<String>)> {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    if state.strip == StripView::Tabs {
+        if snapshot.unmapped.is_empty() {
+            return vec![];
+        }
+        let mut lines = vec![(
+            Line::from(Span::styled(
+                " Unmapped tabs (live tabs no binding claims)",
+                bold,
+            )),
+            None,
+        )];
+        for tab in snapshot.unmapped.iter().take(STRIP_ROWS) {
             let panes: Vec<String> = tab
                 .panes
                 .iter()
                 .map(|p| format!("{} {}", line(p), state.pane_status(p)))
                 .collect();
-            lines.push(Line::from(truncate(
-                &format!(
-                    "  {} ({}) · {} · panes: {}",
-                    line(tab.label.as_deref().unwrap_or("(no label)")),
-                    line(&tab.tab_id),
-                    line(&tab.reason),
-                    if panes.is_empty() {
-                        "none".to_string()
-                    } else {
-                        panes.join(", ")
-                    }
-                ),
-                area.width as usize,
-            )));
+            lines.push((
+                Line::from(truncate(
+                    &format!(
+                        "  {} ({}) · {} · panes: {}",
+                        line(tab.label.as_deref().unwrap_or("(no label)")),
+                        line(&tab.tab_id),
+                        line(&tab.reason),
+                        if panes.is_empty() {
+                            "none".to_string()
+                        } else {
+                            panes.join(", ")
+                        }
+                    ),
+                    width,
+                )),
+                None,
+            ));
         }
-        f.render_widget(Paragraph::new(lines), rect);
+        return lines;
     }
+    let dim = Style::default().fg(Color::DarkGray);
+    let warn = Style::default().fg(Color::LightYellow);
+    let error = Style::default().fg(Color::LightRed);
+    let note =
+        |text: String, style: Style| (Line::from(Span::styled(fit(&text, width), style)), None);
+    let with_message = |label: &str, message: &Option<String>| match message {
+        Some(text) if !text.is_empty() => format!("  {label}: {}", line(text)),
+        _ => format!("  {label}"),
+    };
+    let mut header = " Spaces with no project".to_string();
+    if let SpaceList::Read(list) = &state.spaces {
+        if list.status == LinearListStatus::Partial {
+            header.push_str(" (partial list)");
+        }
+    }
+    header.push_str(" · s select · t unmapped tabs");
+    let mut lines = vec![(Line::from(Span::styled(fit(&header, width), bold)), None)];
+    let rows = state.unbound_spaces();
+    match &state.spaces {
+        SpaceList::NotRead => lines.push(note("  loading spaces…".to_string(), dim)),
+        SpaceList::Failed(text) => lines.push(note(
+            format!("  space list unavailable: {}", line(text)),
+            error,
+        )),
+        SpaceList::Read(list) if list.status == LinearListStatus::Unavailable => lines.push(note(
+            with_message("space list unavailable", &list.message),
+            error,
+        )),
+        SpaceList::Read(list) if list.status == LinearListStatus::Unknown && rows.is_empty() => {
+            lines.push(note(
+                with_message("space list status unknown", &list.message),
+                warn,
+            ))
+        }
+        SpaceList::Read(_) if rows.is_empty() => {
+            lines.push(note("  every space is bound".to_string(), dim))
+        }
+        SpaceList::Read(_) => {
+            let heights = vec![1u16; rows.len()];
+            let sel = state.strip_sel.min(rows.len() - 1);
+            let (start, end) = crate::widgets::windowed_rows(&heights, sel, STRIP_ROWS as u16);
+            for (at, row) in rows.iter().enumerate().take(end).skip(start) {
+                let selected = state.strip_focus && at == sel;
+                let text = fit(
+                    &format!(
+                        "  {} {} ({})",
+                        if selected { "›" } else { " " },
+                        line(if row.label.is_empty() {
+                            "(no label)"
+                        } else {
+                            &row.label
+                        }),
+                        line(&row.id)
+                    ),
+                    width,
+                );
+                let style = if selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                lines.push((Line::from(Span::styled(text, style)), Some(row.id.clone())));
+            }
+        }
+    }
+    lines
 }
 
 fn draw_columns(

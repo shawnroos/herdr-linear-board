@@ -166,6 +166,9 @@ pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
 /// kanban reducer (`SheetClose` sends it `Esc`), so a zone this function does
 /// not name is swallowed, which is also how an overlay shadows the board.
 fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if app.screen == Screen::LinearPicker {
+        return on_linear_picker_mouse(app, m);
+    }
     if app.screen != Screen::LinearBoard {
         return vec![];
     }
@@ -180,6 +183,9 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
                     super::linear::click_group(app, &group);
                     vec![]
                 }
+                Some(Zone::LinearStripRow(space_id)) => {
+                    super::linear::click_strip_row(app, &space_id)
+                }
                 _ => vec![],
             }
         }
@@ -187,6 +193,26 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
         MouseEventKind::ScrollUp => super::linear::linear_key(app, key(KeyCode::Up)),
         _ => vec![],
     }
+}
+
+/// Only a picker row answers; the rest of the picker, and the board behind
+/// it, swallow the click.
+fn on_linear_picker_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if m.kind != MouseEventKind::Down(MouseButton::Left) {
+        return vec![];
+    }
+    let hit = app.hit_map.borrow().hit(m.column, m.row);
+    let Some(Zone::PickerRow(idx)) = hit else {
+        return vec![];
+    };
+    let Some(picker) = app.picker.as_mut() else {
+        return vec![];
+    };
+    if idx >= picker.visible_rows().len() {
+        return vec![];
+    }
+    picker.sel = idx;
+    super::linear::linear_key(app, key(KeyCode::Enter))
 }
 
 /// Move the hovered column's scroll offset, then — if the wheel landed on

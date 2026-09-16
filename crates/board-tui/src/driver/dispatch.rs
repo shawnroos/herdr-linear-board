@@ -274,6 +274,7 @@ impl Driver {
             Effect::SetLinearPaneTitle(title) => self.send_pane_title(&title),
             Effect::Quit => self.app.should_quit = true,
             Effect::LinearSnapshot => self.fetch_linear_snapshot(),
+            Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
             Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
             Effect::OpenIssueUrl(url) => self.open_issue_url(url),
             Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),

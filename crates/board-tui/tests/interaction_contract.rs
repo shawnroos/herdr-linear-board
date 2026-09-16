@@ -110,7 +110,17 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "?", "this help (any screen)"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearBoard, "s", "focus the spaces strip"),
+    (Screen::LinearBoard, "t", "strip: spaces / tabs"),
+    (Screen::LinearBoard, "↑/↓ k/j", "strip: select a space"),
+    (Screen::LinearBoard, "Enter", "strip: choose a project"),
+    (Screen::LinearBoard, "Esc", "strip: back to the board"),
     (Screen::LinearBoard, "click", "open card / focus column"),
+    (
+        Screen::LinearBoard,
+        "click strip",
+        "choose a project for it",
+    ),
     (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
@@ -133,14 +143,15 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     ),
     (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
     (Screen::LinearPicker, "Esc", "clear filter, then close"),
+    (Screen::LinearPicker, "click", "choose that row"),
 ];
 
 #[test]
 fn contract_freezes_the_exact_72_row_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        114,
-        "the interaction contract must stay at exactly 114 bindings (87 upstream + 27 Linear mode)"
+        121,
+        "the interaction contract must stay at exactly 121 bindings (87 upstream + 34 Linear mode)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

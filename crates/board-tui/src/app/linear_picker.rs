@@ -5,7 +5,7 @@
 use board_core::protocol::{LinearListKind, LinearListResult, LinearListStatus};
 use crossterm::event::{KeyCode, KeyEvent};
 
-use super::linear::{sanitise_list, LinearFailure};
+use super::linear::{sanitise_list, LinearFailure, SpaceList};
 use super::{App, Effect, LinearPickerRow, ListOutcome, Picker, PickerPurpose, PickerRow, Screen};
 
 /// A row chosen in a Linear picker: which list, the list's argument, the id.
@@ -104,6 +104,15 @@ pub(super) fn list_arrived(
         return;
     };
     state.lists_in_flight.remove(&(kind, id.clone()));
+    let result = result.map(sanitise_list);
+    if kind == LinearListKind::Spaces && id.is_none() {
+        state.spaces = match &result {
+            Ok(LinearListResult::Spaces(list)) => SpaceList::Read(list.clone()),
+            Ok(_) => SpaceList::Failed("the daemon answered with another list".to_string()),
+            Err(failure) => SpaceList::Failed(failure_text(failure)),
+        };
+        state.clamp_strip();
+    }
     if !is_open_for(app, kind, &id) {
         return;
     }
@@ -111,7 +120,7 @@ pub(super) fn list_arrived(
         return;
     };
     let keep = picker.selected_id().map(str::to_string);
-    match result.map(sanitise_list) {
+    match result {
         Ok(list) => {
             let (status, message, rows) = rows_of(&list);
             picker.rows = rows;
@@ -119,15 +128,19 @@ pub(super) fn list_arrived(
         }
         Err(failure) => {
             picker.rows.clear();
-            picker.outcome = Some(ListOutcome::Failed(match failure {
-                LinearFailure::MethodNotFound => {
-                    "the daemon is older than the board and has no linear.list".to_string()
-                }
-                LinearFailure::Failed(text) => super::sanitise(&text),
-            }));
+            picker.outcome = Some(ListOutcome::Failed(failure_text(&failure)));
         }
     }
     picker.reselect(keep.as_deref());
+}
+
+fn failure_text(failure: &LinearFailure) -> String {
+    match failure {
+        LinearFailure::MethodNotFound => {
+            "the daemon is older than the board and has no linear.list".to_string()
+        }
+        LinearFailure::Failed(text) => super::sanitise(text),
+    }
 }
 
 pub(super) fn linear_picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
@@ -163,6 +176,12 @@ pub(super) fn linear_picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             let return_to = picker.return_to;
             app.picker = None;
             app.screen = return_to;
+            // A space picker closed without a choice leaves no space to bind.
+            if kind == LinearListKind::Projects {
+                if let Some(state) = app.linear.as_mut() {
+                    state.bind_space = None;
+                }
+            }
         }
         KeyCode::Esc => edit_filter(picker, String::clear),
         KeyCode::Backspace => edit_filter(picker, |f| {

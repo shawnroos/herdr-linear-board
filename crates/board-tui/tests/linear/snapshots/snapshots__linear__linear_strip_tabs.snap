@@ -1,6 +1,6 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
-expression: failed_frame
+expression: frame
 ---
 " Linear  AI Canvas Tools · view: Canvas board · space: Plugins · fetched 0s ago                                         "
 " Enter detail · r refresh · ? help · q quit                                                                             "
@@ -16,10 +16,10 @@ expression: failed_frame
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
-"│                        ┌ Choose a space ──────────────────────────────────────────────[ X ]─┐                        │"
-"│                        │filter: type to narrow                                              │                        │"
-"│                        │read failed: plugin unavailable: running work-spaces.sh: timed out  │                        │"
-"│                        └────────────────────────────────────────────────────────────────────┘                        │"
+"│                                      ││                                      ││                                      │"
+"│                                      ││                                      ││                                      │"
+"│                                      ││                                      ││                                      │"
+"│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
@@ -31,6 +31,6 @@ expression: failed_frame
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" Spaces with no project · s select · t unmapped tabs                                                                    "
-"  space list unavailable: plugin unavailable: running work-spaces.sh: timed out                                         "
+" Unmapped tabs (live tabs no binding claims)                                                                            "
+"  Elsewhere (wA:t2) · no_binding · panes: wA:p9 working                                                                 "
 "                                                                                                                        "

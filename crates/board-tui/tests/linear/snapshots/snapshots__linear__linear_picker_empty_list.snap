@@ -31,6 +31,6 @@ expression: empty_frame
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" Unmapped tabs (live tabs no binding claims)                                                                            "
-"  Elsewhere (wA:t2) · no_binding · panes: wA:p9 working                                                                 "
+" Spaces with no project · s select · t unmapped tabs                                                                    "
+"  every space is bound                                                                                                  "
 "                                                                                                                        "
