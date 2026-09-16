@@ -634,3 +634,178 @@ fn board_and_project_archive_and_visibility_types_roundtrip() {
     );
     roundtrip(&coarse);
 }
+
+#[test]
+fn linear_list_params_serialise_kind_lowercase_and_omit_absent_fields() {
+    use board_core::protocol::{LinearListKind, LinearListParams};
+
+    let spaces = LinearListParams {
+        kind: LinearListKind::Spaces,
+        ..LinearListParams::default()
+    };
+    roundtrip(&spaces);
+    assert_eq!(
+        serde_json::to_value(&spaces).unwrap(),
+        json!({"kind": "spaces"})
+    );
+
+    let views = LinearListParams {
+        kind: LinearListKind::Views,
+        id: Some("project-one".into()),
+        origin_socket: Some("/tmp/herdr.sock".into()),
+        plugin_root: None,
+    };
+    roundtrip(&views);
+    assert_eq!(
+        serde_json::to_value(&views).unwrap(),
+        json!({"kind": "views", "id": "project-one", "origin_socket": "/tmp/herdr.sock"})
+    );
+
+    assert!(serde_json::from_value::<LinearListParams>(json!({"kind": "issues"})).is_err());
+}
+
+#[test]
+fn linear_list_envelope_round_trips_for_each_kind() {
+    use board_core::protocol::{
+        LinearListStatus, LinearProjectRow, LinearProjectsList, LinearSpaceRow, LinearSpacesList,
+        LinearViewRow, LinearViewsList,
+    };
+
+    let spaces = LinearSpacesList {
+        status: LinearListStatus::Ok,
+        message: None,
+        rows: vec![
+            LinearSpaceRow {
+                id: "space-one".into(),
+                label: "Example space".into(),
+                live: Some(true),
+                state: "bound".into(),
+                project_id: Some("project-one".into()),
+                project_name: Some("Example project".into()),
+            },
+            LinearSpaceRow {
+                id: "space-two".into(),
+                label: "Other space".into(),
+                live: Some(false),
+                state: "unbound".into(),
+                project_id: None,
+                project_name: None,
+            },
+        ],
+    };
+    roundtrip(&spaces);
+
+    let projects = LinearProjectsList {
+        status: LinearListStatus::Partial,
+        message: Some("listed the first pages of projects only".into()),
+        rows: vec![LinearProjectRow {
+            id: "project-one".into(),
+            name: "Example project".into(),
+            team_key: "EX".into(),
+        }],
+    };
+    roundtrip(&projects);
+
+    let views = LinearViewsList {
+        status: LinearListStatus::Unavailable,
+        message: Some("Linear could not be reached".into()),
+        rows: vec![LinearViewRow {
+            id: "view-one".into(),
+            name: "Example view".into(),
+        }],
+    };
+    roundtrip(&views);
+
+    for (status, wire) in [
+        (LinearListStatus::Ok, "ok"),
+        (LinearListStatus::Unavailable, "unavailable"),
+        (LinearListStatus::Partial, "partial"),
+        (LinearListStatus::Unknown, "unknown"),
+    ] {
+        assert_eq!(serde_json::to_value(status).unwrap(), json!(wire));
+    }
+}
+
+#[test]
+fn linear_list_envelope_defaults_missing_or_null_message_and_rows() {
+    use board_core::protocol::{
+        LinearListStatus, LinearProjectsList, LinearSpacesList, LinearViewsList,
+    };
+
+    let bare: LinearViewsList = serde_json::from_value(json!({"status": "ok"})).unwrap();
+    assert_eq!(bare.status, LinearListStatus::Ok);
+    assert_eq!(bare.message, None);
+    assert!(bare.rows.is_empty());
+
+    // The plugin scripts print `"message": null` when there is nothing to say.
+    let null_message: LinearProjectsList =
+        serde_json::from_value(json!({"status": "unavailable", "message": null, "rows": []}))
+            .unwrap();
+    assert_eq!(null_message.status, LinearListStatus::Unavailable);
+    assert_eq!(null_message.message, None);
+
+    // A missing status is not evidence of success.
+    let no_status: LinearSpacesList = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(no_status.status, LinearListStatus::Unknown);
+
+    let sparse_rows: LinearSpacesList = serde_json::from_value(json!({
+        "status": "ok",
+        "rows": [{"id": "space-one", "live": null, "project_id": null}]
+    }))
+    .unwrap();
+    let row = &sparse_rows.rows[0];
+    assert_eq!(row.id, "space-one");
+    assert_eq!(row.label, "");
+    assert_eq!(row.live, None);
+    assert_eq!(row.project_id, None);
+}
+
+#[test]
+fn linear_list_unknown_status_fails_to_parse() {
+    use board_core::protocol::{LinearListStatus, LinearSpacesList};
+
+    for bad in ["stale", "OK", "", "error"] {
+        assert!(
+            serde_json::from_value::<LinearSpacesList>(json!({"status": bad, "rows": []})).is_err(),
+            "status {bad:?} must not parse"
+        );
+    }
+    assert!(serde_json::from_value::<LinearListStatus>(json!(null)).is_err());
+}
+
+#[test]
+fn linear_bind_handoff_params_and_result_round_trip() {
+    use board_core::protocol::{LinearBindHandoffParams, LinearBindHandoffResult};
+
+    let minimal = LinearBindHandoffParams {
+        space: "space-one".into(),
+        project: "project-one".into(),
+        view: None,
+        issue: None,
+        working_directory: None,
+        origin_socket: "/tmp/herdr.sock".into(),
+    };
+    roundtrip(&minimal);
+    assert_eq!(
+        serde_json::to_value(&minimal).unwrap(),
+        json!({"space": "space-one", "project": "project-one", "origin_socket": "/tmp/herdr.sock"})
+    );
+
+    let full = LinearBindHandoffParams {
+        view: Some("view-one".into()),
+        issue: Some("EX-1".into()),
+        working_directory: Some("/work/example".into()),
+        ..minimal
+    };
+    roundtrip(&full);
+
+    let result = LinearBindHandoffResult {
+        tab_id: "tab-1".into(),
+        pane_id: "pane-1".into(),
+    };
+    roundtrip(&result);
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"tab_id": "tab-1", "pane_id": "pane-1"})
+    );
+}

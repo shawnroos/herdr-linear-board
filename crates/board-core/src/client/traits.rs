@@ -12,7 +12,8 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DaemonStatus, DeletedResult, Event, HarnessCapabilitiesParams,
-    HarnessListResult, LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult,
+    HarnessListResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearListParams,
+    LinearListResult, LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult,
     PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
     ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
     ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
@@ -517,6 +518,20 @@ pub trait BoardClient {
     fn linear_snapshot(&mut self, p: &LinearSnapshotParams) -> anyhow::Result<LinearSnapshot> {
         Ok(serde_json::from_value(
             self.call("linear.snapshot", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_list(&mut self, p: &LinearListParams) -> anyhow::Result<LinearListResult> {
+        let value = self.call("linear.list", serde_json::to_value(p)?)?;
+        Ok(LinearListResult::from_value(p.kind, value)?)
+    }
+
+    fn linear_bind_handoff(
+        &mut self,
+        p: &LinearBindHandoffParams,
+    ) -> anyhow::Result<LinearBindHandoffResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.bind_handoff", serde_json::to_value(p)?)?,
         )?)
     }
 }

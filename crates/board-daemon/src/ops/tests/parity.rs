@@ -40,6 +40,14 @@ const KNOWN_UNIMPLEMENTED: &[&str] = &[
     "space.list",
 ];
 
+/// Methods the fake answers before the daemon routes them.
+///
+/// The typed client contract lands one unit ahead of its route so the TUI can
+/// be built against it. Each entry must leave this list in the change that
+/// routes it; `the_unrouted_allowlist_only_names_faked_unrouted_methods` fails
+/// until it does, so the list cannot hide a method that never gets routed.
+const KNOWN_UNROUTED: &[&str] = &["linear.bind_handoff", "linear.list"];
+
 fn set(methods: &[&str]) -> BTreeSet<String> {
     methods.iter().map(|m| (*m).to_string()).collect()
 }
@@ -60,14 +68,16 @@ fn routed_and_fake_method_lists_have_no_duplicates() {
 
 #[test]
 fn the_fake_client_only_implements_methods_the_daemon_routes() {
-    let extra: Vec<String> = set(FAKE_CLIENT_METHODS)
+    let extra: BTreeSet<String> = set(FAKE_CLIENT_METHODS)
         .difference(&set(ROUTED_METHODS))
         .cloned()
         .collect();
-    assert!(
-        extra.is_empty(),
+    assert_eq!(
+        extra,
+        set(KNOWN_UNROUTED),
         "FakeBoardClient answers methods boardd does not route, so a TUI test \
-         can pass against an RPC that does not exist: {extra:?}"
+         can pass against an RPC that does not exist. Route the method or, if \
+         its route is a later unit, add it to KNOWN_UNROUTED."
     );
 }
 
@@ -96,5 +106,25 @@ fn the_allowlist_only_names_routed_methods() {
     assert!(
         stale.is_empty(),
         "KNOWN_UNIMPLEMENTED names methods boardd no longer routes: {stale:?}"
+    );
+}
+
+#[test]
+fn the_unrouted_allowlist_only_names_faked_unrouted_methods() {
+    let not_faked: Vec<String> = set(KNOWN_UNROUTED)
+        .difference(&set(FAKE_CLIENT_METHODS))
+        .cloned()
+        .collect();
+    assert!(
+        not_faked.is_empty(),
+        "KNOWN_UNROUTED names methods the fake does not implement: {not_faked:?}"
+    );
+    let now_routed: Vec<String> = set(KNOWN_UNROUTED)
+        .intersection(&set(ROUTED_METHODS))
+        .cloned()
+        .collect();
+    assert!(
+        now_routed.is_empty(),
+        "KNOWN_UNROUTED names methods boardd now routes; remove them: {now_routed:?}"
     );
 }

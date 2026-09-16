@@ -11,7 +11,8 @@ use crate::protocol::{
     CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams,
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DeletedResult, Event, LinearSnapshot, LinearSnapshotParams,
+    CommentUpdateParams, DeletedResult, Event, LinearBindHandoffParams, LinearBindHandoffResult,
+    LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
     PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
     ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
     ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
@@ -56,12 +57,14 @@ pub struct FakeBoardClient {
     linear: FakeLinear,
 }
 
-/// What the fake answers for the two Linear-mode methods. There is no plugin
+/// What the fake answers for the Linear-mode methods. There is no plugin
 /// and no herdr here, so a test seeds the document (or the error) it wants.
 #[derive(Debug, Clone)]
 pub struct FakeLinear {
     pub snapshot: Result<LinearSnapshot, String>,
     pub focus: Result<PaneFocusResult, String>,
+    pub lists: std::collections::BTreeMap<LinearListKind, Result<LinearListResult, String>>,
+    pub bind_handoff: Result<LinearBindHandoffResult, String>,
 }
 
 impl Default for FakeLinear {
@@ -72,6 +75,8 @@ impl Default for FakeLinear {
                 focused: true,
                 gone: false,
             }),
+            lists: std::collections::BTreeMap::new(),
+            bind_handoff: Err("no linear bind handoff fixture configured".into()),
         }
     }
 }
@@ -154,6 +159,34 @@ impl FakeBoardClient {
     /// cannot be reached (code 4).
     pub fn with_pane_focus_error(mut self, message: &str) -> FakeBoardClient {
         self.linear.focus = Err(message.to_string());
+        self
+    }
+
+    /// Seed what `linear.list` answers for the envelope's own kind.
+    pub fn with_linear_list(mut self, result: LinearListResult) -> FakeBoardClient {
+        self.linear.lists.insert(result.kind(), Ok(result));
+        self
+    }
+
+    /// Make `linear.list` for `kind` fail with `message` (a code-6 plugin failure).
+    pub fn with_linear_list_error(
+        mut self,
+        kind: LinearListKind,
+        message: &str,
+    ) -> FakeBoardClient {
+        self.linear.lists.insert(kind, Err(message.to_string()));
+        self
+    }
+
+    pub fn with_linear_bind_handoff(mut self, result: LinearBindHandoffResult) -> FakeBoardClient {
+        self.linear.bind_handoff = Ok(result);
+        self
+    }
+
+    /// Make `linear.bind_handoff` fail with `message`; every failure after the
+    /// tab exists reports herdr unavailable (code 4).
+    pub fn with_linear_bind_handoff_error(mut self, message: &str) -> FakeBoardClient {
+        self.linear.bind_handoff = Err(message.to_string());
         self
     }
 
@@ -754,12 +787,45 @@ fake_methods!(db, config, linear, params, {
             Err(message) => return Err(crate::Error::PluginUnavailable(message.clone()).into()),
         }
     },
+    "linear.list" => {
+        let p: LinearListParams = serde_json::from_value(params)?;
+        if p.kind == LinearListKind::Views && p.id.as_deref().is_none_or(|id| id.trim().is_empty()) {
+            return Err(crate::Error::BadRequest(
+                "linear.list kind views requires a project id".into(),
+            )
+            .into());
+        }
+        match linear.lists.get(&p.kind) {
+            Some(Ok(result)) => serde_json::to_value(result)?,
+            Some(Err(message)) => {
+                return Err(crate::Error::PluginUnavailable(message.clone()).into())
+            }
+            None => {
+                return Err(crate::Error::PluginUnavailable(format!(
+                    "no linear list fixture configured for {}",
+                    serde_json::to_value(p.kind)?.as_str().unwrap_or_default()
+                ))
+                .into())
+            }
+        }
+    },
+    "linear.bind_handoff" => {
+        let _: LinearBindHandoffParams = serde_json::from_value(params)?;
+        match &linear.bind_handoff {
+            Ok(result) => serde_json::to_value(result.clone())?,
+            Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
+        }
+    },
 });
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::Column;
+    use crate::protocol::{
+        LinearListStatus, LinearProjectRow, LinearProjectsList, LinearSpaceRow, LinearSpacesList,
+        LinearViewsList,
+    };
     use serde_json::json;
 
     fn columns(client: &mut FakeBoardClient) -> Vec<Column> {
@@ -832,5 +898,128 @@ mod tests {
         assert!(err
             .to_string()
             .contains("unknown template: not-a-real-template"));
+    }
+
+    fn project_row(id: &str) -> LinearProjectRow {
+        LinearProjectRow {
+            id: id.into(),
+            name: "Example project".into(),
+            team_key: "EX".into(),
+        }
+    }
+
+    #[test]
+    fn linear_list_answers_the_envelope_configured_for_each_kind() {
+        let spaces = LinearSpacesList {
+            status: LinearListStatus::Ok,
+            message: None,
+            rows: vec![LinearSpaceRow {
+                id: "space-one".into(),
+                label: "Example space".into(),
+                live: Some(true),
+                state: "bound".into(),
+                project_id: Some("project-one".into()),
+                project_name: Some("Example project".into()),
+            }],
+        };
+        let projects = LinearProjectsList {
+            status: LinearListStatus::Partial,
+            message: Some("first pages only".into()),
+            rows: vec![project_row("project-one")],
+        };
+        let views = LinearViewsList {
+            status: LinearListStatus::Unavailable,
+            message: Some("Linear could not be reached".into()),
+            rows: vec![],
+        };
+        let mut client = FakeBoardClient::new()
+            .unwrap()
+            .with_linear_list(LinearListResult::Spaces(spaces.clone()))
+            .with_linear_list(LinearListResult::Projects(projects.clone()))
+            .with_linear_list(LinearListResult::Views(views.clone()));
+
+        let ask = |kind, id: Option<&str>| LinearListParams {
+            kind,
+            id: id.map(str::to_string),
+            ..LinearListParams::default()
+        };
+        assert_eq!(
+            client
+                .linear_list(&ask(LinearListKind::Spaces, None))
+                .unwrap(),
+            LinearListResult::Spaces(spaces)
+        );
+        assert_eq!(
+            client
+                .linear_list(&ask(LinearListKind::Projects, None))
+                .unwrap(),
+            LinearListResult::Projects(projects)
+        );
+        assert_eq!(
+            client
+                .linear_list(&ask(LinearListKind::Views, Some("project-one")))
+                .unwrap(),
+            LinearListResult::Views(views)
+        );
+    }
+
+    #[test]
+    fn linear_list_fails_for_an_unconfigured_kind_a_seeded_error_or_a_views_call_without_id() {
+        let mut client = FakeBoardClient::new()
+            .unwrap()
+            .with_linear_list(LinearListResult::Projects(LinearProjectsList::default()))
+            .with_linear_list_error(LinearListKind::Spaces, "no resolvable plugin root");
+
+        let spaces = client
+            .call("linear.list", json!({"kind": "spaces"}))
+            .unwrap_err();
+        assert!(matches!(
+            spaces.downcast_ref::<crate::Error>(),
+            Some(crate::Error::PluginUnavailable(m)) if m == "no resolvable plugin root"
+        ));
+
+        let views = client
+            .call("linear.list", json!({"kind": "views", "id": "project-one"}))
+            .unwrap_err();
+        assert!(views.to_string().contains("views"), "{views}");
+
+        let no_id = client
+            .call("linear.list", json!({"kind": "views"}))
+            .unwrap_err();
+        assert!(matches!(
+            no_id.downcast_ref::<crate::Error>(),
+            Some(crate::Error::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn linear_bind_handoff_answers_the_configured_result_or_error() {
+        let params = LinearBindHandoffParams {
+            space: "space-one".into(),
+            project: "project-one".into(),
+            origin_socket: "/tmp/herdr.sock".into(),
+            ..LinearBindHandoffParams::default()
+        };
+
+        let mut unconfigured = FakeBoardClient::new().unwrap();
+        assert!(unconfigured.linear_bind_handoff(&params).is_err());
+
+        let result = LinearBindHandoffResult {
+            tab_id: "tab-1".into(),
+            pane_id: "pane-1".into(),
+        };
+        let mut client = FakeBoardClient::new()
+            .unwrap()
+            .with_linear_bind_handoff(result.clone());
+        assert_eq!(client.linear_bind_handoff(&params).unwrap(), result);
+
+        let mut failing = FakeBoardClient::new()
+            .unwrap()
+            .with_linear_bind_handoff_error("herdr is not running");
+        let err = failing.linear_bind_handoff(&params).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<crate::Error>(),
+            Some(crate::Error::HerdrUnavailable(m)) if m == "herdr is not running"
+        ));
     }
 }
