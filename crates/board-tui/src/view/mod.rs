@@ -315,6 +315,14 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearError, "q", "quit"),
     (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
     (Screen::LinearStaleDaemon, "q / Esc", "quit"),
+    (Screen::LinearPicker, "--", "-- linear picker --"),
+    (
+        Screen::LinearPicker,
+        "type / Bksp",
+        "filter text; ? r q too",
+    ),
+    (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
+    (Screen::LinearPicker, "Esc", "clear filter, then close"),
 ];
 
 /// The upstream `?` sheet renders only the rows before this sentinel, so its
@@ -415,7 +423,8 @@ pub fn view(app: &App, f: &mut Frame) {
         | Screen::LinearDetail
         | Screen::LinearNotBound
         | Screen::LinearError
-        | Screen::LinearStaleDaemon => {}
+        | Screen::LinearStaleDaemon
+        | Screen::LinearPicker => {}
     }
 
     overlays::draw_footer(app, f, area);

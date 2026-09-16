@@ -108,17 +108,16 @@ impl Driver {
 
         let return_to = self.app.screen;
         let visibility = self.app.picker_visibility;
-        self.app.picker = Some(Picker {
-            title: format!(
+        self.app.picker = Some(Picker::new(
+            format!(
                 "Switch project [{}]",
                 visibility.as_str().to_ascii_uppercase()
             ),
             rows,
-            sel: 0,
-            purpose: PickerPurpose::SwitchProject,
+            PickerPurpose::SwitchProject,
             return_to,
-            project_id: current.id,
-        });
+            current.id,
+        ));
         self.app.screen = Screen::ProjectPicker;
     }
 
@@ -214,14 +213,13 @@ impl Driver {
             info.project.name,
             picker_vis.as_str().to_ascii_uppercase()
         );
-        self.app.picker = Some(Picker {
+        self.app.picker = Some(Picker::new(
             title,
             rows,
-            sel: 0,
-            purpose: PickerPurpose::SwitchBoard,
+            PickerPurpose::SwitchBoard,
             return_to,
-            project_id: target_id,
-        });
+            target_id,
+        ));
         self.app.screen = Screen::BoardPicker;
     }
 

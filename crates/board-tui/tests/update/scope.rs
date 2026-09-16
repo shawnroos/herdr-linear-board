@@ -413,7 +413,7 @@ fn item_rows(app: &board_tui::app::App) -> Vec<(String, i64)> {
         .iter()
         .filter_map(|row| match row {
             PickerRow::Item(label, id) => Some((label.clone(), *id)),
-            PickerRow::Action(..) => None,
+            PickerRow::Action(..) | PickerRow::Linear(_) => None,
         })
         .collect()
 }
@@ -514,6 +514,7 @@ fn b_opens_board_picker_and_other_projects_drills_to_the_project_picker() {
         .map(|row| match row {
             PickerRow::Item(label, _) => label.clone(),
             PickerRow::Action(label, _) => label.clone(),
+            PickerRow::Linear(row) => row.name.clone(),
         })
         .collect();
     assert_eq!(rows[0], "main", "the Global project's board first");

@@ -122,14 +122,22 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearError, "q", "quit"),
     (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
     (Screen::LinearStaleDaemon, "q / Esc", "quit"),
+    (Screen::LinearPicker, "--", "-- linear picker --"),
+    (
+        Screen::LinearPicker,
+        "type / Bksp",
+        "filter text; ? r q too",
+    ),
+    (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
+    (Screen::LinearPicker, "Esc", "clear filter, then close"),
 ];
 
 #[test]
 fn contract_freezes_the_exact_72_row_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        107,
-        "the interaction contract must stay at exactly 107 bindings (87 upstream + 20 Linear mode)"
+        111,
+        "the interaction contract must stay at exactly 111 bindings (87 upstream + 24 Linear mode)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

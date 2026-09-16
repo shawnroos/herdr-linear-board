@@ -451,6 +451,12 @@ fn a_key_is_handled_while_a_snapshot_is_in_flight_and_the_result_replaces_the_bo
     let help = draw(&d.app, W, H);
     assert!(help.contains("Help — Linear mode"), "{help}");
     assert!(d.deliver_pending_linear_snapshot());
+    assert_eq!(
+        d.app.screen,
+        Screen::Help,
+        "the help sheet survives the arrival"
+    );
+    press(&mut d, KeyCode::Char('x'));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     let board = draw(&d.app, W, H);
     assert!(board.contains("In Progress (1)"), "{board}");
@@ -1071,4 +1077,504 @@ fn a_stacked_board_with_zero_groups_says_the_snapshot_has_no_columns() {
     let frame = render_at(&mut d, 70, 20);
     assert!(frame.contains("no columns in this snapshot"), "{frame}");
     assert!(!frame.contains("too short"), "{frame}");
+}
+
+// -- the filter picker (R17, R18, R19, R24, R27, AE3) -------------------------
+
+use board_core::protocol::{
+    LinearListEnvelope, LinearListKind, LinearListResult, LinearListStatus, LinearProjectRow,
+    LinearSpaceRow,
+};
+
+fn space(id: &str, label: &str) -> LinearSpaceRow {
+    LinearSpaceRow {
+        id: id.into(),
+        label: label.into(),
+        live: Some(true),
+        state: "unmapped".into(),
+        ..Default::default()
+    }
+}
+
+fn spaces(rows: Vec<LinearSpaceRow>) -> LinearListResult {
+    LinearListResult::Spaces(LinearListEnvelope {
+        status: LinearListStatus::Ok,
+        message: None,
+        rows,
+    })
+}
+
+fn three_spaces() -> LinearListResult {
+    spaces(vec![
+        space("wA", "Alpha work"),
+        space("wB", "Beta notes"),
+        space("wC", "Gamma alpha"),
+    ])
+}
+
+fn project(id: &str, team_key: &str, name: &str) -> LinearProjectRow {
+    LinearProjectRow {
+        id: id.into(),
+        name: name.into(),
+        team_key: team_key.into(),
+    }
+}
+
+fn projects(rows: Vec<LinearProjectRow>) -> LinearListResult {
+    LinearListResult::Projects(LinearListEnvelope {
+        status: LinearListStatus::Ok,
+        message: None,
+        rows,
+    })
+}
+
+fn picker_driver(list: LinearListResult) -> (Driver, board_tui::testkit::RequestLog) {
+    let (client, log) = RecordingClient::new(fake_with(bound_with_view()).with_linear_list(list));
+    let (d, _, _) = linear_driver(client, linear_start());
+    (d, log)
+}
+
+fn type_text(d: &mut Driver, text: &str) {
+    for c in text.chars() {
+        press(d, KeyCode::Char(c));
+    }
+}
+
+fn filter(d: &Driver) -> String {
+    d.app.picker.as_ref().unwrap().filter.clone()
+}
+
+fn selected(d: &Driver) -> Option<String> {
+    d.app
+        .picker
+        .as_ref()
+        .and_then(|p| p.selected_id().map(str::to_string))
+}
+
+fn visible_ids(d: &Driver) -> Vec<String> {
+    d.app
+        .picker
+        .as_ref()
+        .unwrap()
+        .visible_rows()
+        .into_iter()
+        .map(|(_, row)| match row {
+            board_tui::app::PickerRow::Linear(row) => row.id.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn typing_narrows_the_list_and_clamps_the_selection() {
+    let (mut d, _) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected(&d).as_deref(), Some("wC"));
+    type_text(&mut d, "BETA");
+    assert_eq!(visible_ids(&d), vec!["wB"]);
+    assert_eq!(d.app.picker.as_ref().unwrap().sel, 0);
+    assert_eq!(selected(&d).as_deref(), Some("wB"));
+    press(&mut d, KeyCode::Down);
+    assert_eq!(
+        selected(&d).as_deref(),
+        Some("wB"),
+        "nowhere past the last row"
+    );
+}
+
+#[test]
+fn a_filter_matching_nothing_says_so_and_enter_does_nothing() {
+    let (mut d, log) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "zzz");
+    assert!(visible_ids(&d).is_empty());
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("no match for"), "{frame}");
+    let before = methods(&log);
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert!(d.app.linear.as_ref().unwrap().pick.is_none());
+    assert_eq!(methods(&log), before);
+}
+
+#[test]
+fn question_mark_r_and_q_are_literal_while_filtering() {
+    let (mut d, log) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    let before = methods(&log);
+    type_text(&mut d, "?rqfjk");
+    assert_eq!(d.app.screen, Screen::LinearPicker, "no help sheet");
+    assert!(!d.app.should_quit, "no quit");
+    assert_eq!(methods(&log), before, "no fetch");
+    assert_eq!(filter(&d), "?rqfjk");
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("filter: ?rqfjk"), "{frame}");
+}
+
+#[test]
+fn escape_clears_the_filter_and_a_second_escape_closes_the_picker() {
+    let (mut d, _) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "alpha");
+    assert_eq!(visible_ids(&d), vec!["wA", "wC"]);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(filter(&d), "");
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(visible_ids(&d).len(), 3);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(d.app.picker.is_none());
+    assert!(!d.app.should_quit);
+}
+
+#[test]
+fn enter_records_the_chosen_row_and_closes_the_picker() {
+    let (mut d, _) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "gamma");
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(d.app.picker.is_none());
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().pick,
+        Some(board_tui::app::LinearPick {
+            kind: LinearListKind::Spaces,
+            list_id: None,
+            id: "wC".into(),
+        })
+    );
+}
+
+#[test]
+fn a_snapshot_arriving_leaves_the_picker_open_with_its_filter_and_selection() {
+    let (mut d, log) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "a");
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected(&d).as_deref(), Some("wB"));
+    d.handle(Msg::LinearRefresh);
+    assert_eq!(
+        methods(&log)
+            .iter()
+            .filter(|m| *m == "linear.snapshot")
+            .count(),
+        2,
+        "the snapshot arrived"
+    );
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(filter(&d), "a");
+    assert_eq!(selected(&d).as_deref(), Some("wB"));
+    press(&mut d, KeyCode::Esc);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard, "closes to the board");
+}
+
+#[test]
+fn a_reconnect_leaves_the_picker_open() {
+    let (mut d, log) = picker_driver(three_spaces());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "beta");
+    d.on_daemon_signals(false, true);
+    assert_eq!(
+        methods(&log)
+            .iter()
+            .filter(|m| *m == "linear.snapshot")
+            .count(),
+        2
+    );
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(filter(&d), "beta");
+    assert_eq!(selected(&d).as_deref(), Some("wB"));
+}
+
+#[test]
+fn a_help_sheet_open_when_a_snapshot_lands_stays_open() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    press(&mut d, KeyCode::Char('?'));
+    d.handle(Msg::LinearRefresh);
+    assert_eq!(d.app.screen, Screen::Help);
+    press(&mut d, KeyCode::Char('x'));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+/// Answers `linear.list` from a queue, one envelope per call.
+struct ListSequence {
+    inner: FakeBoardClient,
+    lists: std::collections::VecDeque<LinearListResult>,
+}
+
+impl BoardClient for ListSequence {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        if method == "linear.list" {
+            let next = self.lists.pop_front().expect("a queued list");
+            return Ok(serde_json::to_value(next)?);
+        }
+        self.inner.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.inner.subscribe()
+    }
+}
+
+#[test]
+fn a_list_arriving_again_keeps_the_filter_and_the_selected_identifier() {
+    let client = ListSequence {
+        inner: fake_with(bound_with_view()),
+        lists: [
+            three_spaces(),
+            spaces(vec![
+                space("wZ", "Zeta alpha"),
+                space("wA", "Alpha work"),
+                space("wB", "Beta notes"),
+                space("wC", "Gamma alpha"),
+            ]),
+        ]
+        .into(),
+    };
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "alpha");
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected(&d).as_deref(), Some("wC"));
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    assert_eq!(filter(&d), "alpha");
+    assert_eq!(visible_ids(&d), vec!["wZ", "wA", "wC"]);
+    assert_eq!(
+        selected(&d).as_deref(),
+        Some("wC"),
+        "by identifier, not index"
+    );
+}
+
+#[test]
+fn a_name_with_a_newline_and_a_tab_draws_on_one_row_and_filters_collapsed() {
+    let (mut d, _) = picker_driver(spaces(vec![
+        space("wA", "Alpha\nwork\tspace"),
+        space("wB", "Beta"),
+    ]));
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    let frame = draw(&d.app, W, H);
+    let row = frame.lines().find(|l| l.contains("wA")).expect("row drawn");
+    assert!(row.contains("Alpha work space"), "{frame}");
+    assert!(
+        !frame
+            .lines()
+            .any(|l| l.trim_start_matches(['│', ' ']).starts_with("work")),
+        "{frame}"
+    );
+    type_text(&mut d, "alpha work space");
+    assert_eq!(visible_ids(&d), vec!["wA"]);
+}
+
+#[test]
+fn two_projects_with_identical_names_show_their_team_keys_first() {
+    let (mut d, _) = picker_driver(projects(vec![
+        project("p1", "WEB", "Example launch"),
+        project("p2", "OPS", "Example launch"),
+    ]));
+    d.open_linear_picker(LinearListKind::Projects, None);
+    let frame = draw(&d.app, W, H);
+    let rows: Vec<&str> = frame
+        .lines()
+        .filter(|l| l.contains("Example launch"))
+        .collect();
+    assert_eq!(rows.len(), 2, "{frame}");
+    let web = rows[0].find("WEB").expect("team key drawn");
+    assert!(web < rows[0].find("Example launch").unwrap(), "{frame}");
+    assert!(rows[1].find("OPS").unwrap() < rows[1].find("Example launch").unwrap());
+    type_text(&mut d, "ops");
+    assert_eq!(visible_ids(&d), vec!["p2"]);
+}
+
+#[test]
+fn a_multi_byte_filter_matches_character_wise() {
+    let (mut d, _) = picker_driver(spaces(vec![
+        space("wA", "Café Ünïcode"),
+        space("wB", "Cafe plain"),
+    ]));
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    type_text(&mut d, "éü");
+    assert!(visible_ids(&d).is_empty());
+    press(&mut d, KeyCode::Backspace);
+    assert_eq!(filter(&d), "é", "backspace removes one character");
+    assert_eq!(visible_ids(&d), vec!["wA"]);
+    press(&mut d, KeyCode::Backspace);
+    type_text(&mut d, "ÜNÏ");
+    assert_eq!(visible_ids(&d), vec!["wA"], "case-insensitive beyond ASCII");
+}
+
+#[test]
+fn a_row_longer_than_the_picker_truncates_without_losing_the_discriminator() {
+    let long = "An extremely long project name ".repeat(8);
+    let (mut d, _) = picker_driver(projects(vec![project("p1", "WEB", &long)]));
+    d.open_linear_picker(LinearListKind::Projects, None);
+    let frame = draw(&d.app, 60, 20);
+    let row = frame
+        .lines()
+        .find(|l| l.contains("An extremely"))
+        .unwrap_or_else(|| panic!("row drawn:\n{frame}"));
+    assert!(row.contains("›WEB  An extremely"), "{frame}");
+    assert!(row.trim_end_matches(['"', '│']).ends_with('…'), "{frame}");
+    assert_eq!(
+        frame.lines().filter(|l| l.contains("An extremely")).count(),
+        1
+    );
+}
+
+#[test]
+fn an_empty_list_an_unavailable_list_and_a_failed_read_render_differently() {
+    let (mut empty, _) = picker_driver(spaces(vec![]));
+    empty.open_linear_picker(LinearListKind::Spaces, None);
+    let empty_frame = draw(&empty.app, W, H);
+    assert!(empty_frame.contains("no spaces"), "{empty_frame}");
+    insta::assert_snapshot!("linear_picker_empty_list", empty_frame);
+
+    let (mut unavailable, _) = picker_driver(LinearListResult::Spaces(LinearListEnvelope {
+        status: LinearListStatus::Unavailable,
+        message: Some("herdr is not running".into()),
+        rows: vec![],
+    }));
+    unavailable.open_linear_picker(LinearListKind::Spaces, None);
+    let unavailable_frame = draw(&unavailable.app, W, H);
+    assert!(
+        unavailable_frame.contains("unavailable: herdr is not running"),
+        "{unavailable_frame}"
+    );
+    assert!(
+        !unavailable_frame.contains("no spaces"),
+        "{unavailable_frame}"
+    );
+
+    let client = fake_with(bound_with_view())
+        .with_linear_list_error(LinearListKind::Spaces, "running work-spaces.sh: timed out");
+    let (mut failed, _, _) = linear_driver(client, linear_start());
+    failed.open_linear_picker(LinearListKind::Spaces, None);
+    let failed_frame = draw(&failed.app, W, H);
+    assert!(
+        failed_frame.contains("read failed: plugin unavailable: running work-spaces.sh: timed out"),
+        "{failed_frame}"
+    );
+    assert!(!failed_frame.contains("no spaces"), "{failed_frame}");
+    insta::assert_snapshot!("linear_picker_read_failed", failed_frame);
+}
+
+#[test]
+fn a_picker_opened_before_its_list_arrives_shows_the_loading_line_then_the_rows() {
+    let client = fake_with(bound_with_view()).with_linear_list(projects(vec![
+        project("p1", "WEB", "Example launch"),
+        project("p2", "OPS", "Example rollout"),
+    ]));
+    let mut d = linear_driver_deferred(client, linear_start());
+    assert!(d.deliver_pending_linear_snapshot());
+    d.open_linear_picker(LinearListKind::Projects, None);
+    assert!(d
+        .app
+        .linear
+        .as_ref()
+        .unwrap()
+        .list_in_flight(LinearListKind::Projects, None));
+    d.open_linear_picker(LinearListKind::Projects, None);
+    let loading = draw(&d.app, W, H);
+    assert!(loading.contains("loading projects…"), "{loading}");
+    assert!(
+        !loading.contains("no projects") && !loading.contains("read failed"),
+        "{loading}"
+    );
+    insta::assert_snapshot!("linear_picker_loading", loading);
+    assert!(d.deliver_pending_linear_list());
+    assert!(
+        !d.deliver_pending_linear_list(),
+        "a second open sent no second read"
+    );
+    assert!(!d
+        .app
+        .linear
+        .as_ref()
+        .unwrap()
+        .list_in_flight(LinearListKind::Projects, None));
+    let rows = draw(&d.app, W, H);
+    assert!(!rows.contains("loading projects"), "{rows}");
+    assert!(
+        rows.contains("Example launch") && rows.contains("Example rollout"),
+        "{rows}"
+    );
+}
+
+#[test]
+fn the_project_picker_filtered() {
+    let (mut d, _) = picker_driver(projects(vec![
+        project("p1", "WEB", "Example launch"),
+        project("p2", "OPS", "Example rollout"),
+        project("p3", "WEB", "Sample cleanup"),
+    ]));
+    d.open_linear_picker(LinearListKind::Projects, None);
+    type_text(&mut d, "example");
+    press(&mut d, KeyCode::Down);
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("filter: example"), "{frame}");
+    assert!(!frame.contains("Sample cleanup"), "{frame}");
+    insta::assert_snapshot!("linear_project_picker_filtered", frame);
+}
+
+#[test]
+fn every_string_in_a_list_is_sanitised_on_arrival() {
+    let (mut d, _) = picker_driver(LinearListResult::Spaces(LinearListEnvelope {
+        status: LinearListStatus::Unavailable,
+        message: Some("herdr\u{1b}[2J down\u{202E}".into()),
+        rows: vec![space("w\u{200B}A", "Alpha\u{7f} work")],
+    }));
+    d.open_linear_picker(LinearListKind::Spaces, None);
+    let picker = d.app.picker.as_ref().unwrap();
+    assert_eq!(selected(&d).as_deref(), Some("wA"));
+    assert_eq!(
+        picker.outcome,
+        Some(board_tui::app::ListOutcome::Read {
+            status: LinearListStatus::Unavailable,
+            message: Some("herdr[2J down".into()),
+        })
+    );
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("Alpha work"), "{frame}");
+    assert!(
+        !frame.contains('\u{1b}') && !frame.contains('\u{202E}'),
+        "{frame}"
+    );
+}
+
+#[test]
+fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
+    let client = fake_with(bound_with_view()).with_linear_list(LinearListResult::Views(
+        LinearListEnvelope {
+            status: LinearListStatus::Ok,
+            message: None,
+            rows: vec![board_core::protocol::LinearViewRow {
+                id: "v1".into(),
+                name: "Example view".into(),
+            }],
+        },
+    ));
+    let (client, log) = RecordingClient::new(client);
+    let mut d = linear_driver_deferred(client, linear_start());
+    assert!(d.deliver_pending_linear_snapshot());
+    d.open_linear_picker(LinearListKind::Views, Some("proj-a".into()));
+    press(&mut d, KeyCode::Esc);
+    d.open_linear_picker(LinearListKind::Views, Some("proj-b".into()));
+    assert!(d.deliver_pending_linear_list());
+    assert!(
+        d.deliver_pending_linear_list(),
+        "the second project was read too"
+    );
+    let ids: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.list")
+        .map(|(_, p)| p["id"].clone())
+        .collect();
+    assert_eq!(ids, vec![Value::from("proj-a"), Value::from("proj-b")]);
+    assert_eq!(selected(&d).as_deref(), Some("v1"));
 }

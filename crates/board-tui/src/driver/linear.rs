@@ -7,13 +7,22 @@ use std::sync::mpsc;
 
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::protocol::{
-    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearListKind, LinearListParams, LinearSnapshotParams, PaneFocusParams,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 
-use crate::app::{LinearFailure, Mode, Msg};
+use crate::app::{LinearArrival, LinearFailure, Mode, Msg};
 use crate::Driver;
 
-pub(crate) type LinearArrival = Result<LinearSnapshot, LinearFailure>;
+/// A read held by the test hook instead of running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Pending {
+    Snapshot,
+    List {
+        kind: LinearListKind,
+        id: Option<String>,
+    },
+}
 
 /// The only effects the driver executes in Linear mode. Everything else is
 /// refused before a request is built. This guards the board's own code, not
@@ -34,7 +43,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
 
 /// The daemon reports an unknown method as protocol code 1 with the message
 /// `bad request: unknown method: <name>`; code 1 alone also covers bad params.
-pub(crate) fn classify(result: anyhow::Result<LinearSnapshot>) -> LinearArrival {
+pub(crate) fn classify<T>(result: anyhow::Result<T>) -> Result<T, LinearFailure> {
     result.map_err(|error| {
         let rpc = error
             .chain()
@@ -65,32 +74,68 @@ pub(crate) fn classify(result: anyhow::Result<LinearSnapshot>) -> LinearArrival 
 }
 
 impl Driver {
-    pub(super) fn fetch_linear_snapshot(&mut self) {
-        if let Some(pending) = self.deferred_linear.as_mut() {
-            *pending += 1;
-            return;
-        }
-        let Some(params) = self.linear_params() else {
-            return;
-        };
+    /// Run `read` on a worker against a fresh connection when the client can
+    /// reconnect, else synchronously, and feed the answer as an arrival. Every
+    /// Linear read shares this, so a list does not rebuild the channel.
+    fn run_linear_read<T: Send + 'static>(
+        &mut self,
+        read: impl FnOnce(&mut dyn BoardClient) -> anyhow::Result<T> + Send + 'static,
+        wrap: impl FnOnce(Result<T, LinearFailure>) -> LinearArrival + Send + 'static,
+    ) {
         match (self.client.reconnect_path(), self.linear_tx.clone()) {
             (Some(path), Some(tx)) => {
-                // Bounded, so a daemon that never answers cannot hold the
-                // header on "refreshing" and refuse every later refresh. The
+                // Bounded, so a daemon that never answers cannot hold a read
+                // in flight forever and refuse every later one. The
                 // connection is dropped with the thread, which tells the
                 // daemon to stop the script.
                 std::thread::spawn(move || {
                     let result = UnixClient::connect(&path).and_then(|mut client| {
                         client.set_read_timeout(Some(LINEAR_SNAPSHOT_CLIENT_TIMEOUT))?;
-                        client.linear_snapshot(&params)
+                        read(&mut client)
                     });
-                    let _ = tx.send(classify(result));
+                    let _ = tx.send(wrap(classify(result)));
                 });
             }
             _ => {
-                let result = self.client.linear_snapshot(&params);
-                self.handle(Msg::LinearArrived(Box::new(classify(result))));
+                let result = read(self.client.as_mut());
+                self.handle(Msg::LinearArrived(Box::new(wrap(classify(result)))));
             }
+        }
+    }
+
+    pub(super) fn fetch_linear_snapshot(&mut self) {
+        if let Some(pending) = self.deferred_linear.as_mut() {
+            pending.push_back(Pending::Snapshot);
+            return;
+        }
+        let Some(params) = self.linear_params() else {
+            return;
+        };
+        self.run_linear_read(
+            move |client| client.linear_snapshot(&params),
+            |result| LinearArrival::Snapshot(Box::new(result)),
+        );
+    }
+
+    fn fetch_linear_list(&mut self, kind: LinearListKind, id: Option<String>) {
+        if let Some(pending) = self.deferred_linear.as_mut() {
+            pending.push_back(Pending::List { kind, id });
+            return;
+        }
+        let params = self.list_params(kind, id.clone());
+        self.run_linear_read(
+            move |client| client.linear_list(&params),
+            move |result| LinearArrival::List { kind, id, result },
+        );
+    }
+
+    /// Open the Linear picker for `kind` (`id` is a views list's project id)
+    /// and read its list. The read goes straight to the client rather than
+    /// through an effect: Linear mode's allow set does not carry a list
+    /// effect yet.
+    pub fn open_linear_picker(&mut self, kind: LinearListKind, id: Option<String>) {
+        if crate::app::open_linear_picker(&mut self.app, kind, id.clone()) {
+            self.fetch_linear_list(kind, id);
         }
     }
 
@@ -103,40 +148,73 @@ impl Driver {
         })
     }
 
-    /// Feed every snapshot the worker delivered since the last call.
+    fn list_params(&self, kind: LinearListKind, id: Option<String>) -> LinearListParams {
+        LinearListParams {
+            kind,
+            id,
+            origin_socket: self.origin.origin_socket.clone(),
+            plugin_root: self.origin.plugin_root.clone(),
+        }
+    }
+
+    /// Feed every answer the workers delivered since the last call.
     pub fn drain_linear_arrivals(&mut self) {
         let mut arrived = Vec::new();
         if let Some(rx) = &self.linear_rx {
-            while let Ok(result) = rx.try_recv() {
-                arrived.push(result);
+            while let Ok(arrival) = rx.try_recv() {
+                arrived.push(arrival);
             }
         }
-        for result in arrived {
-            self.handle(Msg::LinearArrived(Box::new(result)));
+        for arrival in arrived {
+            self.handle(Msg::LinearArrived(Box::new(arrival)));
         }
     }
 
-    /// Hold snapshot fetches instead of running them, so a test can observe
-    /// the in-flight state against a synchronous client.
+    /// Hold Linear reads instead of running them, so a test can observe the
+    /// in-flight state against a synchronous client.
     pub fn defer_linear_snapshots(&mut self) {
-        self.deferred_linear = Some(0);
+        self.deferred_linear = Some(Default::default());
     }
 
-    /// Run one held fetch synchronously and feed its arrival. Returns whether
-    /// a fetch was pending.
+    fn take_pending(&mut self, want: impl Fn(&Pending) -> bool) -> Option<Pending> {
+        let pending = self.deferred_linear.as_mut()?;
+        let at = pending.iter().position(want)?;
+        pending.remove(at)
+    }
+
+    /// Run the oldest held snapshot fetch synchronously and feed its arrival.
+    /// Returns whether one was pending.
     pub fn deliver_pending_linear_snapshot(&mut self) -> bool {
-        let Some(pending) = self.deferred_linear.as_mut() else {
-            return false;
-        };
-        if *pending == 0 {
+        if self
+            .take_pending(|p| matches!(p, Pending::Snapshot))
+            .is_none()
+        {
             return false;
         }
-        *pending -= 1;
         let Some(params) = self.linear_params() else {
             return false;
         };
         let result = self.client.linear_snapshot(&params);
-        self.handle(Msg::LinearArrived(Box::new(classify(result))));
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::Snapshot(
+            Box::new(classify(result)),
+        ))));
+        true
+    }
+
+    /// Run the oldest held list read synchronously and feed its arrival.
+    /// Returns whether one was pending.
+    pub fn deliver_pending_linear_list(&mut self) -> bool {
+        let Some(Pending::List { kind, id }) =
+            self.take_pending(|p| matches!(p, Pending::List { .. }))
+        else {
+            return false;
+        };
+        let result = self.client.linear_list(&self.list_params(kind, id.clone()));
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::List {
+            kind,
+            id,
+            result: classify(result),
+        })));
         true
     }
 
@@ -215,7 +293,9 @@ pub(crate) fn is_http_url(url: &str) -> bool {
     lower.starts_with("https://") || lower.starts_with("http://")
 }
 
-pub(super) fn arrival_channel() -> (mpsc::Sender<LinearArrival>, mpsc::Receiver<LinearArrival>) {
+pub(super) type ArrivalChannel = (mpsc::Sender<LinearArrival>, mpsc::Receiver<LinearArrival>);
+
+pub(super) fn arrival_channel() -> ArrivalChannel {
     mpsc::channel()
 }
 
@@ -229,7 +309,7 @@ mod tests {
             std::io::ErrorKind::WouldBlock,
             "Resource temporarily unavailable",
         );
-        match classify(Err(anyhow::Error::new(io))) {
+        match classify::<()>(Err(anyhow::Error::new(io))) {
             Err(LinearFailure::Failed(text)) => {
                 assert!(text.contains("did not answer within"), "{text}")
             }
@@ -240,7 +320,7 @@ mod tests {
     #[test]
     fn a_daemon_error_is_not_mistaken_for_a_timeout() {
         let rpc = RpcClientError::new(6, None, "plugin unavailable".into(), None);
-        match classify(Err(anyhow::Error::new(rpc))) {
+        match classify::<()>(Err(anyhow::Error::new(rpc))) {
             Err(LinearFailure::Failed(text)) => assert_eq!(text, "plugin unavailable"),
             other => panic!("{other:?}"),
         }

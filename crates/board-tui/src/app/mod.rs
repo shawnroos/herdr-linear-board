@@ -39,6 +39,7 @@ mod effect;
 mod forms;
 mod help;
 mod linear;
+mod linear_picker;
 mod mouse;
 mod move_column;
 mod nav;
@@ -48,12 +49,15 @@ mod state;
 mod switcher;
 
 pub use effect::Effect;
-pub use linear::{sanitise, sanitise_snapshot, LinearFailure, LinearState, PaneRow};
+pub use linear::{
+    sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState, PaneRow,
+};
+pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use state::{
-    CardFilter, CommentHistoryView, Confirm, ConfirmPurpose, DetailScrollTarget, DragKind,
-    DragState, MoveColumnState, Picker, PickerAction, PickerPurpose, PickerRow, ReorderCardState,
-    SwitcherState, Toast,
+    collapse_line, CardFilter, CommentHistoryView, Confirm, ConfirmPurpose, DetailScrollTarget,
+    DragKind, DragState, LinearPickerRow, ListOutcome, MoveColumnState, Picker, PickerAction,
+    PickerPurpose, PickerRow, ReorderCardState, SwitcherState, Toast,
 };
 
 pub(crate) use state::column_options;
@@ -111,6 +115,8 @@ pub enum Screen {
     LinearNotBound,
     LinearError,
     LinearStaleDaemon,
+    /// A type-to-filter Linear list over the board (`App::picker`).
+    LinearPicker,
 }
 
 impl Screen {
@@ -123,6 +129,7 @@ impl Screen {
                 | Screen::LinearNotBound
                 | Screen::LinearError
                 | Screen::LinearStaleDaemon
+                | Screen::LinearPicker
         )
     }
 }
@@ -163,8 +170,8 @@ pub enum Msg {
     /// Linear mode: ask for a fresh snapshot (a key, the daemon reconnect
     /// signal, or start-up). The reducer drops it while one is in flight.
     LinearRefresh,
-    /// Linear mode: the snapshot worker's answer.
-    LinearArrived(Box<Result<board_core::protocol::LinearSnapshot, LinearFailure>>),
+    /// Linear mode: a snapshot or list worker's answer.
+    LinearArrived(Box<LinearArrival>),
 }
 
 /// The whole TUI state.
@@ -551,6 +558,7 @@ fn on_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         | Screen::LinearDetail
         | Screen::LinearNotBound
         | Screen::LinearError
-        | Screen::LinearStaleDaemon => vec![],
+        | Screen::LinearStaleDaemon
+        | Screen::LinearPicker => vec![],
     }
 }

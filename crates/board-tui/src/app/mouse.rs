@@ -330,7 +330,7 @@ fn handle_zone(app: &mut App, zone: Zone) -> Option<Vec<Effect>> {
             let valid = app
                 .picker
                 .as_ref()
-                .is_some_and(|picker| idx < picker.rows.len());
+                .is_some_and(|picker| idx < picker.visible_rows().len());
             if valid {
                 app.picker.as_mut().expect("validated picker").sel = idx;
                 Some(super::on_key(app, key(KeyCode::Enter)))

@@ -67,6 +67,10 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
             draw_board(app, state, f, area);
             draw_help(f, area);
         }
+        Screen::LinearPicker => {
+            draw_board(app, state, f, area);
+            super::overlays::draw_linear_picker(app, state, f, area);
+        }
         _ => draw_board(app, state, f, area),
     }
     draw_bottom(app, f, area);
@@ -172,7 +176,7 @@ fn split_at_width(s: &str, max: usize) -> (&str, &str) {
 
 /// Truncation by display cells: `view::truncate` counts chars, which lets a
 /// wide glyph push the ellipsis past the column edge.
-fn fit(s: &str, max: usize) -> String {
+pub(super) fn fit(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_string();
     }
@@ -676,6 +680,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
                     Screen::LinearNotBound => "not bound",
                     Screen::LinearError => "snapshot failed",
                     Screen::LinearStaleDaemon => "daemon older than board",
+                    Screen::LinearPicker => "picker",
                     _ => "",
                 },
                 Style::default().add_modifier(Modifier::BOLD),
@@ -683,7 +688,6 @@ fn draw_help(f: &mut Frame, area: Rect) {
         }
         lines.push(Line::from(format!("  {key:<12} {description}")));
     }
-    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "any key closes",
         Style::default().fg(Color::DarkGray),
@@ -731,6 +735,7 @@ mod tests {
                 | Screen::LinearNotBound
                 | Screen::LinearError
                 | Screen::LinearStaleDaemon
+                | Screen::LinearPicker
         )
     }
 

@@ -3,7 +3,9 @@
 //! nothing here reads `App::board`, and no effect emitted here writes to
 //! Linear, to the plugin's records, or to the herdr layout.
 
-use board_core::protocol::{LinearGroup, LinearIssue, LinearSnapshot};
+use board_core::protocol::{
+    LinearGroup, LinearIssue, LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::nav::{nav_delta, step_clamped};
@@ -16,6 +18,17 @@ pub enum LinearFailure {
     MethodNotFound,
     /// Any other failure, with the daemon's or the transport's message.
     Failed(String),
+}
+
+/// What a Linear worker delivers: one snapshot or one list, each classified.
+#[derive(Debug)]
+pub enum LinearArrival {
+    Snapshot(Box<Result<LinearSnapshot, LinearFailure>>),
+    List {
+        kind: LinearListKind,
+        id: Option<String>,
+        result: Result<LinearListResult, LinearFailure>,
+    },
 }
 
 /// One pane row of the detail screen: which binding it belongs to, its id,
@@ -49,6 +62,10 @@ pub struct LinearState {
     pub stale_daemon: Option<(String, Option<String>)>,
     /// `App::now` when `last_good` arrived.
     pub fetched_at: Option<i64>,
+    /// Lists with a read on the way, keyed by kind and the list's argument.
+    pub lists_in_flight: std::collections::BTreeSet<(LinearListKind, Option<String>)>,
+    /// The row last chosen in a Linear picker, for the flow that opened it.
+    pub pick: Option<super::LinearPick>,
 }
 
 impl LinearState {
@@ -71,7 +88,15 @@ impl LinearState {
             error: None,
             stale_daemon: None,
             fetched_at: None,
+            lists_in_flight: Default::default(),
+            pick: None,
         }
+    }
+
+    pub fn list_in_flight(&self, kind: LinearListKind, id: Option<&str>) -> bool {
+        self.lists_in_flight
+            .iter()
+            .any(|(k, i)| *k == kind && i.as_deref() == id)
     }
 
     pub fn snapshot(&self) -> Option<&LinearSnapshot> {
@@ -228,7 +253,7 @@ impl LinearState {
         }
     }
 
-    fn home_screen(&self) -> Screen {
+    pub(super) fn home_screen(&self) -> Screen {
         if !self.bound() {
             Screen::LinearNotBound
         } else if self.detail.is_some() {
@@ -244,7 +269,13 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
         // `board_changed` never refreshes a Linear board (R21).
         Msg::Refresh | Msg::Mouse(_) => vec![],
         Msg::LinearRefresh => request_or_queue(app),
-        Msg::LinearArrived(result) => arrived(app, *result),
+        Msg::LinearArrived(arrival) => match *arrival {
+            LinearArrival::Snapshot(result) => arrived(app, *result),
+            LinearArrival::List { kind, id, result } => {
+                super::linear_picker::list_arrived(app, kind, id, result);
+                vec![]
+            }
+        },
         Msg::Key(k) => linear_key(app, k),
     }
 }
@@ -306,7 +337,17 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             Screen::LinearError
         }
     };
-    app.screen = screen;
+    // An overlay open when a snapshot lands stays open (R19): the new home
+    // screen becomes where closing it goes.
+    match app.screen {
+        Screen::LinearPicker if app.picker.is_some() => {
+            if let Some(picker) = app.picker.as_mut() {
+                picker.return_to = screen;
+            }
+        }
+        Screen::Help => app.help_return_to = screen,
+        _ => app.screen = screen,
+    }
     if follow_up {
         effects.extend(request_snapshot(app));
     }
@@ -324,6 +365,11 @@ fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             | KeyModifiers::HYPER,
     ) {
         return vec![];
+    }
+    // Before the global keys: in a picker every printable key is filter text,
+    // so `r` must not fetch and `?` must not open help (KTD7).
+    if app.screen == Screen::LinearPicker {
+        return super::linear_picker::linear_picker_key(app, k);
     }
     if k.code == KeyCode::Char('?') && app.screen != Screen::Help {
         app.help_return_to = app.screen;
@@ -465,31 +511,50 @@ fn is_stripped(c: char) -> bool {
     (c.is_control() && c != '\t' && c != '\n') || board_core::text::is_format_char(c)
 }
 
+fn sanitise_value(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => Value::String(sanitise(&text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(sanitise_value).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (sanitise(&key), sanitise_value(item)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// Every string in the document, keys included, through [`sanitise`]. It walks
 /// the serialised form rather than the struct's fields, so a string field
 /// added to any Linear type is covered without a line here (R22).
 pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
-    fn walk(value: serde_json::Value) -> serde_json::Value {
-        use serde_json::Value;
-        match value {
-            Value::String(text) => Value::String(sanitise(&text)),
-            Value::Array(items) => Value::Array(items.into_iter().map(walk).collect()),
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .map(|(key, item)| (sanitise(&key), walk(item)))
-                    .collect(),
-            ),
-            other => other,
-        }
-    }
     let cleaned = serde_json::to_value(&*snapshot)
-        .map(walk)
+        .map(sanitise_value)
         .and_then(serde_json::from_value::<LinearSnapshot>);
     match cleaned {
         Ok(cleaned) => *snapshot = cleaned,
         // The document round-trips through its own types, so this does not
         // happen; if it did, nothing unsanitised may reach the screen.
         Err(_) => *snapshot = LinearSnapshot::default(),
+    }
+}
+
+/// The same walk over a list envelope (R24).
+pub fn sanitise_list(result: LinearListResult) -> LinearListResult {
+    let kind = result.kind();
+    let cleaned = serde_json::to_value(&result)
+        .map(sanitise_value)
+        .and_then(|value| LinearListResult::from_value(kind, value));
+    match cleaned {
+        Ok(cleaned) => cleaned,
+        // Same reasoning as the snapshot: an unknown-status empty envelope,
+        // never the unsanitised one.
+        Err(_) => match kind {
+            LinearListKind::Spaces => LinearListResult::Spaces(LinearListEnvelope::default()),
+            LinearListKind::Projects => LinearListResult::Projects(LinearListEnvelope::default()),
+            LinearListKind::Views => LinearListResult::Views(LinearListEnvelope::default()),
+        },
     }
 }
 
