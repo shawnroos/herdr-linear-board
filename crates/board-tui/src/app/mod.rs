@@ -53,7 +53,7 @@ pub use linear::{
     sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState, PaneRow,
     SpaceList, StripView,
 };
-pub use linear_picker::{open_linear_picker, LinearPick};
+pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};
 pub use nav::clamp_selection;
 pub use state::{
     collapse_line, CardFilter, CommentHistoryView, Confirm, ConfirmPurpose, DetailScrollTarget,

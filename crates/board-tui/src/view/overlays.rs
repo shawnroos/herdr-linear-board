@@ -266,6 +266,19 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
     let clean = |s: &str| collapse_line(&sanitise(s));
 
     let mut notes: Vec<(String, Style)> = Vec::new();
+    if let (LinearListKind::Projects, Some(space)) = (kind, &state.bind_space) {
+        // The id first, as on every row, so a narrow box cuts the label.
+        notes.push((
+            format!("binds space {} · {}", clean(&space.id), clean(&space.label)),
+            Style::default().fg(Color::LightCyan),
+        ));
+    }
+    if kind == LinearListKind::Projects && state.handoff_in_flight {
+        notes.push((
+            "starting the bind in a new tab…".to_string(),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     let in_flight = state.list_in_flight(kind, picker.list_id.as_deref());
     if in_flight {
         notes.push((format!("loading {noun}…"), dim));

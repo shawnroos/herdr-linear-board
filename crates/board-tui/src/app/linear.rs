@@ -4,8 +4,8 @@
 //! Linear, to the plugin's records, or to the herdr layout.
 
 use board_core::protocol::{
-    LinearGroup, LinearIssue, LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot,
-    LinearSpaceRow, LinearSpacesList,
+    LinearBindHandoffResult, LinearGroup, LinearIssue, LinearListEnvelope, LinearListKind,
+    LinearListResult, LinearSnapshot, LinearSpaceRow, LinearSpacesList,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -30,6 +30,7 @@ pub enum LinearArrival {
         id: Option<String>,
         result: Result<LinearListResult, LinearFailure>,
     },
+    Handoff(Result<LinearBindHandoffResult, LinearFailure>),
 }
 
 /// One pane row of the detail screen: which binding it belongs to, its id,
@@ -95,6 +96,11 @@ pub struct LinearState {
     /// The space chosen on the strip, whose project picker is or was open.
     /// A project pick (`pick.kind == Projects`) is for this space.
     pub bind_space: Option<LinearSpaceRow>,
+    /// A `linear.bind_handoff` is on the way; a second choice sends nothing.
+    pub handoff_in_flight: bool,
+    /// Set when a handoff opened its tab; the board names the refresh key
+    /// until the next refresh.
+    pub bind_note: Option<String>,
 }
 
 impl LinearState {
@@ -125,6 +131,8 @@ impl LinearState {
             strip_focus: false,
             strip_sel: 0,
             bind_space: None,
+            handoff_in_flight: false,
+            bind_note: None,
         }
     }
 
@@ -327,6 +335,7 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
                 super::linear_picker::list_arrived(app, kind, id, result);
                 vec![]
             }
+            LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
         },
         Msg::Key(k) => linear_key(app, k),
     }
@@ -344,6 +353,7 @@ fn request_snapshot(app: &mut App) -> Vec<Effect> {
         return vec![];
     };
     state.in_flight = true;
+    state.bind_note = None;
     let mut effects = vec![Effect::LinearSnapshot];
     // The strip's space list is read with every snapshot (R11).
     if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {

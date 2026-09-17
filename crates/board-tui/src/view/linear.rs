@@ -150,18 +150,25 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
             "mapping {mapping} is not the default; rendering as default"
         ));
     }
-    let second = if warnings.is_empty() {
-        Line::from(Span::styled(
+    let mut second = if warnings.is_empty() {
+        vec![Span::styled(
             " Enter detail · r refresh · ? help · q quit",
             Style::default().fg(Color::DarkGray),
-        ))
+        )]
     } else {
-        Line::from(Span::styled(
+        vec![Span::styled(
             format!(" ! {}", warnings.join(" · ")),
             Style::default().fg(Color::LightYellow),
-        ))
+        )]
     };
-    vec![Line::from(first), second]
+    if let Some(note) = &state.bind_note {
+        // Ahead of the key hints and warnings, which the width may cut.
+        second.insert(
+            0,
+            Span::styled(format!(" {note} ·"), Style::default().fg(Color::LightGreen)),
+        );
+    }
+    vec![Line::from(first), Line::from(second)]
 }
 
 fn split_at_width(s: &str, max: usize) -> (&str, &str) {

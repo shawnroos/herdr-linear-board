@@ -112,6 +112,16 @@ pub enum Effect {
         kind: board_core::protocol::LinearListKind,
         id: Option<String>,
     },
+    /// Linear mode: `linear.bind_handoff` on the origin session. Ids and a
+    /// directory only: a name never reaches the bind line. The reducer marks
+    /// the handoff in flight before emitting it.
+    BindHandoff {
+        space: String,
+        project: String,
+        view: Option<String>,
+        issue: Option<String>,
+        working_directory: Option<String>,
+    },
     /// Linear mode: `pane.focus` on the origin session.
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.

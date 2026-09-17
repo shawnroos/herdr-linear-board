@@ -2076,10 +2076,8 @@ fn escape_from_the_strip_returns_focus_to_the_board_without_quitting() {
 
 #[test]
 fn a_click_inside_an_open_picker_chooses_the_row_under_the_pointer() {
-    let mut d = {
-        let (d, _, _) = linear_driver(strip_client(), linear_start());
-        d
-    };
+    let (client, log) = RecordingClient::new(strip_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Enter);
     let frame = render_at(&mut d, W, H);
@@ -2090,16 +2088,16 @@ fn a_click_inside_an_open_picker_chooses_the_row_under_the_pointer() {
     let x = frame.lines().nth(y).unwrap().find("OPS").unwrap();
     let x = frame.lines().nth(y).unwrap()[..x].chars().count() as u16;
     d.handle(left_down(x, y as u16));
-    assert!(d.app.picker.is_none());
-    assert_eq!(d.app.screen, Screen::LinearBoard);
-    assert_eq!(
-        d.app.linear.as_ref().unwrap().pick,
-        Some(board_tui::app::LinearPick {
-            kind: LinearListKind::Projects,
-            list_id: None,
-            id: "p2".into(),
-        })
-    );
+    let sent: Vec<(String, String)> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.bind_handoff")
+        .map(|(_, p)| (p["space"].to_string(), p["project"].to_string()))
+        .collect();
+    assert_eq!(sent, vec![("\"wB\"".to_string(), "\"p2\"".to_string())]);
+    // The fake has no handoff configured, so it fails and the picker stays.
+    assert_eq!(d.app.screen, Screen::LinearPicker);
     assert_eq!(bind_space(&d).as_deref(), Some("wB"));
     assert_eq!(
         selection(&d),
@@ -2121,4 +2119,235 @@ fn a_click_on_a_card_while_the_strip_has_focus_opens_the_card() {
     assert!(d.app.picker.is_none());
     assert!(!d.app.linear.as_ref().unwrap().strip_focus);
     assert_eq!(bind_space(&d), None);
+}
+
+// -- the bind handoff: a space, then a project (R11, R15, R20, R27, AE4, AE5, AE9) --
+
+use board_core::protocol::LinearBindHandoffResult;
+
+fn handoff_result() -> LinearBindHandoffResult {
+    LinearBindHandoffResult {
+        tab_id: "wB:t7".into(),
+        pane_id: "wB:p7".into(),
+    }
+}
+
+fn handoff_client() -> FakeBoardClient {
+    strip_client().with_linear_bind_handoff(handoff_result())
+}
+
+/// `s`, then Enter on the strip's first space (`wB`): the project picker for it.
+fn open_space_picker(d: &mut Driver) {
+    press(d, KeyCode::Char('s'));
+    press(d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert_eq!(bind_space(d).as_deref(), Some("wB"));
+}
+
+fn handoffs(log: &board_tui::testkit::RequestLog) -> Vec<Value> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.bind_handoff")
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+#[test]
+fn choosing_a_space_then_a_project_sends_one_handoff_with_both_ids_and_no_names() {
+    let client = fake_with(bound_with_view())
+        .with_linear_list(projects(vec![
+            project("p1", "WEB", "Launch\nrm -rf ~"),
+            project("p2", "OPS", "Example rollout"),
+        ]))
+        .with_linear_bind_handoff(handoff_result());
+    let (client, log) = RecordingClient::new(client);
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_space_picker(&mut d);
+    let frame = render_at(&mut d, W, H);
+    assert!(
+        frame.contains("Launch rm -rf ~"),
+        "sanitised on one row:\n{frame}"
+    );
+    press(&mut d, KeyCode::Enter);
+    let sent = handoffs(&log);
+    assert_eq!(
+        sent,
+        vec![serde_json::json!({
+            "space": "wB",
+            "project": "p1",
+            "origin_socket": "/tmp/herdr-test.sock",
+        })]
+    );
+    let text = sent[0].to_string();
+    for name in ["Launch", "rm -rf", "\\n", "Beta notes", "WEB"] {
+        assert!(!text.contains(name), "{name} in {text}");
+    }
+}
+
+#[test]
+fn the_project_picker_lists_only_the_rows_the_membership_read_returned() {
+    let (client, log) = RecordingClient::new(handoff_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_space_picker(&mut d);
+    assert_eq!(visible_ids(&d), vec!["p1", "p2"]);
+    let frame = render_at(&mut d, W, H);
+    let picker: Vec<&str> = frame
+        .lines()
+        .filter(|l| l.contains('›') || l.contains("OPS"))
+        .collect();
+    assert!(
+        !picker.iter().any(|l| l.contains("AI Canvas Tools")),
+        "the bound project is not a member row:\n{frame}"
+    );
+    let lists: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p)| m == "linear.list" && p["kind"] == "projects")
+        .map(|(_, p)| p.clone())
+        .collect();
+    assert_eq!(lists.len(), 1);
+    assert!(lists[0].get("id").is_none(), "{lists:?}");
+}
+
+#[test]
+fn the_space_picker() {
+    let (mut d, _, _) = linear_driver(handoff_client(), start_with_socket());
+    open_space_picker(&mut d);
+    let frame = render_at(&mut d, W, H);
+    assert!(frame.contains("binds space wB · Beta notes"), "{frame}");
+    insta::assert_snapshot!("linear_space_picker", frame);
+}
+
+#[test]
+fn after_a_successful_handoff_the_board_focuses_the_returned_pane() {
+    let (client, log) = RecordingClient::new(handoff_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_space_picker(&mut d);
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Enter);
+    let seen = methods(&log);
+    assert_eq!(
+        seen[seen.len() - 3..].to_vec(),
+        vec!["linear.list", "linear.bind_handoff", "pane.focus"],
+        "{seen:?}"
+    );
+    let focus = log.lock().unwrap().last().unwrap().1.clone();
+    assert_eq!(focus["pane_id"], "wB:p7");
+    assert_eq!(focus["origin_socket"], "/tmp/herdr-test.sock");
+    assert_eq!(handoffs(&log)[0]["project"], "p2");
+    assert!(d.app.picker.is_none());
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(bind_space(&d), None);
+    assert!(!d.app.linear.as_ref().unwrap().handoff_in_flight);
+}
+
+#[test]
+fn after_a_handoff_the_board_names_the_refresh_key_until_the_next_refresh() {
+    let (mut d, _, _) = linear_driver(handoff_client(), start_with_socket());
+    open_space_picker(&mut d);
+    press(&mut d, KeyCode::Enter);
+    d.app.toast = None;
+    let frame = render_at(&mut d, W, H);
+    assert!(
+        frame.contains("bind started in a new tab · r refresh when it finishes"),
+        "{frame}"
+    );
+    press(&mut d, KeyCode::Char('j'));
+    let still = render_at(&mut d, W, H);
+    assert!(still.contains("r refresh when it finishes"), "{still}");
+    press(&mut d, KeyCode::Char('r'));
+    let refreshed = render_at(&mut d, W, H);
+    assert!(!refreshed.contains("when it finishes"), "{refreshed}");
+}
+
+#[test]
+fn a_handoff_returning_herdr_unavailable_toasts_and_leaves_the_picker_open() {
+    let client = strip_client().with_linear_bind_handoff_error("connecting to Herdr: refused");
+    let (client, log) = RecordingClient::new(client);
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_space_picker(&mut d);
+    press(&mut d, KeyCode::Enter);
+    assert!(
+        toast(&d).contains("connecting to Herdr: refused"),
+        "{}",
+        toast(&d)
+    );
+    assert!(d.app.toast.as_ref().unwrap().is_error);
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert!(d.app.picker.is_some());
+    assert_eq!(bind_space(&d).as_deref(), Some("wB"));
+    assert!(!methods(&log).iter().any(|m| m == "pane.focus"));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        handoffs(&log).len(),
+        2,
+        "a failure clears the in-flight mark"
+    );
+}
+
+#[test]
+fn a_handoff_whose_agent_start_failed_toasts_the_failure() {
+    let client = strip_client()
+        .with_linear_bind_handoff_error("agent.start bind-t7 on wB:p7: unsupported_agent_kind");
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_space_picker(&mut d);
+    press(&mut d, KeyCode::Enter);
+    assert!(toast(&d).contains("bind failed"), "{}", toast(&d));
+    assert!(toast(&d).contains("agent.start"), "{}", toast(&d));
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    let frame = render_at(&mut d, W, H);
+    assert!(!frame.contains("r refresh when it finishes"), "{frame}");
+}
+
+#[test]
+fn while_a_handoff_is_in_flight_the_picker_says_so_and_a_second_enter_sends_nothing() {
+    let (client, log) = RecordingClient::new(handoff_client());
+    let mut d = linear_driver_deferred(client, start_with_socket());
+    assert!(d.deliver_pending_linear_snapshot());
+    assert!(d.deliver_pending_linear_list());
+    open_space_picker(&mut d);
+    assert!(d.deliver_pending_linear_list());
+    press(&mut d, KeyCode::Enter);
+    let waiting = render_at(&mut d, W, H);
+    assert!(
+        waiting.contains("starting the bind in a new tab…"),
+        "{waiting}"
+    );
+    press(&mut d, KeyCode::Enter);
+    d.handle(left_down(0, 0));
+    assert!(d.deliver_pending_linear_handoff());
+    assert!(!d.deliver_pending_linear_handoff(), "exactly one was held");
+    assert_eq!(handoffs(&log).len(), 1);
+    assert!(methods(&log).iter().any(|m| m == "pane.focus"));
+}
+
+#[test]
+fn a_handoff_without_a_herdr_socket_toasts_and_sends_nothing() {
+    let (client, log) = RecordingClient::new(handoff_client());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    open_space_picker(&mut d);
+    press(&mut d, KeyCode::Enter);
+    assert!(toast(&d).contains("requires Herdr"), "{}", toast(&d));
+    assert!(handoffs(&log).is_empty());
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    assert!(!d.app.linear.as_ref().unwrap().handoff_in_flight);
+}
+
+#[test]
+fn typing_a_picker_row_as_drawn_matches_it() {
+    let (mut d, _) = picker_driver(projects(vec![
+        project("p1", "OPS", "Example launch"),
+        project("p2", "PLATFORM", "Sample cleanup"),
+    ]));
+    d.open_linear_picker(LinearListKind::Projects, None);
+    let frame = draw(&d.app, W, H);
+    let row = frame
+        .lines()
+        .find(|l| l.contains("Example launch"))
+        .unwrap_or_else(|| panic!("{frame}"));
+    assert!(row.contains("OPS       Example launch"), "{frame}");
+    type_text(&mut d, "ops       example");
+    assert_eq!(visible_ids(&d), vec!["p1"]);
 }

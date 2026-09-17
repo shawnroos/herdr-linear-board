@@ -2,7 +2,9 @@
 //! filter keys, and applying a list read when it lands. The row data is the
 //! plugin's list envelope, sanitised on arrival.
 
-use board_core::protocol::{LinearListKind, LinearListResult, LinearListStatus};
+use board_core::protocol::{
+    LinearBindHandoffResult, LinearListKind, LinearListResult, LinearListStatus,
+};
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::linear::{sanitise_list, LinearFailure, SpaceList};
@@ -164,6 +166,21 @@ pub(super) fn linear_picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             let Some(id) = picker.selected_id().map(str::to_string) else {
                 return vec![];
             };
+            let space = app
+                .linear
+                .as_ref()
+                .and_then(|s| s.bind_space.as_ref())
+                .map(|row| row.id.clone());
+            if let (LinearListKind::Projects, Some(space)) = (kind, space) {
+                return start_bind_handoff(
+                    app,
+                    BindTarget {
+                        space,
+                        project: id,
+                        ..BindTarget::default()
+                    },
+                );
+            }
             let list_id = picker.list_id.clone();
             let return_to = picker.return_to;
             app.picker = None;
@@ -199,4 +216,65 @@ fn edit_filter(picker: &mut Picker, edit: impl FnOnce(&mut String)) {
     let keep = picker.selected_id().map(str::to_string);
     edit(&mut picker.filter);
     picker.reselect(keep.as_deref());
+}
+
+/// What a bind handoff opens with: ids and a directory, never a name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BindTarget {
+    pub space: String,
+    pub project: String,
+    pub view: Option<String>,
+    pub issue: Option<String>,
+    pub working_directory: Option<String>,
+}
+
+/// Mark a handoff in flight and emit it, or send nothing while one is already
+/// on the way.
+pub fn start_bind_handoff(app: &mut App, target: BindTarget) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    if state.handoff_in_flight {
+        return vec![];
+    }
+    state.handoff_in_flight = true;
+    vec![Effect::BindHandoff {
+        space: target.space,
+        project: target.project,
+        view: target.view,
+        issue: target.issue,
+        working_directory: target.working_directory,
+    }]
+}
+
+pub(super) fn handoff_arrived(
+    app: &mut App,
+    result: Result<LinearBindHandoffResult, LinearFailure>,
+) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    state.handoff_in_flight = false;
+    match result {
+        Ok(opened) => {
+            state.bind_space = None;
+            state.bind_note = Some("bind started in a new tab · r refresh when it finishes".into());
+            if app.screen == Screen::LinearPicker {
+                if let Some(picker) = app.picker.take() {
+                    app.screen = picker.return_to;
+                }
+            }
+            vec![Effect::FocusPane(opened.pane_id)]
+        }
+        Err(failure) => {
+            let text = match failure {
+                LinearFailure::MethodNotFound => {
+                    "the daemon is older than the board and has no linear.bind_handoff".to_string()
+                }
+                LinearFailure::Failed(text) => super::sanitise(&text),
+            };
+            app.set_toast(format!("bind failed: {text}"), true);
+            vec![]
+        }
+    }
 }

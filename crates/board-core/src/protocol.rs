@@ -1181,6 +1181,11 @@ impl LinearListResult {
     }
 }
 
+/// How long a client waits for a `linear.bind_handoff` answer: longer than the
+/// daemon's busy retry on a slow new pane plus the herdr calls around it.
+pub const LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
 /// `linear.bind_handoff` params: ids and a directory only, never names. The
 /// daemon validates every field before any herdr call.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

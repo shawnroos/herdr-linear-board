@@ -547,3 +547,22 @@ fn bind_handoff_agent_names_follow_the_herdr_name_rule() {
         );
     }
 }
+
+#[test]
+fn a_bind_handoff_client_waits_longer_than_the_daemon_can_take_to_answer() {
+    let herdr = board_herdr::SocketDeadlines::default();
+    // ping, workspace.list, tab.create, the last agent.start and pane.close,
+    // each bounded by the request deadline.
+    let herdr_calls = 5;
+    let daemon_longest = herdr.connect
+        + herdr.handshake
+        + herdr.request * herdr_calls
+        + AGENT_START_BUSY_BUDGET
+        + Duration::from_secs(5);
+    assert!(
+        board_core::protocol::LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT > daemon_longest,
+        "client {:?} vs daemon {:?}",
+        board_core::protocol::LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
+        daemon_longest
+    );
+}

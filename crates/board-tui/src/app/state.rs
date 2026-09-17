@@ -113,12 +113,15 @@ impl Picker {
     /// The rows the filter lets through, with their index into `rows`. `sel`,
     /// drawing and click zones all index this list, never `rows`.
     pub fn visible_rows(&self) -> Vec<(usize, &PickerRow)> {
-        let needle = self.filter.to_lowercase();
+        // A Linear row pads its tag to the widest visible tag, and that width
+        // depends on this filter, so runs of spaces compare as one.
+        let needle = collapse_spaces(&self.filter.to_lowercase());
         self.rows
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                needle.is_empty() || row.filter_text().to_lowercase().contains(&needle)
+                needle.is_empty()
+                    || collapse_spaces(&row.filter_text().to_lowercase()).contains(&needle)
             })
             .collect()
     }
@@ -174,6 +177,16 @@ pub struct LinearPickerRow {
 /// One-row text: the sanitiser keeps tab and newline, which a row cannot show.
 pub fn collapse_line(s: &str) -> String {
     s.replace(['\n', '\t'], " ")
+}
+
+fn collapse_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if !(c == ' ' && out.ends_with(' ')) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// One selectable row of a [`Picker`]: either a concrete item (a project or
