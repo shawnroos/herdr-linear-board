@@ -31,7 +31,8 @@ The supported matrix is exact: **Herdr 0.9.0**, **socket protocol 22**, board pr
 v1, and SQLite schema v15. `board-herdr` rejects a different Herdr version or
 protocol before the daemon performs workspace discovery, pane placement, an agent
 launch, a configured runner action, or a notification mutation. This is a policy
-gate, not a protocol-negotiation fallback.
+gate, not a protocol-negotiation fallback. A preview build of the pinned release
+(`0.9.0-preview.*`) passes when it reports protocol 22.
 
 Use these read-only probes before changing a wire call or debugging a live session:
 

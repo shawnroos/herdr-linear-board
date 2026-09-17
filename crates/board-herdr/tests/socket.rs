@@ -181,7 +181,16 @@ fn deprecated_protocol_adapter_rejects_a_different_requested_protocol() {
 
 #[test]
 fn protocol_gate_rejects_mismatches_with_exact_diagnostics() {
-    for (version, protocol) in [("0.7.5", 19), ("0.8.0", 17), ("0.7.5", 17), ("0.9.0", 20)] {
+    for (version, protocol) in [
+        ("0.7.5", 19),
+        ("0.8.0", 17),
+        ("0.7.5", 17),
+        ("0.9.0", 20),
+        ("0.9.0-preview.2026-09-09-5a244caa60b0", 21),
+        ("0.9.1-preview.2026-10-01-0000", 22),
+        ("0.9.0-rc1", 22),
+        ("0.9.00", 22),
+    ] {
         let path = serve_calls(move |req| {
             reply_for(
                 req,
@@ -208,6 +217,22 @@ fn protocol_gate_rejects_mismatches_with_exact_diagnostics() {
             format!("herdr protocol error [incompatible_protocol]: {expected_message}")
         );
     }
+}
+
+#[test]
+fn protocol_gate_accepts_a_preview_build_of_the_pinned_release() {
+    let path = serve_calls(|req| {
+        reply_for(
+            req,
+            &format!(
+                r#"{{"type":"pong","version":"{SUPPORTED_HERDR_VERSION}-preview.2026-09-09-5a244caa60b0","protocol":{SUPPORTED_HERDR_PROTOCOL},"capabilities":{{}}}}"#
+            ),
+        )
+    });
+
+    let mut c = HerdrClient::connect(&path).unwrap();
+    c.require_supported_protocol()
+        .expect("a preview build of the pinned release speaks the pinned protocol");
 }
 
 #[test]
