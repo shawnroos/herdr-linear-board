@@ -469,8 +469,10 @@ e2e_launch_tui() {
   local pane_id="$1"
   shift
   local cols="${E2E_TUI_COLS:-65}"
+  # A herdr pane exports its space id, and `board tui` opens Linear mode when
+  # it sees one; these scenarios drive the kanban board.
   e2e_herdr_mutate -- pane run "$pane_id" \
-    "stty cols $cols; $* $BOARD_BIN tui"
+    "stty cols $cols; unset HERDR_WORKSPACE_ID HERDR_PLUGIN_CONTEXT_JSON; $* $BOARD_BIN tui"
 }
 
 # --- boardd RPC (columns have no CLI verb) ----------------------------------

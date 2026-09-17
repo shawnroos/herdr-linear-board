@@ -511,7 +511,7 @@ class StaticSafetyTests(unittest.TestCase):
             "cargo test --workspace --all-features",
             "python3 -m unittest discover -s scripts/tests -p 'test_*.py'",
             "e2e/test-harness.sh",
-            "run-all.sh --require-all",
+            "run-all.sh --require-all --provider-free",
             "E2E_FORCE_BUILD=1",
             "CARGO_NET_OFFLINE=true",
         ):
