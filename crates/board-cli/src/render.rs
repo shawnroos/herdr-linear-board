@@ -11,9 +11,11 @@ use anyhow::Result;
 use board_core::capability::HarnessCapabilities;
 use board_core::model::{Board, Card, Column, Comment, CommentHistory, CommentRecord};
 use board_core::protocol::{
-    BoardSnapshot, CardDetail, DaemonStatus, ProjectDetail, ProjectListResult, ProjectOpenResult,
-    SessionListResult, SpaceListResult,
+    BoardSnapshot, CardDetail, DaemonStatus, LinearListEnvelope, LinearListResult,
+    LinearListStatus, ProjectDetail, ProjectListResult, ProjectOpenResult, SessionListResult,
+    SpaceListResult,
 };
+use board_core::text::strip_control_and_format;
 use serde::{Serialize, Serializer};
 
 use crate::helpers::efforts_str;
@@ -510,6 +512,62 @@ impl Render for SessionListResult {
             .collect();
         table(out, &rows)
     }
+}
+
+// -- Linear lists -------------------------------------------------------------
+
+impl Render for LinearListResult {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        match self {
+            LinearListResult::Spaces(list) => linear_list(out, list, |row| {
+                vec![
+                    row.id.clone(),
+                    row.label.clone(),
+                    row.state.clone(),
+                    row.project_name.clone().unwrap_or_default(),
+                ]
+            }),
+            LinearListResult::Projects(list) => linear_list(out, list, |row| {
+                vec![row.id.clone(), row.team_key.clone(), row.name.clone()]
+            }),
+            LinearListResult::Views(list) => {
+                linear_list(out, list, |row| vec![row.id.clone(), row.name.clone()])
+            }
+        }
+    }
+}
+
+/// The status line comes first so an `unavailable` list with no rows still
+/// says why it is empty. The daemon keeps tabs and newlines in plugin text; a
+/// table cell cannot hold either, so every cell is stripped again here.
+fn linear_list<R>(
+    out: &mut dyn Write,
+    list: &LinearListEnvelope<R>,
+    cells: impl Fn(&R) -> Vec<String>,
+) -> io::Result<()> {
+    let status = match list.status {
+        LinearListStatus::Ok => None,
+        LinearListStatus::Unavailable => Some("unavailable"),
+        LinearListStatus::Partial => Some("partial"),
+        LinearListStatus::Unknown => Some("unknown"),
+    };
+    if let Some(status) = status {
+        match list.message.as_deref().map(strip_control_and_format) {
+            Some(message) if !message.is_empty() => writeln!(out, "status: {status}: {message}")?,
+            _ => writeln!(out, "status: {status}")?,
+        }
+    }
+    let rows: Vec<Vec<String>> = list
+        .rows
+        .iter()
+        .map(|row| {
+            cells(row)
+                .iter()
+                .map(|cell| strip_control_and_format(cell))
+                .collect()
+        })
+        .collect();
+    table(out, &rows)
 }
 
 #[cfg(test)]

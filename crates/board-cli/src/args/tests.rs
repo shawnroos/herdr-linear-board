@@ -290,3 +290,82 @@ fn top_level_status_is_not_a_command() {
         clap::error::ErrorKind::InvalidSubcommand
     );
 }
+
+// -- Linear reads (U17) -------------------------------------------------------
+
+#[test]
+fn the_three_linear_list_verbs_parse() {
+    assert!(matches!(
+        parse(&["board", "linear", "space", "list"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Space {
+                sub: LinearSpaceCmd::List
+            }
+        }
+    ));
+    assert!(matches!(
+        parse(&["board", "linear", "project", "list"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Project {
+                sub: LinearProjectCmd::List
+            }
+        }
+    ));
+    match parse(&["board", "linear", "view", "list", "proj-1", "--json"]) {
+        Cli {
+            json: true,
+            cmd:
+                Cmd::Linear {
+                    sub:
+                        LinearCmd::View {
+                            sub: LinearViewCmd::List { project_id },
+                        },
+                },
+            ..
+        } => assert_eq!(project_id, "proj-1"),
+        _ => panic!("expected linear view list"),
+    }
+}
+
+#[test]
+fn linear_list_arguments_are_checked_at_parse_time() {
+    assert_eq!(
+        reject(&["board", "linear", "view", "list"]).kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert_eq!(
+        reject(&["board", "linear", "space", "list", "wA"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
+    assert_eq!(
+        reject(&["board", "linear", "project", "list", "proj-1"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
+}
+
+#[test]
+fn snapshot_takes_its_space_id_optionally() {
+    assert!(matches!(
+        parse(&["board", "linear", "snapshot"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Snapshot { workspace_id: None }
+        }
+    ));
+    match parse(&["board", "linear", "snapshot", "wA"]).cmd {
+        Cmd::Linear {
+            sub: LinearCmd::Snapshot { workspace_id },
+        } => assert_eq!(workspace_id.as_deref(), Some("wA")),
+        _ => panic!("expected linear snapshot"),
+    }
+}
+
+#[test]
+fn bind_is_not_a_verb_anywhere() {
+    for args in [&["board", "linear", "bind"][..], &["board", "bind"][..]] {
+        assert_eq!(
+            reject(args).kind(),
+            clap::error::ErrorKind::InvalidSubcommand,
+            "{args:?}"
+        );
+    }
+}

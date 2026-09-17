@@ -40,8 +40,44 @@ pub(crate) enum LinearCmd {
     /// Print the work plugin's snapshot of one herdr space (the Linear-mode
     /// board's read), with live pane status attached.
     Snapshot {
-        /// The herdr space id (`HERDR_WORKSPACE_ID` inside a pane).
-        workspace_id: String,
+        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
+        workspace_id: Option<String>,
+    },
+    /// herdr spaces and their Linear binding state.
+    Space {
+        #[command(subcommand)]
+        sub: LinearSpaceCmd,
+    },
+    /// Linear projects you are a member of.
+    Project {
+        #[command(subcommand)]
+        sub: LinearProjectCmd,
+    },
+    /// A Linear project's views.
+    View {
+        #[command(subcommand)]
+        sub: LinearViewCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LinearSpaceCmd {
+    /// List every space with its binding state.
+    List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LinearProjectCmd {
+    /// List the Linear projects you are a member of.
+    List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LinearViewCmd {
+    /// List one Linear project's views.
+    List {
+        /// The Linear project id (from `board linear project list`).
+        project_id: String,
     },
 }
 
