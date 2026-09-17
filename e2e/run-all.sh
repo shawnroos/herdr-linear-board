@@ -23,13 +23,15 @@ REPO_ROOT="$(cd "$DIR/.." && pwd)"
 
 KEEP=0
 REQUIRE_ALL=0
+PROVIDER_FREE=0
 FILTERS=()
 for arg in "$@"; do
   case "$arg" in
     --keep) KEEP=1 ;;
     --require-all) REQUIRE_ALL=1 ;;
+    --provider-free) PROVIDER_FREE=1 ;;
     -h|--help)
-      echo "usage: e2e/run-all.sh [--keep] [--require-all] [scenario-filter ...]"
+      echo "usage: e2e/run-all.sh [--keep] [--require-all] [--provider-free] [scenario-filter ...]"
       exit 0 ;;
     -*) echo "run-all.sh: unknown flag: $arg" >&2; exit 2 ;;
     *) FILTERS+=("$arg") ;;
@@ -81,9 +83,15 @@ SCENARIOS=(
   30-pane-reuse.sh 31-managed-codex.sh 32-managed-opencode.sh
   33-reorder-card-tui.sh 34-duplicate.sh 35-rescue-dead-workspace.sh
   36-managed-antigravity.sh 37-multi-project.sh 38-board-project-archive.sh
-  39-managed-slow-provider.sh 40-linear-mode.sh
+  39-managed-slow-provider.sh 40-linear-mode.sh 41-linear-bind-handoff.sh
 )
+# Scenarios that start the person's real agent CLI; --provider-free leaves them out.
+PROVIDER_SCENARIOS=(41-linear-bind-handoff.sh)
 run_this() {
+  if [ "$PROVIDER_FREE" -eq 1 ]; then
+    local p
+    for p in "${PROVIDER_SCENARIOS[@]}"; do [ "$1" = "$p" ] && return 1; done
+  fi
   [ "${#FILTERS[@]}" -eq 0 ] && return 0
   local f
   for f in "${FILTERS[@]}"; do [[ "$1" == *"$f"* ]] && return 0; done

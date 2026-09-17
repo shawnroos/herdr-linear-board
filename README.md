@@ -93,7 +93,7 @@ state is never modified.
 
 Opened inside a herdr space that the work plugin has bound to a Linear project, `board tui` runs in
 **Linear mode**: it renders that project's issues, worktrees and live panes from the plugin's
-snapshot instead of a kanban, and writes nothing. The daemon runs the plugin's `bin/work-snapshot.sh`
+snapshot instead of a kanban, and writes nothing to Linear, the plugin's records or SQLite. It sets its own pane title and can start a bind in a new herdr tab. The daemon runs the plugin's `bin/work-snapshot.sh` and its three list scripts
 from the installed `work@shrimpshack` plugin; until a plugin release with that script is installed,
 point `BOARD_WORK_PLUGIN_ROOT` (or `[daemon] work_plugin_root` in the config) at a plugin checkout.
 `board linear snapshot <workspace-id> --json` prints the same document from the command line. See
@@ -270,7 +270,7 @@ selected/current board.
 | `board column` | `list`, `create`, `show`, `edit`, `reorder`, `delete` |
 | `board harness` | `list`, `models`, `efforts`, `permissions` |
 | `board space` / `board session` | `list` |
-| `board linear` | `snapshot <WORKSPACE_ID>` (the Linear-mode read) |
+| `board linear` | `snapshot [WORKSPACE_ID]`, `space list`, `project list`, `view list <PROJECT_ID>` |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -310,7 +310,7 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–40);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–41);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development
