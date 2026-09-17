@@ -1118,15 +1118,19 @@ pub type LinearSpacesList = LinearListEnvelope<LinearSpaceRow>;
 pub type LinearProjectsList = LinearListEnvelope<LinearProjectRow>;
 pub type LinearViewsList = LinearListEnvelope<LinearViewRow>;
 
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSpaceRow {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub label: String,
     #[serde(default)]
     pub live: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub state: String,
     #[serde(default)]
     pub project_id: Option<String>,
@@ -1136,19 +1140,19 @@ pub struct LinearSpaceRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearProjectRow {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub name: String,
     #[serde(default)]
-    pub team_key: String,
+    pub team_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearViewRow {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub name: String,
 }
 

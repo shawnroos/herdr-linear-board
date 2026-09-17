@@ -82,7 +82,7 @@ fn rows_of(result: &LinearListResult) -> (LinearListStatus, Option<String>, Vec<
             list.message.clone(),
             list.rows
                 .iter()
-                .map(|r| row(&r.id, &r.team_key, &r.name))
+                .map(|r| row(&r.id, r.team_key.as_deref().unwrap_or_default(), &r.name))
                 .collect(),
         ),
         LinearListResult::Views(list) => (

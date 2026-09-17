@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode pickers, bind from the board, mouse, card detail, herdr keys in help, roomier cards, pane title and linear list verbs.
+
 ## [0.17.0] - 2026-09-13
 
 ### Added

@@ -756,7 +756,7 @@ fn each_list_kind_returns_its_scripts_envelope() {
     match list(&runner, list_params(LinearListKind::Projects, None)).unwrap() {
         LinearListResult::Projects(projects) => {
             assert_eq!(projects.status, LinearListStatus::Partial);
-            assert_eq!(projects.rows[0].team_key, "EX");
+            assert_eq!(projects.rows[0].team_key.as_deref(), Some("EX"));
             assert_eq!(
                 projects.message.as_deref(),
                 Some("listed the first pages only")

@@ -15,7 +15,7 @@ crossterm = { workspace = true }
 tui-textarea = { workspace = true }
 tempfile = { workspace = true }
 base64 = { workspace = true }
-unicode-width = "0.1"
+unicode-width = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

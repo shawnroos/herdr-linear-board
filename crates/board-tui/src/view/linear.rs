@@ -3,7 +3,7 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearIssue, LinearListStatus, LinearSnapshot};
+use board_core::protocol::{LinearIssue, LinearSnapshot};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,9 +11,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{sanitise, App, LinearState, Screen, SpaceList, StripView};
+use crate::app::{sanitise, App, LinearState, Screen};
 use crate::widgets::{HitMap, Zone};
 
+use super::linear_strip::{draw_strip, strip_lines};
 use super::{centered_rect_abs, linear_help_keys, truncate};
 
 // Identifier, two title lines, assignee, then the blank separator row.
@@ -54,7 +55,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         return;
     };
     match app.screen {
-        Screen::LinearNotBound => draw_not_bound(state, f, area),
+        Screen::LinearNotBound => draw_not_bound(app, state, f, area),
         Screen::LinearStaleDaemon => draw_stale_daemon(state, f, area),
         Screen::LinearError => {
             draw_board(app, state, f, area);
@@ -65,21 +66,38 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
             draw_detail(app, state, f, area);
         }
         Screen::Help => {
-            draw_board(app, state, f, area);
+            draw_backdrop(app, state, f, area, app.help_return_to);
             draw_help(app, state, f, area);
         }
         Screen::LinearPicker => {
-            draw_board(app, state, f, area);
-            super::overlays::draw_linear_picker(app, state, f, area);
+            let return_to = app.picker.as_ref().map(|p| p.return_to);
+            draw_backdrop(
+                app,
+                state,
+                f,
+                area,
+                return_to.unwrap_or(Screen::LinearBoard),
+            );
+            super::linear_picker::draw_linear_picker(app, state, f, area);
         }
         _ => draw_board(app, state, f, area),
     }
     draw_bottom(app, f, area);
 }
 
+/// What an overlay covers: the not-bound screen when it opened there, the
+/// board otherwise.
+fn draw_backdrop(app: &App, state: &LinearState, f: &mut Frame, area: Rect, under: Screen) {
+    if under == Screen::LinearNotBound {
+        draw_not_bound(app, state, f, area);
+    } else {
+        draw_board(app, state, f, area);
+    }
+}
+
 /// Single-line cell text: the sanitiser keeps tab and newline, which a
 /// one-row cell cannot show.
-fn line(s: &str) -> String {
+pub(super) fn line(s: &str) -> String {
     if s.contains(['\n', '\t']) {
         s.replace(['\n', '\t'], " ")
     } else {
@@ -287,136 +305,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
     let body = Rect::new(area.x, area.y + HEADER_ROWS, area.width, body_h);
     draw_columns(state, snapshot, f, body, &mut app.hit_map.borrow_mut());
-
-    // The strip is clamped to the frame: at a tiny height the body saturates
-    // to zero rows and an unclamped rect would index past the buffer.
-    let y = body.bottom();
-    let shown = strip_h.min(area.bottom().saturating_sub(y));
-    if shown > 0 {
-        let mut hit_map = app.hit_map.borrow_mut();
-        for (at, (line, space_id)) in strip.into_iter().take(shown as usize).enumerate() {
-            let rect = Rect::new(area.x, y + at as u16, area.width, 1);
-            f.render_widget(Paragraph::new(line), rect);
-            if let Some(space_id) = space_id {
-                hit_map.push(rect, Zone::LinearStripRow(space_id));
-            }
-        }
-    }
-}
-
-const STRIP_ROWS: usize = 3;
-
-/// The strip's rows, each with the space id a click on it opens. Empty when
-/// the tabs view has no unmapped tabs, as before the spaces view existed.
-fn strip_lines(
-    state: &LinearState,
-    snapshot: &LinearSnapshot,
-    width: usize,
-) -> Vec<(Line<'static>, Option<String>)> {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    if state.strip == StripView::Tabs {
-        if snapshot.unmapped.is_empty() {
-            return vec![];
-        }
-        let mut lines = vec![(
-            Line::from(Span::styled(
-                " Unmapped tabs (live tabs no binding claims)",
-                bold,
-            )),
-            None,
-        )];
-        for tab in snapshot.unmapped.iter().take(STRIP_ROWS) {
-            let panes: Vec<String> = tab
-                .panes
-                .iter()
-                .map(|p| format!("{} {}", line(p), state.pane_status(p)))
-                .collect();
-            lines.push((
-                Line::from(truncate(
-                    &format!(
-                        "  {} ({}) · {} · panes: {}",
-                        line(tab.label.as_deref().unwrap_or("(no label)")),
-                        line(&tab.tab_id),
-                        line(&tab.reason),
-                        if panes.is_empty() {
-                            "none".to_string()
-                        } else {
-                            panes.join(", ")
-                        }
-                    ),
-                    width,
-                )),
-                None,
-            ));
-        }
-        return lines;
-    }
-    let dim = Style::default().fg(Color::DarkGray);
-    let warn = Style::default().fg(Color::LightYellow);
-    let error = Style::default().fg(Color::LightRed);
-    let note =
-        |text: String, style: Style| (Line::from(Span::styled(fit(&text, width), style)), None);
-    let with_message = |label: &str, message: &Option<String>| match message {
-        Some(text) if !text.is_empty() => format!("  {label}: {}", line(text)),
-        _ => format!("  {label}"),
-    };
-    let mut header = " Spaces with no project".to_string();
-    if let SpaceList::Read(list) = &state.spaces {
-        if list.status == LinearListStatus::Partial {
-            header.push_str(" (partial list)");
-        }
-    }
-    header.push_str(" · s select · t unmapped tabs");
-    let mut lines = vec![(Line::from(Span::styled(fit(&header, width), bold)), None)];
-    let rows = state.unbound_spaces();
-    match &state.spaces {
-        SpaceList::NotRead => lines.push(note("  loading spaces…".to_string(), dim)),
-        SpaceList::Failed(text) => lines.push(note(
-            format!("  space list unavailable: {}", line(text)),
-            error,
-        )),
-        SpaceList::Read(list) if list.status == LinearListStatus::Unavailable => lines.push(note(
-            with_message("space list unavailable", &list.message),
-            error,
-        )),
-        SpaceList::Read(list) if list.status == LinearListStatus::Unknown && rows.is_empty() => {
-            lines.push(note(
-                with_message("space list status unknown", &list.message),
-                warn,
-            ))
-        }
-        SpaceList::Read(_) if rows.is_empty() => {
-            lines.push(note("  every space is bound".to_string(), dim))
-        }
-        SpaceList::Read(_) => {
-            let heights = vec![1u16; rows.len()];
-            let sel = state.strip_sel.min(rows.len() - 1);
-            let (start, end) = crate::widgets::windowed_rows(&heights, sel, STRIP_ROWS as u16);
-            for (at, row) in rows.iter().enumerate().take(end).skip(start) {
-                let selected = state.strip_focus && at == sel;
-                let text = fit(
-                    &format!(
-                        "  {} {} ({})",
-                        if selected { "›" } else { " " },
-                        line(if row.label.is_empty() {
-                            "(no label)"
-                        } else {
-                            &row.label
-                        }),
-                        line(&row.id)
-                    ),
-                    width,
-                );
-                let style = if selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                lines.push((Line::from(Span::styled(text, style)), Some(row.id.clone())));
-            }
-        }
-    }
-    lines
+    draw_strip(app, strip, f, area, body.bottom());
 }
 
 fn draw_columns(
@@ -473,7 +362,7 @@ fn draw_columns(
         } else {
             String::new()
         };
-        let title = truncate(
+        let title = fit(
             &format!(
                 " {} ({}) {position}",
                 line(&group.label),
@@ -564,9 +453,9 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
             ""
         }
     );
-    out.push(Line::from(truncate(&meta, width)));
+    out.push(Line::from(fit(&meta, width)));
     if !issue.labels.is_empty() {
-        out.push(Line::from(truncate(
+        out.push(Line::from(fit(
             &format!(
                 "labels: {}",
                 issue
@@ -579,7 +468,7 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
             width,
         )));
     }
-    out.push(Line::from(truncate(
+    out.push(Line::from(fit(
         &format!(
             "url: {}",
             issue
@@ -602,7 +491,7 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
     let mut row_index = 0usize;
     for (b, binding) in issue.bindings.iter().enumerate() {
         out.push(Line::from(Span::styled(
-            truncate(
+            fit(
                 &format!(
                     "[{}] {}",
                     line(&binding.state),
@@ -613,7 +502,7 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
             Style::default().add_modifier(Modifier::BOLD),
         )));
         match &binding.tab {
-            Some(tab) => out.push(Line::from(truncate(
+            Some(tab) => out.push(Line::from(fit(
                 &format!(
                     "  tab: {} ({})",
                     line(tab.label.as_deref().unwrap_or("(label unknown)")),
@@ -629,7 +518,7 @@ fn detail_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<L
             } else {
                 " "
             };
-            let text = truncate(
+            let text = fit(
                 &format!("  {cursor} {}  {}", line(&row.pane_id), row.status),
                 width,
             );
@@ -659,7 +548,7 @@ fn draw_detail(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     );
     f.render_widget(Clear, rect);
     app.hit_map.borrow_mut().push(rect, Zone::Shield);
-    let title = truncate(
+    let title = fit(
         &format!(" {} — {} ", line(&issue.identifier), line(&issue.title)),
         rect.width.saturating_sub(2) as usize,
     );
@@ -708,7 +597,7 @@ fn boxed(f: &mut Frame, area: Rect, title: &str, color: Color, lines: Vec<Line<'
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_not_bound(state: &LinearState, f: &mut Frame, area: Rect) {
+fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let (label, record) = match state.snapshot() {
         Some(s) => (
             line(&s.workspace.label),
@@ -728,8 +617,15 @@ fn draw_not_bound(state: &LinearState, f: &mut Frame, area: Rect) {
         )),
         Line::from(record),
         Line::from(""),
-        Line::from("Run /work:bind in this space, then press r to refresh."),
+        Line::from("Press s (or click a space below) to pick a project for it,"),
+        Line::from("or run /work:bind in this space; then press r to refresh."),
     ];
+    if let Some(note) = &state.bind_note {
+        lines.push(Line::from(Span::styled(
+            note.clone(),
+            Style::default().fg(Color::LightGreen),
+        )));
+    }
     for warning in state.source_warnings() {
         lines.push(Line::from(Span::styled(
             format!("! {warning}"),
@@ -738,10 +634,22 @@ fn draw_not_bound(state: &LinearState, f: &mut Frame, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "r refresh · q quit",
+        "s pick a space · r refresh · q quit",
         Style::default().fg(Color::DarkGray),
     )));
-    boxed(f, area, "Not bound", Color::LightYellow, lines);
+    let Some(snapshot) = state.snapshot() else {
+        boxed(f, area, "Not bound", Color::LightYellow, lines);
+        return;
+    };
+    let strip = strip_lines(state, snapshot, area.width as usize);
+    // The bottom row stays free for the toast, as under the board's strip.
+    let strip_y = area
+        .bottom()
+        .saturating_sub(strip.len() as u16 + 1)
+        .max(area.y);
+    let above = Rect::new(area.x, area.y, area.width, strip_y - area.y);
+    boxed(f, above, "Not bound", Color::LightYellow, lines);
+    draw_strip(app, strip, f, area, strip_y);
 }
 
 fn draw_stale_daemon(state: &LinearState, f: &mut Frame, area: Rect) {
@@ -944,7 +852,7 @@ fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
     };
     f.render_widget(
         Paragraph::new(Span::styled(
-            truncate(
+            fit(
                 &format!(" {} ", line(&sanitise(&toast.text))),
                 area.width as usize,
             ),

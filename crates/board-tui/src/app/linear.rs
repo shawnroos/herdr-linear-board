@@ -97,7 +97,7 @@ pub struct LinearState {
     pub lists_in_flight: std::collections::BTreeSet<(LinearListKind, Option<String>)>,
     /// The row last chosen in a Linear picker, for the flow that opened it.
     pub pick: Option<super::LinearPick>,
-    /// Read once at start; shown only in the `?` sheet (KTD14).
+    /// Read once at start; shown only in the `?` sheet.
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
     pub spaces: SpaceList,
     pub strip: StripView,
@@ -153,11 +153,34 @@ impl LinearState {
     }
 
     /// The rows the strip lists: every read space whose state is not `bound`.
-    pub fn unbound_spaces(&self) -> Vec<&LinearSpaceRow> {
-        match &self.spaces {
-            SpaceList::Read(list) => list.rows.iter().filter(|r| r.state != "bound").collect(),
-            _ => Vec::new(),
+    /// A space whose own snapshot says it is not bound leads the list even
+    /// when the space read failed, lags, or calls it bound, so the not-bound
+    /// screen can always start a bind for it.
+    pub fn unbound_spaces(&self) -> Vec<LinearSpaceRow> {
+        let listed: &[LinearSpaceRow] = match &self.spaces {
+            SpaceList::Read(list) => &list.rows,
+            _ => &[],
+        };
+        let mut rows: Vec<LinearSpaceRow> = listed
+            .iter()
+            .filter(|r| r.state != "bound")
+            .cloned()
+            .collect();
+        if let Some(snapshot) = self.snapshot().filter(|_| !self.bound()) {
+            let current = listed
+                .iter()
+                .find(|r| r.id == self.workspace_id)
+                .cloned()
+                .unwrap_or_else(|| LinearSpaceRow {
+                    id: self.workspace_id.clone(),
+                    label: snapshot.workspace.label.clone(),
+                    state: snapshot.record.state.clone().unwrap_or_default(),
+                    ..LinearSpaceRow::default()
+                });
+            rows.retain(|r| r.id != self.workspace_id);
+            rows.insert(0, current);
         }
+        rows
     }
 
     pub(super) fn clamp_strip(&mut self) {
@@ -389,7 +412,7 @@ fn request_snapshot(app: &mut App) -> Vec<Effect> {
     state.in_flight = true;
     state.bind_note = None;
     let mut effects = vec![Effect::LinearSnapshot];
-    // The strip's space list is read with every snapshot (R11).
+    // The strip's space list is read with every snapshot.
     if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
         effects.push(Effect::LinearList {
             kind: LinearListKind::Spaces,
@@ -447,7 +470,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             Screen::LinearError
         }
     };
-    // An overlay open when a snapshot lands stays open (R19): the new home
+    // An overlay open when a snapshot lands stays open: the new home
     // screen becomes where closing it goes.
     match app.screen {
         Screen::LinearPicker if app.picker.is_some() => {
@@ -477,7 +500,7 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     }
     // Before the global keys: in a picker every printable key is filter text,
-    // so `r` must not fetch and `?` must not open help (KTD7).
+    // so `r` must not fetch and `?` must not open help.
     if app.screen == Screen::LinearPicker {
         return super::linear_picker::linear_picker_key(app, k);
     }
@@ -517,19 +540,24 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             }
             vec![]
         }
-        Screen::LinearNotBound | Screen::LinearStaleDaemon => match k.code {
+        Screen::LinearNotBound => match strip_owned_key(app, k) {
+            Some(effects) => effects,
+            None if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) => vec![Effect::Quit],
+            None => vec![],
+        },
+        Screen::LinearStaleDaemon => match k.code {
             KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
-            KeyCode::Char('v') if app.screen == Screen::LinearNotBound => open_view_picker(app),
             _ => vec![],
         },
         _ => vec![],
     }
 }
 
-fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
-    let Some(state) = app.linear.as_mut() else {
-        return vec![];
-    };
+/// The keys the board and the not-bound screen share: the strip toggles, the
+/// view picker, and every key while the strip has focus. `None` leaves the key
+/// to the screen.
+fn strip_owned_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
+    let state = app.linear.as_mut()?;
     match k.code {
         KeyCode::Char('t') => {
             state.strip = match state.strip {
@@ -537,24 +565,31 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                 StripView::Tabs => StripView::Spaces,
             };
             state.strip_focus = false;
-            return vec![];
+            return Some(vec![]);
         }
         KeyCode::Char('s') => {
             state.strip = StripView::Spaces;
             state.strip_focus = !state.unbound_spaces().is_empty();
-            return vec![];
+            return Some(vec![]);
         }
         KeyCode::Char('v') => {
             state.strip_focus = false;
-            return open_view_picker(app);
+            return Some(open_view_picker(app));
         }
         _ => {}
     }
-    // Ahead of the board's own arms: Escape here returns to the board rather
+    // Ahead of the screen's own arms: Escape here unfocuses the strip rather
     // than quitting, and up/down move the strip rather than the card.
-    if state.strip_focus {
-        return strip_key(app, k);
+    state.strip_focus.then(|| strip_key(app, k))
+}
+
+fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    if let Some(effects) = strip_owned_key(app, k) {
+        return effects;
     }
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
     if let Some(delta) = nav_delta(k.code) {
         let cards = state
             .groups()
@@ -625,11 +660,7 @@ fn strip_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Esc => state.strip_focus = false,
         KeyCode::Char('q') => return vec![Effect::Quit],
         KeyCode::Enter => {
-            let Some(space) = state
-                .unbound_spaces()
-                .get(state.strip_sel)
-                .map(|r| (*r).clone())
-            else {
+            let Some(space) = state.unbound_spaces().into_iter().nth(state.strip_sel) else {
                 return vec![];
             };
             state.bind_space = Some(space);
@@ -666,7 +697,7 @@ pub(super) fn click_strip_row(app: &mut App, space_id: &str) -> Vec<Effect> {
 
 /// Selects the card drawn under the click, found again by identifier because
 /// the snapshot may have changed since that frame, then opens it the way
-/// `Enter` does (KTD9). A card no longer in the snapshot is left alone.
+/// `Enter` does. A card no longer in the snapshot is left alone.
 pub(super) fn click_card(app: &mut App, group: &str, identifier: &str) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
@@ -751,7 +782,7 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
 }
 
 /// `b` in the card detail: a bind for the selected binding, in its worktree.
-/// Only a state the plugin can confirm or repair is sent (R10); every other
+/// Only a state the plugin can confirm or repair is sent; every other
 /// state is refused by name.
 fn bind_detail_card(app: &mut App) -> Vec<Effect> {
     let Some(state) = app.linear.as_ref() else {
@@ -791,27 +822,9 @@ fn bind_detail_card(app: &mut App) -> Vec<Effect> {
 
 /// The plugin's `HERDR_LINEAR_SANITIZE_JQ_DEF` codepoint set: C0 except tab
 /// and newline, DEL, C1, and the invisible format characters. Applied to
-/// every document string and to error text before rendering (R22).
+/// every document string and to error text before rendering.
 pub fn sanitise(s: &str) -> String {
-    s.chars().filter(|c| !is_stripped(*c)).collect()
-}
-
-fn is_stripped(c: char) -> bool {
-    (c.is_control() && c != '\t' && c != '\n') || board_core::text::is_format_char(c)
-}
-
-fn sanitise_value(value: serde_json::Value) -> serde_json::Value {
-    use serde_json::Value;
-    match value {
-        Value::String(text) => Value::String(sanitise(&text)),
-        Value::Array(items) => Value::Array(items.into_iter().map(sanitise_value).collect()),
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, item)| (sanitise(&key), sanitise_value(item)))
-                .collect(),
-        ),
-        other => other,
-    }
+    board_core::text::strip_control_keep_lines(s)
 }
 
 /// Every string in the document, keys included, through [`sanitise`]. It walks
@@ -819,7 +832,7 @@ fn sanitise_value(value: serde_json::Value) -> serde_json::Value {
 /// added to any Linear type is covered without a line here (R22).
 pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
     let cleaned = serde_json::to_value(&*snapshot)
-        .map(sanitise_value)
+        .map(board_core::text::sanitise_json)
         .and_then(serde_json::from_value::<LinearSnapshot>);
     match cleaned {
         Ok(cleaned) => *snapshot = cleaned,
@@ -829,11 +842,11 @@ pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
     }
 }
 
-/// The same walk over a list envelope (R24).
+/// The same walk over a list envelope.
 pub fn sanitise_list(result: LinearListResult) -> LinearListResult {
     let kind = result.kind();
     let cleaned = serde_json::to_value(&result)
-        .map(sanitise_value)
+        .map(board_core::text::sanitise_json)
         .and_then(|value| LinearListResult::from_value(kind, value));
     match cleaned {
         Ok(cleaned) => cleaned,

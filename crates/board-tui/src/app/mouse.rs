@@ -169,6 +169,16 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
     if app.screen == Screen::LinearPicker {
         return on_linear_picker_mouse(app, m);
     }
+    if app.screen == Screen::LinearNotBound {
+        if m.kind != MouseEventKind::Down(MouseButton::Left) {
+            return vec![];
+        }
+        let hit = app.hit_map.borrow().hit(m.column, m.row);
+        return match hit {
+            Some(Zone::LinearStripRow(space_id)) => super::linear::click_strip_row(app, &space_id),
+            _ => vec![],
+        };
+    }
     if app.screen != Screen::LinearBoard {
         return vec![];
     }

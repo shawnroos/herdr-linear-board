@@ -553,7 +553,7 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   `message` is a string or `null`, and `rows` depends on `kind`:
   `spaces` rows are `{id, label, live, state, project_id, project_name}` (the binding state of
   every herdr space, bound or not), `projects` rows are `{id, name, team_key}` (the projects the
-  person is a member of), and `views` rows are `{id, name}`. The wire carries no kind tag; a client
+  person is a member of; `team_key` is `null` for a project with no team), and `views` rows are `{id, name}`. The wire carries no kind tag; a client
   decodes the rows by the kind it asked for. Before answering, the daemon removes control
   characters other than tab and newline, and format characters, from every string in the envelope,
   object keys included. The daemon makes no herdr call for a list; the spaces script reaches herdr

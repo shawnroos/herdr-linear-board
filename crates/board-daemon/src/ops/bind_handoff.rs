@@ -18,6 +18,7 @@ use std::time::Duration;
 use board_herdr::{AgentStartParams, HerdrClient, HerdrError, TabCreateParams};
 
 use super::linear::{is_list_identifier, utf8_env};
+use crate::spawner::is_pane_not_found;
 
 pub(crate) const BIND_TAB_LABEL: &str = "bind";
 pub(crate) const BIND_AGENT_KIND: &str = "claude";
@@ -35,7 +36,6 @@ pub(crate) const AGENT_START_BUSY_BUDGET: Duration = Duration::from_secs(90);
 const AGENT_START_BUSY_FIRST: Duration = Duration::from_millis(250);
 const AGENT_START_BUSY_STEP_MAX: Duration = Duration::from_secs(5);
 const ERR_AGENT_PANE_BUSY: &str = "agent_pane_busy";
-const ERR_PANE_NOT_FOUND: &str = "pane_not_found";
 
 const PROJECTS_ROOT_ENV: &str = "HERDR_LINEAR_PROJECTS_ROOT";
 const PROJECTS_ROOT_DEPRECATED_ENV: &str = "HERDR_LINEAR_SLATE_ROOT";
@@ -260,7 +260,7 @@ fn start_retrying_busy(
 fn close_new_tab(client: &mut HerdrClient, pane_id: &str, message: String) -> String {
     match client.pane_close(pane_id) {
         Ok(()) => message,
-        Err(error) if is_protocol_error(&error, ERR_PANE_NOT_FOUND) => message,
+        Err(error) if is_pane_not_found(&error) => message,
         Err(error) => format!(
             "{message}; additionally failed to close the new bind tab's pane {pane_id}: {error}"
         ),

@@ -236,7 +236,7 @@ pub(crate) fn list(runner: &ScriptRunner, p: LinearListParams) -> Result<LinearL
         .map_err(parse_error)
 }
 
-/// KTD4's identifier shape: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. The first
+/// Identifier shape: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. The first
 /// character keeps an id from reading as an option to the script.
 pub(super) fn is_list_identifier(id: &str) -> bool {
     let bytes = id.as_bytes();

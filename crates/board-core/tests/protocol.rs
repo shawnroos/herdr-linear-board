@@ -701,7 +701,7 @@ fn linear_list_envelope_round_trips_for_each_kind() {
         rows: vec![LinearProjectRow {
             id: "project-one".into(),
             name: "Example project".into(),
-            team_key: "EX".into(),
+            team_key: Some("EX".into()),
         }],
     };
     roundtrip(&projects);
@@ -723,6 +723,52 @@ fn linear_list_envelope_round_trips_for_each_kind() {
         (LinearListStatus::Unknown, "unknown"),
     ] {
         assert_eq!(serde_json::to_value(status).unwrap(), json!(wire));
+    }
+}
+
+#[test]
+fn a_project_row_with_a_null_team_key_parses_as_no_team() {
+    use board_core::protocol::{LinearListKind, LinearListResult};
+
+    // The plugin's projects script prints `"team_key": null` for a project
+    // with no team.
+    let envelope = json!({
+        "status": "ok",
+        "message": null,
+        "rows": [
+            {"id": "project-one", "name": "Example project", "team_key": null},
+            {"id": "project-two", "name": "Other project", "team_key": "EX"},
+            {"id": "project-three", "name": "Third project"},
+        ],
+    });
+    let LinearListResult::Projects(list) =
+        LinearListResult::from_value(LinearListKind::Projects, envelope).unwrap()
+    else {
+        panic!("not a projects list");
+    };
+    let keys: Vec<serde_json::Value> = list
+        .rows
+        .iter()
+        .map(|r| serde_json::to_value(r).unwrap()["team_key"].clone())
+        .collect();
+    assert_eq!(keys, vec![json!(null), json!("EX"), json!(null)]);
+}
+
+#[test]
+fn list_rows_read_a_null_string_field_as_empty() {
+    use board_core::protocol::{LinearListKind, LinearListResult};
+
+    for (kind, row) in [
+        (
+            LinearListKind::Spaces,
+            json!({"id": "wA", "label": null, "state": null, "live": null}),
+        ),
+        (LinearListKind::Projects, json!({"id": "p1", "name": null})),
+        (LinearListKind::Views, json!({"id": null, "name": null})),
+    ] {
+        let envelope = json!({"status": "ok", "message": null, "rows": [row]});
+        let parsed = LinearListResult::from_value(kind, envelope);
+        assert!(parsed.is_ok(), "{kind:?}: {parsed:?}");
     }
 }
 

@@ -1,6 +1,6 @@
-//! The keys a person has set in their herdr config, for the Linear `?` sheet
-//! (R7, KTD14). Read once at start; any failure means no section, never an
-//! error. The rows never join `view::HELP_KEYS`.
+//! The keys a person has set in their herdr config, for the Linear `?` sheet.
+//! Read once at start; any failure means no section, never an error. The rows
+//! never join `view::HELP_KEYS`.
 
 use std::ffi::OsString;
 use std::fmt;

@@ -291,7 +291,7 @@ fn top_level_status_is_not_a_command() {
     );
 }
 
-// -- Linear reads (U17) -------------------------------------------------------
+// -- Linear reads -------------------------------------------------------------
 
 #[test]
 fn the_three_linear_list_verbs_parse() {

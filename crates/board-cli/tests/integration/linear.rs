@@ -305,7 +305,7 @@ fn stopping_the_daemon_mid_snapshot_stops_the_script() {
     let _ = asker.join();
 }
 
-// -- the three list verbs (U17) -----------------------------------------------
+// -- the three list verbs -----------------------------------------------------
 
 const CLI_ERROR: i32 = 64;
 
@@ -473,7 +473,26 @@ fn a_name_carrying_a_bidi_override_prints_stripped() {
     assert_eq!(json_output(&out)["rows"][0]["name"], "Example");
 }
 
-/// R25: the positional is optional; the pane's space id stands in for it.
+#[test]
+fn a_project_with_no_team_prints_an_empty_team_cell_and_a_null_key() {
+    let envelope = r#"{"status":"ok","message":null,"rows":[{"id":"proj-1","name":"Example","team_key":null}]}"#;
+    let root = fake_plugin_root("0.4.0", &[("FAKE_WORK_LIST_JSON", envelope)]);
+    let td = daemon_with_root(root.path());
+
+    let text = stdout_text(&td.board(&["linear", "project", "list"]));
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(
+        text.contains("proj-1") && text.contains("Example"),
+        "{text}"
+    );
+    assert!(!text.contains("null"), "{text}");
+
+    let doc = json_output(&td.board(&["linear", "project", "list", "--json"]));
+    assert_eq!(doc["status"], "ok");
+    assert!(doc["rows"][0]["team_key"].is_null(), "{doc}");
+}
+
+/// The positional is optional; the pane's space id stands in for it.
 #[test]
 fn snapshot_without_a_positional_uses_herdr_workspace_id() {
     let root = fake_plugin_root("0.4.0", &[]);
@@ -507,7 +526,7 @@ fn snapshot_with_neither_a_positional_nor_herdr_workspace_id_exits_64() {
     assert!(empty.stdout.is_empty());
 }
 
-/// R26: the bind handoff has no command-line verb.
+/// The bind handoff has no command-line verb.
 #[test]
 fn bind_is_not_a_command_line_verb() {
     let td = TestDaemon::start(&[]);

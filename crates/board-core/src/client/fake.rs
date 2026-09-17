@@ -904,7 +904,7 @@ mod tests {
         LinearProjectRow {
             id: id.into(),
             name: "Example project".into(),
-            team_key: "EX".into(),
+            team_key: Some("EX".into()),
         }
     }
 

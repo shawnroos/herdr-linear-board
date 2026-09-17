@@ -528,7 +528,11 @@ impl Render for LinearListResult {
                 ]
             }),
             LinearListResult::Projects(list) => linear_list(out, list, |row| {
-                vec![row.id.clone(), row.team_key.clone(), row.name.clone()]
+                vec![
+                    row.id.clone(),
+                    row.team_key.clone().unwrap_or_default(),
+                    row.name.clone(),
+                ]
             }),
             LinearListResult::Views(list) => {
                 linear_list(out, list, |row| vec![row.id.clone(), row.name.clone()])

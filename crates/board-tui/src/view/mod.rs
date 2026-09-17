@@ -324,8 +324,17 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh snapshot"),
     (Screen::LinearDetail, "q / Esc", "back to board"),
-    (Screen::LinearNotBound, "r / R", "refresh after /work:bind"),
-    (Screen::LinearNotBound, "q / Esc", "quit"),
+    (Screen::LinearNotBound, "s", "focus the spaces strip"),
+    (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
+    (
+        Screen::LinearNotBound,
+        "click strip",
+        "choose a project for it",
+    ),
+    (Screen::LinearNotBound, "t", "strip: spaces / tabs"),
+    (Screen::LinearNotBound, "r / R", "refresh after a bind"),
+    (Screen::LinearNotBound, "Esc", "strip: unfocus, else quit"),
+    (Screen::LinearNotBound, "q", "quit"),
     (Screen::LinearError, "r / R", "retry the snapshot"),
     (Screen::LinearError, "Esc", "dismiss, keep last good"),
     (Screen::LinearError, "q", "quit"),
@@ -366,6 +375,8 @@ pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
 
 mod layout;
 mod linear;
+mod linear_picker;
+mod linear_strip;
 mod overlays;
 
 pub use detail::{
