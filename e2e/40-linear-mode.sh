@@ -5,6 +5,7 @@
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib.sh"
 
+trap e2e_cleanup EXIT
 e2e_enable_fake_pi
 export FAKE_PI_SLEEP=300
 e2e_init
