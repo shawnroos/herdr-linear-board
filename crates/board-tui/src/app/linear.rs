@@ -1,7 +1,9 @@
 //! Linear mode: the state and reducer for a herdr space bound to a Linear
 //! project. The document is the work plugin's snapshot (`linear.snapshot`);
 //! nothing here reads `App::board`, and no effect emitted here writes to
-//! Linear, to the plugin's records, or to the herdr layout.
+//! Linear, to the plugin's records, or to SQLite. The herdr writes it asks the
+//! daemon for are this pane's title, pane focus, and a bind handoff that opens
+//! one `bind` tab; the bind skill's confirmation in that tab gates every write.
 
 use board_core::protocol::{
     LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearListEnvelope,

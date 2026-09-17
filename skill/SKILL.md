@@ -257,33 +257,52 @@ settings are validated as a complete merged configuration, and effective card+co
 checked again before dispatch. Pi has no permission modes; `bypassPermissions` is never a column
 override.
 
-### Linear mode (read-only view of a bound herdr space)
+### Linear mode (a board for a bound herdr space)
 
 ```bash
-board linear snapshot <WORKSPACE_ID> [--json]
+board linear snapshot [WORKSPACE_ID] [--json]
+board linear space list [--json]
+board linear project list [--json]
+board linear view list <PROJECT_ID> [--json]
 ```
 
 - Inside a herdr pane whose space the `work` plugin has bound to a Linear project
   (`HERDR_WORKSPACE_ID`, or the plugin context's `workspace_id`, is set), `board tui` opens a
-  read-only Linear board for that space instead of the kanban: columns are the recorded Linear
+  Linear board for that space instead of the kanban: columns are the recorded Linear
   view's groups (or the team's workflow states when no view is chosen), cards are the project's
   issues, and each card lists its worktree bindings, recorded tabs and live pane status. It writes
-  nothing (no Linear, no plugin record, no SQLite row, no pane title); the only herdr call is
-  focusing an existing pane (`o`). `r` refreshes; `u` opens the issue; `y` copies the worktree
-  path. Card-owning verbs are refused with a toast. Outside herdr the kanban is unchanged.
-- `board linear snapshot <WORKSPACE_ID>` is the same read as JSON: the daemon runs the plugin's
+  nothing to Linear, the plugin's records or SQLite. Its herdr writes are its pane title
+  (`Linear: <project or space>`), focusing an existing pane (`o`), and, when the person chooses a
+  space's project, a view (`v`) or `b` on a card, one new `bind` tab running Claude with the
+  plugin's `/work:bind` skill. `r` refreshes; `u` opens the issue; `y` copies the worktree path.
+  Card-owning verbs are refused with a toast. Outside herdr the kanban is unchanged.
+- `board linear snapshot [WORKSPACE_ID]` is the same read as JSON; with no positional it reads
+  `$HERDR_WORKSPACE_ID`, and fails without contacting the daemon when that is unset: the daemon runs the plugin's
   `bin/work-snapshot.sh` for that space and attaches a `pane_status` map (`working`, `idle`,
   `blocked`, `done`, `unknown`). Every section carries its own `status` (`ok`, `unavailable`,
   `unknown`, `missing`); exit 0 means a document came back, not that every source was reachable.
 - The daemon finds the plugin through `BOARD_WORK_PLUGIN_ROOT` (yours first, sent with the request,
   then the daemon's), then `[daemon] work_plugin_root` in the board config, then the installed
-  `work@shrimpshack` plugin; it needs plugin `0.3.0` or newer. A missing or too-old plugin is
-  protocol code 6 (`work plugin unavailable`), exit 6. All of these are read on every request, so a
+  `work@shrimpshack` plugin; it needs plugin `0.4.0` or newer. A missing or too-old plugin is
+  protocol code 6 (`work plugin unavailable`), exit 6, for the snapshot and the three list verbs. All of these are read on every request, so a
   change takes effect without restarting the daemon. The error never includes the script's stderr;
   it names the command to run by hand to see it.
+- `board linear space list`, `project list` and `view list <PROJECT_ID>` run the plugin's
+  `bin/work-spaces.sh`, `bin/work-projects.sh` and `bin/work-views.sh`. `--json` prints the
+  plugin's envelope `{"status": ..., "message": ..., "rows": [...]}`, with `status` one of `ok`,
+  `unavailable`, `partial` or `unknown` and `message` a string or `null`. Rows are
+  `{id, label, live, state, project_id, project_name}` for spaces (every space, bound or not),
+  `{id, name, team_key}` for projects (the projects you are a member of) and `{id, name}` for
+  views. The text form prints a `status:` line first when the status is not `ok`, then a table.
+  Like the snapshot, exit 0 means a list came back, not that every source was reachable. A project
+  id must be 1 to 64 ASCII letters, digits, `_` or `-`, starting with a letter or digit.
 - Focusing a pane (`o` in the Linear board) has no CLI verb on purpose: it moves the person's view
   in herdr, which an agent has no reason to do. An agent that needs a pane's state reads
   `pane_status` from `board linear snapshot`.
+- Starting a bind from the board (a strip space's project, `v`, or `b` on a card) has no CLI verb on
+  purpose: it opens a new herdr tab and starts a Claude session for a person to confirm in, which an
+  agent has no reason to do. An agent that needs a bind runs the plugin's `/work:bind` skill itself,
+  with the ids the list verbs print.
 
 ### TUI, daemon, version, skill
 

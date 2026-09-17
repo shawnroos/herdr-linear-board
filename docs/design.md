@@ -931,8 +931,10 @@ Isolation rules for level 3–4: `BOARD_DB=/tmp/…` + dedicated daemon socket p
 ## 13. Linear mode
 
 Linear mode is the board rendered for one herdr space that the work plugin (`work@shrimpshack`)
-has bound to a Linear project. It is a read-only view over the plugin's snapshot document; the
-upstream kanban, its SQLite rows, and its dispatch engine are not involved.
+has bound to a Linear project. It is a view over the plugin's snapshot document; the upstream
+kanban, its SQLite rows, and its dispatch engine are not involved. The board never moves a card,
+edits an issue, or writes a Linear object, a plugin record or a SQLite row. Its herdr writes are
+its own pane title and, when a person starts a bind, one new `bind` tab running Claude.
 
 **Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
 `workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
@@ -948,7 +950,7 @@ project, board, or card id, so the daemon has no row for it and no mutating meth
 read:
 
 ```text
-board tui / board linear snapshot <id>
+board tui / board linear snapshot [id]
   → boardd  linear.snapshot
       → plugin root / bin/work-snapshot.sh <id>      (document on stdout, per-section status)
       → herdr  session.snapshot on origin_socket       (best effort: pane_status per named pane)
@@ -959,7 +961,7 @@ The plugin root is resolved on every request, in order: the caller's `BOARD_WORK
 (sent as `plugin_root`), the daemon's, `[daemon] work_plugin_root` read from the board config at
 that moment, then the `user`-scope `installPath` of `work@shrimpshack` in
 `~/.claude/plugins/installed_plugins.json`. None of them needs a daemon restart to take effect. The daemon reads `.claude-plugin/plugin.json` at that
-root and refuses a version below `0.3.0`, naming both versions. The script runs under a bounded
+root and refuses a version below `0.4.0`, naming both versions. The script runs under a bounded
 deadline with an environment built from scratch (`HOME`, `PATH`, the origin socket as
 `HERDR_SOCKET_PATH`, every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, and the retry and
 timeout knobs the daemon sets, including the bounds on the plugin's herdr and keychain reads);
@@ -972,16 +974,80 @@ renders as partial. Pane status is a second read after the script, on the origin
 origin socket or any failure every status is `unknown`. Every
 plugin-side failure is protocol error `6`, which the CLI passes through as exit code `6`.
 
-`board linear snapshot <workspace-id> [--json]` is the same read from the command line and prints
+`board linear snapshot [workspace-id] [--json]` is the same read from the command line and prints
 the document as JSON either way; it exists so the CLI-to-daemon-to-script path is provable
 without a terminal.
 
-**Effects.** In Linear mode the driver executes only refetch, the snapshot request, pane focus,
-opening the issue URL, copying the worktree path, and quit; every other effect is refused with a
-toast before a request is built. The refusal is the gate, not the hidden keys.
+`board linear snapshot` with no positional reads the space from `HERDR_WORKSPACE_ID`, before it
+connects to the daemon, so a missing id never starts one.
 
-**Pane title.** Linear mode never sends `pane.set_title`. The plugin pane keeps the title herdr
-gave it.
+**Lists.** `linear.list {kind, id?}` runs one of three more plugin scripts through the same runner:
+`bin/work-spaces.sh` (every herdr space with its binding state), `bin/work-projects.sh` (the Linear
+projects the person is a member of) and `bin/work-views.sh <project id>` (one project's views).
+The runner shares the snapshot's root resolution, version floor, environment, stderr rule and stop
+rules, with its own deadline. The answer is the plugin's envelope `{status, message, rows}`, with
+`status` one of `ok`, `unavailable`, `partial` or `unknown`; the daemon strips control and format
+characters from every string before it answers. A plugin-side failure is protocol error `6`, as
+for the snapshot. `board linear space list`, `board linear project list` and
+`board linear view list <project id>` are the same reads from the command line.
+
+**Effects.** In Linear mode the driver executes only refetch, the snapshot request, a list read,
+pane focus, opening the issue URL, copying the worktree path, setting the Linear pane title, the
+bind handoff, and quit. Every other effect is refused with a toast before a request is built. A
+test classifies every effect variant as allowed or refused, so a new variant must be placed before
+the crate builds. This set guards the board's own code against a regression that adds a write
+path. It is not a boundary on socket clients: any client of the board socket can call any method.
+
+**Pane title.** After each good snapshot the board sets its plugin pane's title to
+`Linear: <name>`, where the name is the bound project's name, else the space label, else the space
+id. The TUI strips brackets, control characters and format characters from the name, so no name
+can forge the kanban's `Board [...]` title. The daemon's `pane.set_title` strips control and format
+characters again at the sink, for every caller. `scripts/open-board.sh` matches `Linear: .+`, so
+the launcher key toggles a Linear board the way it toggles a kanban. Outside a herdr plugin pane
+no title is sent, and a failed rename is dropped without a toast.
+
+**Layout.** Cards are five rows tall and columns are at least 36 cells wide. A title wraps to two
+lines by display width, so wide characters do not overflow the card. When the body is narrower
+than two columns (72 cells), the board stacks: one group fills the width and `←`/`→` move between
+groups. The header names the recorded view, or `view: project issues (default)` when none is
+chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
+herdr config (`$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`), read
+once at start. A missing, unreadable, oversized (over 64 KiB) or unparseable config leaves the
+section out; it is never an error.
+
+**Mouse.** A click on a card opens its detail. A click on a group header focuses that group. The
+wheel moves the card selection. A click on a strip row opens the project picker for that space, a
+click on the header's view label opens the view picker, and a click on a picker row chooses it.
+Every other click is swallowed, which is also how an open picker shadows the board behind it.
+
+**Strip.** Below the header the strip lists the spaces that have no bound project, read with
+`linear.list {kind: spaces}` alongside every snapshot. A failed read says the list is unavailable;
+it never reads as "every space is bound". `s` focuses the strip, `↑`/`↓` select a space, `Enter`
+opens the project picker for it, and `Esc` returns to the board. `t` switches the strip between
+the spaces and the snapshot's unmapped tabs.
+
+**Pickers.** The space, project and view pickers share one type-to-filter picker. Every printable
+key is filter text, including `?`, `r` and `q`; the filter is a case-insensitive substring match.
+`Backspace` edits the filter, `Esc` clears it and then closes the picker, and `↑`/`↓`/`Enter` move
+and choose. The picker opens at once with a loading line, then shows the rows, an empty-list line,
+or the read failure. A second open while a read is on the way sends no second request. `v` (or a
+click on the header's view label) opens the view picker for the bound project.
+
+**Bind handoff.** A bind starts from three places: a project chosen for a strip space binds that
+space to the project; a view chosen in the view picker binds the current space's project with that
+view; and `b` in a card's detail binds the selected worktree binding for that issue, in its
+worktree. `b` accepts only a binding the plugin can confirm or repair (`proposed`, `stale` or
+`misplaced`) and refuses every other state by name. Each sends `linear.bind_handoff` with ids and a
+directory, never names. The daemon validates them, opens an unfocused `bind` tab in the caller's
+own herdr session, and starts an interactive Claude there whose first turn is
+`/work:bind --space S --project P [--view V | --issue I]`. The board then focuses the returned pane.
+One handoff is in flight at a time. On success the header notes that the bind started in a new tab
+and that `r` refreshes when it finishes; there is no automatic refresh. A failure is a toast. A
+timeout tells the person to look for a `bind` tab before trying again, because the tab can open
+after the client stops waiting. The bind tab stays open after the skill finishes, is declined, or is
+left waiting; the person closes it. The daemon writes nothing; the bind skill's confirmation in that
+session is the only write gate. The mechanism, and why it does not use `agent.prompt`, is in
+[`herdr.md`](herdr.md) → Linear bind handoff.
 
 **Refresh.** Refresh is manual. A reconnect to the daemon is the one automatic refresh and sends
 exactly one snapshot request; `board_changed` events are ignored, since no board row can change.
