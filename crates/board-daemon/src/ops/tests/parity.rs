@@ -46,7 +46,7 @@ const KNOWN_UNIMPLEMENTED: &[&str] = &[
 /// be built against it. Each entry must leave this list in the change that
 /// routes it; `the_unrouted_allowlist_only_names_faked_unrouted_methods` fails
 /// until it does, so the list cannot hide a method that never gets routed.
-const KNOWN_UNROUTED: &[&str] = &["linear.bind_handoff"];
+const KNOWN_UNROUTED: &[&str] = &[];
 
 fn set(methods: &[&str]) -> BTreeSet<String> {
     methods.iter().map(|m| (*m).to_string()).collect()
