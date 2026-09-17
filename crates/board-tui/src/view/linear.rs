@@ -103,7 +103,9 @@ fn age(app: &App, state: &LinearState) -> String {
     }
 }
 
-fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
+/// The header's two lines, and the columns of the first line the view text
+/// spans as `(start, width)`.
+fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u16)) {
     let snapshot = state.snapshot();
     let project = snapshot
         .and_then(|s| s.project.name.clone())
@@ -127,16 +129,20 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
     let space = snapshot
         .map(|s| line(&s.workspace.label))
         .unwrap_or_else(|| state.workspace_id.clone());
+    let badge = " Linear ";
+    let lead = format!(" {} · ", line(&project));
+    let view_span = (
+        u16::try_from(badge.width() + lead.width()).unwrap_or(u16::MAX),
+        u16::try_from(view.width()).unwrap_or(u16::MAX),
+    );
     let mut first = vec![
         Span::styled(
-            " Linear ",
+            badge,
             Style::default().fg(Color::Black).bg(Color::LightBlue),
         ),
-        Span::raw(format!(
-            " {} · {view} · space: {space} · fetched {}",
-            line(&project),
-            age(app, state)
-        )),
+        Span::raw(lead),
+        Span::raw(view),
+        Span::raw(format!(" · space: {space} · fetched {}", age(app, state))),
     ];
     if state.in_flight {
         first.push(Span::styled(
@@ -168,7 +174,7 @@ fn header_lines(app: &App, state: &LinearState) -> Vec<Line<'static>> {
             Span::styled(format!(" {note} ·"), Style::default().fg(Color::LightGreen)),
         );
     }
-    vec![Line::from(first), Line::from(second)]
+    (vec![Line::from(first), Line::from(second)], view_span)
 }
 
 fn split_at_width(s: &str, max: usize) -> (&str, &str) {
@@ -254,9 +260,16 @@ fn card_lines(issue: &LinearIssue, width: usize) -> Vec<String> {
 }
 
 fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
-    let header = header_lines(app, state);
+    let (header, (view_x, view_w)) = header_lines(app, state);
     let header_area = Rect::new(area.x, area.y, area.width, HEADER_ROWS.min(area.height));
     f.render_widget(Paragraph::new(header), header_area);
+    let view_w = view_w.min(area.width.saturating_sub(view_x));
+    if header_area.height > 0 && view_w > 0 {
+        app.hit_map.borrow_mut().push(
+            Rect::new(area.x + view_x, area.y, view_w, 1),
+            Zone::LinearHeaderView,
+        );
+    }
 
     let Some(snapshot) = state.snapshot() else {
         let body = Rect::new(
@@ -673,7 +686,7 @@ fn draw_detail(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(
             truncate(
-                " j/k pane · o focus pane · u open in Linear · y copy path · Esc back",
+                " j/k pane · o focus pane · u open in Linear · y copy path · b bind · Esc back",
                 inner.width as usize,
             ),
             Style::default().fg(Color::DarkGray),

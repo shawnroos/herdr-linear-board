@@ -141,6 +141,7 @@ fn failure_text(failure: &LinearFailure) -> String {
         LinearFailure::MethodNotFound => {
             "the daemon is older than the board and has no linear.list".to_string()
         }
+        LinearFailure::TimedOut(limit) => super::linear::read_timeout_text(*limit),
         LinearFailure::Failed(text) => super::sanitise(text),
     }
 }
@@ -177,6 +178,20 @@ pub(super) fn linear_picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                     BindTarget {
                         space,
                         project: id,
+                        ..BindTarget::default()
+                    },
+                );
+            }
+            if let (LinearListKind::Views, Some(project)) = (kind, picker.list_id.clone()) {
+                let Some(space) = app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
+                    return vec![];
+                };
+                return start_bind_handoff(
+                    app,
+                    BindTarget {
+                        space,
+                        project,
+                        view: Some(id),
                         ..BindTarget::default()
                     },
                 );
@@ -231,6 +246,13 @@ pub struct BindTarget {
 /// Mark a handoff in flight and emit it, or send nothing while one is already
 /// on the way.
 pub fn start_bind_handoff(app: &mut App, target: BindTarget) -> Vec<Effect> {
+    let origin = match (&app.picker, app.screen) {
+        (Some(picker), Screen::LinearPicker) => match picker.purpose {
+            PickerPurpose::LinearList(kind) => Some((kind, picker.list_id.clone())),
+            _ => None,
+        },
+        _ => None,
+    };
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -238,6 +260,7 @@ pub fn start_bind_handoff(app: &mut App, target: BindTarget) -> Vec<Effect> {
         return vec![];
     }
     state.handoff_in_flight = true;
+    state.handoff_picker = origin;
     vec![Effect::BindHandoff {
         space: target.space,
         project: target.project,
@@ -255,13 +278,16 @@ pub(super) fn handoff_arrived(
         return vec![];
     };
     state.handoff_in_flight = false;
+    let origin = state.handoff_picker.take();
     match result {
         Ok(opened) => {
             state.bind_space = None;
             state.bind_note = Some("bind started in a new tab · r refresh when it finishes".into());
-            if app.screen == Screen::LinearPicker {
-                if let Some(picker) = app.picker.take() {
-                    app.screen = picker.return_to;
+            if let Some((kind, list_id)) = origin {
+                if is_open_for(app, kind, &list_id) {
+                    if let Some(picker) = app.picker.take() {
+                        app.screen = picker.return_to;
+                    }
                 }
             }
             vec![Effect::FocusPane(opened.pane_id)]
@@ -271,6 +297,12 @@ pub(super) fn handoff_arrived(
                 LinearFailure::MethodNotFound => {
                     "the daemon is older than the board and has no linear.bind_handoff".to_string()
                 }
+                // `r` refreshes the snapshot, not the bind, and the tab may
+                // have opened after the limit, so a retry could open a second.
+                LinearFailure::TimedOut(limit) => format!(
+                    "the bind did not start within {}s; look for a bind tab before trying again",
+                    limit.as_secs()
+                ),
                 LinearFailure::Failed(text) => super::sanitise(&text),
             };
             app.set_toast(format!("bind failed: {text}"), true);

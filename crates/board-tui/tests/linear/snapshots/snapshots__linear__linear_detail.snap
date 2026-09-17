@@ -31,6 +31,6 @@ expression: frame
 "│ │                                                                                                                  │ │"
 "└─│                                                                                                                  │─┘"
 " S│                                                                                                                  │  "
-"  │ j/k pane · o focus pane · u open in Linear · y copy path · Esc back                                              │  "
+"  │ j/k pane · o focus pane · u open in Linear · y copy path · b bind · Esc back                                     │  "
 "  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘  "
 "                                                                                                                        "

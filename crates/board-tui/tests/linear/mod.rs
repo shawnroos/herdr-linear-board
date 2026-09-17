@@ -2351,3 +2351,327 @@ fn typing_a_picker_row_as_drawn_matches_it() {
     type_text(&mut d, "ops       example");
     assert_eq!(visible_ids(&d), vec!["p1"]);
 }
+
+// -- the view picker and the card bind key (R10, R12, R20, AE8) --------------
+
+use board_core::protocol::{LinearBinding, LinearTabRef, LinearViewRow};
+
+const BOUND_PROJECT: &str = "44444444-4444-4444-8444-444444444444";
+
+fn views(rows: &[(&str, &str)]) -> LinearListResult {
+    LinearListResult::Views(LinearListEnvelope {
+        status: LinearListStatus::Ok,
+        message: None,
+        rows: rows
+            .iter()
+            .map(|(id, name)| LinearViewRow {
+                id: (*id).into(),
+                name: (*name).into(),
+            })
+            .collect(),
+    })
+}
+
+fn view_client() -> FakeBoardClient {
+    fake_with(bound_with_view())
+        .with_linear_list(views(&[("v1", "Example view"), ("v2", "Sample triage")]))
+        .with_linear_bind_handoff(handoff_result())
+}
+
+fn view_lists(log: &board_tui::testkit::RequestLog) -> Vec<Value> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p)| m == "linear.list" && p["kind"] == "views")
+        .map(|(_, p)| p["id"].clone())
+        .collect()
+}
+
+fn assert_view_picker_open(d: &Driver) {
+    assert_eq!(d.app.screen, Screen::LinearPicker);
+    let picker = d.app.picker.as_ref().unwrap();
+    assert_eq!(
+        picker.purpose,
+        board_tui::app::PickerPurpose::LinearList(LinearListKind::Views)
+    );
+    assert_eq!(picker.list_id.as_deref(), Some(BOUND_PROJECT));
+}
+
+#[test]
+fn v_on_the_board_opens_the_view_picker_for_the_bound_project() {
+    let (client, log) = RecordingClient::new(view_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    press(&mut d, KeyCode::Char('v'));
+    assert_view_picker_open(&d);
+    assert_eq!(view_lists(&log), vec![Value::from(BOUND_PROJECT)]);
+    assert_eq!(visible_ids(&d), vec!["v1", "v2"]);
+}
+
+#[test]
+fn a_click_on_the_headers_view_opens_the_view_picker() {
+    let (client, log) = RecordingClient::new(view_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    let frame = render_at(&mut d, W, H);
+    let first = frame.lines().next().unwrap();
+    let at = first
+        .find("view: Canvas board")
+        .unwrap_or_else(|| panic!("{frame}"));
+    let x = first[..at].chars().count() as u16 + 8;
+    d.handle(left_down(x, 0));
+    assert_view_picker_open(&d);
+    assert_eq!(view_lists(&log), vec![Value::from(BOUND_PROJECT)]);
+}
+
+#[test]
+fn a_click_on_the_header_outside_the_view_opens_nothing() {
+    let (client, log) = RecordingClient::new(view_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    let _ = render_at(&mut d, W, H);
+    d.handle(left_down(2, 0));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(view_lists(&log).is_empty());
+}
+
+#[test]
+fn choosing_a_view_sends_a_handoff_with_space_project_and_view_ids() {
+    let (client, log) = RecordingClient::new(view_client());
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    press(&mut d, KeyCode::Char('v'));
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        handoffs(&log),
+        vec![serde_json::json!({
+            "space": "wA",
+            "project": BOUND_PROJECT,
+            "view": "v2",
+            "origin_socket": "/tmp/herdr-test.sock",
+        })]
+    );
+    assert!(methods(&log).iter().any(|m| m == "pane.focus"));
+    assert!(d.app.picker.is_none());
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn the_view_picker_on_an_unbound_space_says_there_is_no_project_to_list_views_for() {
+    let client =
+        fake_with(linear_fixture("unbound")).with_linear_list(views(&[("v1", "Example view")]));
+    let (client, log) = RecordingClient::new(client);
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    assert_eq!(d.app.screen, Screen::LinearNotBound);
+    press(&mut d, KeyCode::Char('v'));
+    assert!(
+        toast(&d).contains("no project to list views for"),
+        "{}",
+        toast(&d)
+    );
+    assert_eq!(d.app.screen, Screen::LinearNotBound);
+    assert!(d.app.picker.is_none());
+    assert!(view_lists(&log).is_empty());
+    assert!(!d.app.should_quit);
+}
+
+#[test]
+fn the_view_picker() {
+    let (mut d, _, _) = linear_driver(view_client(), start_with_socket());
+    press(&mut d, KeyCode::Char('v'));
+    let frame = render_at(&mut d, W, H);
+    assert!(
+        frame.contains(&format!("binds space wA · project {BOUND_PROJECT}")),
+        "{frame}"
+    );
+    insta::assert_snapshot!("linear_view_picker", frame);
+}
+
+fn binding(state: &str, path: &str, pane: &str) -> LinearBinding {
+    LinearBinding {
+        worktree_path: path.into(),
+        state: state.into(),
+        tab: Some(LinearTabRef {
+            id: "wA:t1".into(),
+            label: Some("Plugin PM".into()),
+        }),
+        panes: vec![pane.into()],
+    }
+}
+
+/// `bound_with_view` with WEB-3312's bindings replaced.
+fn card_client(bindings: Vec<LinearBinding>) -> FakeBoardClient {
+    let mut snapshot = bound_with_view();
+    snapshot.issues.get_mut("WEB-3312").unwrap().bindings = bindings;
+    fake_with(snapshot).with_linear_bind_handoff(handoff_result())
+}
+
+#[test]
+fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
+    let client = card_client(vec![binding(
+        "proposed",
+        "$SANDBOX/worktrees/web-3312",
+        "wA:p2",
+    )]);
+    let (client, log) = RecordingClient::new(client);
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('b'));
+    assert_eq!(
+        handoffs(&log),
+        vec![serde_json::json!({
+            "space": "wA",
+            "project": BOUND_PROJECT,
+            "issue": "WEB-3312",
+            "working_directory": "$SANDBOX/worktrees/web-3312",
+            "origin_socket": "/tmp/herdr-test.sock",
+        })]
+    );
+}
+
+#[test]
+fn b_acts_on_stale_and_misplaced_bindings_too() {
+    for state in ["stale", "misplaced"] {
+        let client = card_client(vec![binding(state, "$SANDBOX/worktrees/web-3312", "wA:p2")]);
+        let (client, log) = RecordingClient::new(client);
+        let (mut d, _, _) = linear_driver(client, start_with_socket());
+        open_web_3312(&mut d);
+        press(&mut d, KeyCode::Char('b'));
+        assert_eq!(handoffs(&log).len(), 1, "{state}");
+    }
+}
+
+#[test]
+fn b_on_a_card_with_two_bindings_uses_the_selected_one_and_refuses_a_bound_one() {
+    let client = card_client(vec![
+        binding("bound", "$SANDBOX/worktrees/web-3312", "wA:p1"),
+        binding("proposed", "$SANDBOX/worktrees/web-3312-retry", "wA:p2"),
+    ]);
+    let (client, log) = RecordingClient::new(client);
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('k'));
+    press(&mut d, KeyCode::Char('b'));
+    assert!(toast(&d).contains("already bound"), "{}", toast(&d));
+    assert!(handoffs(&log).is_empty(), "a bound binding sends nothing");
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('b'));
+    let sent = handoffs(&log);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0]["working_directory"],
+        "$SANDBOX/worktrees/web-3312-retry"
+    );
+    assert_eq!(sent[0]["issue"], "WEB-3312");
+}
+
+#[test]
+fn b_on_a_bound_binding_toasts_that_it_is_already_bound_and_sends_nothing() {
+    let (client, log) = RecordingClient::new(
+        fake_with(bound_with_view()).with_linear_bind_handoff(handoff_result()),
+    );
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('b'));
+    assert!(toast(&d).contains("already bound"), "{}", toast(&d));
+    assert!(d.app.toast.as_ref().unwrap().is_error);
+    assert!(handoffs(&log).is_empty());
+    assert!(!d.app.linear.as_ref().unwrap().handoff_in_flight);
+}
+
+#[test]
+fn b_on_a_card_with_no_binding_toasts_and_sends_nothing() {
+    let (client, log) = RecordingClient::new(
+        fake_with(bound_with_view()).with_linear_bind_handoff(handoff_result()),
+    );
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3318")
+    );
+    press(&mut d, KeyCode::Char('b'));
+    assert!(toast(&d).contains("no worktree binding"), "{}", toast(&d));
+    assert!(handoffs(&log).is_empty());
+}
+
+#[test]
+fn b_on_a_worktree_missing_binding_toasts_and_sends_nothing() {
+    let (client, log) = RecordingClient::new(
+        fake_with(linear_fixture("worktree-missing")).with_linear_bind_handoff(handoff_result()),
+    );
+    let (mut d, _, _) = linear_driver(client, start_with_socket());
+    open_web_3312(&mut d);
+    press(&mut d, KeyCode::Char('b'));
+    assert!(toast(&d).contains("worktree is missing"), "{}", toast(&d));
+    assert!(handoffs(&log).is_empty());
+}
+
+#[test]
+fn a_successful_handoff_closes_only_the_picker_that_started_it() {
+    let (client, log) = RecordingClient::new(
+        strip_client()
+            .with_linear_list(views(&[("v1", "Example view")]))
+            .with_linear_bind_handoff(handoff_result()),
+    );
+    let mut d = linear_driver_deferred(client, start_with_socket());
+    assert!(d.deliver_pending_linear_snapshot());
+    assert!(d.deliver_pending_linear_list());
+    open_space_picker(&mut d);
+    assert!(d.deliver_pending_linear_list());
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    press(&mut d, KeyCode::Char('v'));
+    assert!(d.deliver_pending_linear_list());
+    assert!(d.deliver_pending_linear_handoff());
+    assert!(methods(&log).iter().any(|m| m == "pane.focus"));
+    assert_view_picker_open(&d);
+}
+
+/// Answers one method with a client read timeout; the rest delegates.
+struct TimesOut(&'static str, FakeBoardClient);
+
+impl BoardClient for TimesOut {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        if method == self.0 {
+            return Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "Resource temporarily unavailable",
+            )));
+        }
+        self.1.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.1.subscribe()
+    }
+}
+
+#[test]
+fn a_handoff_timeout_names_the_bind_and_its_own_limit_not_the_refresh_key() {
+    let (mut d, _, _) = linear_driver(
+        TimesOut("linear.bind_handoff", view_client()),
+        start_with_socket(),
+    );
+    press(&mut d, KeyCode::Char('v'));
+    press(&mut d, KeyCode::Enter);
+    let text = toast(&d);
+    let limit = board_core::protocol::LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT.as_secs();
+    assert!(text.contains(&format!("within {limit}s")), "{text}");
+    assert!(text.contains("bind"), "{text}");
+    assert!(!text.contains("press r"), "{text}");
+    assert!(!d.app.linear.as_ref().unwrap().handoff_in_flight);
+}
+
+#[test]
+fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
+    let (d, _, _) = linear_driver(
+        TimesOut("linear.snapshot", fake_with(bound_with_view())),
+        linear_start(),
+    );
+    assert_eq!(d.app.screen, Screen::LinearError);
+    let limit = board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT.as_secs();
+    let frame = draw(&d.app, W, H);
+    assert!(
+        frame.contains(&format!("did not answer within {limit}s; press r")),
+        "{frame}"
+    );
+}

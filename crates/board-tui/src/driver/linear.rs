@@ -100,7 +100,10 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
 
 /// The daemon reports an unknown method as protocol code 1 with the message
 /// `bad request: unknown method: <name>`; code 1 alone also covers bad params.
-pub(crate) fn classify<T>(result: anyhow::Result<T>) -> Result<T, LinearFailure> {
+pub(crate) fn classify<T>(
+    result: anyhow::Result<T>,
+    timeout: Duration,
+) -> Result<T, LinearFailure> {
     result.map_err(|error| {
         let rpc = error
             .chain()
@@ -115,10 +118,7 @@ pub(crate) fn classify<T>(result: anyhow::Result<T>) -> Result<T, LinearFailure>
                 )
             });
         if rpc.is_none() && timed_out {
-            return LinearFailure::Failed(format!(
-                "the daemon did not answer within {}s; press r to try again",
-                LINEAR_SNAPSHOT_CLIENT_TIMEOUT.as_secs()
-            ));
+            return LinearFailure::TimedOut(timeout);
         }
         match rpc {
             Some(rpc) if rpc.code == 1 && rpc.message.contains("unknown method") => {
@@ -151,12 +151,14 @@ impl Driver {
                         client.set_read_timeout(Some(timeout))?;
                         read(&mut client)
                     });
-                    let _ = tx.send(wrap(classify(result)));
+                    let _ = tx.send(wrap(classify(result, timeout)));
                 });
             }
             _ => {
                 let result = read(self.client.as_mut());
-                self.handle(Msg::LinearArrived(Box::new(wrap(classify(result)))));
+                self.handle(Msg::LinearArrived(Box::new(wrap(classify(
+                    result, timeout,
+                )))));
             }
         }
     }
@@ -284,7 +286,7 @@ impl Driver {
         };
         let result = self.client.linear_snapshot(&params);
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::Snapshot(
-            Box::new(classify(result)),
+            Box::new(classify(result, LINEAR_SNAPSHOT_CLIENT_TIMEOUT)),
         ))));
         true
     }
@@ -299,7 +301,7 @@ impl Driver {
         };
         let result = self.client.linear_bind_handoff(&params);
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::Handoff(
-            classify(result),
+            classify(result, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT),
         ))));
         true
     }
@@ -316,7 +318,7 @@ impl Driver {
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::List {
             kind,
             id,
-            result: classify(result),
+            result: classify(result, LINEAR_SNAPSHOT_CLIENT_TIMEOUT),
         })));
         true
     }
@@ -544,14 +546,17 @@ mod tests {
     }
 
     #[test]
-    fn a_read_timeout_is_named_as_no_answer_from_the_daemon() {
+    fn a_client_timeout_is_classified_with_the_limit_it_was_sent_with() {
         let io = std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
             "Resource temporarily unavailable",
         );
-        match classify::<()>(Err(anyhow::Error::new(io))) {
-            Err(LinearFailure::Failed(text)) => {
-                assert!(text.contains("did not answer within"), "{text}")
+        match classify::<()>(
+            Err(anyhow::Error::new(io)),
+            LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
+        ) {
+            Err(LinearFailure::TimedOut(limit)) => {
+                assert_eq!(limit, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT)
             }
             other => panic!("{other:?}"),
         }
@@ -560,7 +565,7 @@ mod tests {
     #[test]
     fn a_daemon_error_is_not_mistaken_for_a_timeout() {
         let rpc = RpcClientError::new(6, None, "plugin unavailable".into(), None);
-        match classify::<()>(Err(anyhow::Error::new(rpc))) {
+        match classify::<()>(Err(anyhow::Error::new(rpc)), LINEAR_SNAPSHOT_CLIENT_TIMEOUT) {
             Err(LinearFailure::Failed(text)) => assert_eq!(text, "plugin unavailable"),
             other => panic!("{other:?}"),
         }

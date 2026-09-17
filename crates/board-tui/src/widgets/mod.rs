@@ -163,6 +163,8 @@ pub enum Zone {
     LinearGroup(String),
     /// A strip row, keyed by the space id it showed.
     LinearStripRow(String),
+    /// The header's view text, which opens the view picker.
+    LinearHeaderView,
 }
 
 /// Rects registered during the current frame's draw, consulted by the mouse

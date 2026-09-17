@@ -273,7 +273,17 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
             Style::default().fg(Color::LightCyan),
         ));
     }
-    if kind == LinearListKind::Projects && state.handoff_in_flight {
+    if let (LinearListKind::Views, Some(project)) = (kind, &picker.list_id) {
+        notes.push((
+            format!(
+                "binds space {} · project {}",
+                clean(&state.workspace_id),
+                clean(project)
+            ),
+            Style::default().fg(Color::LightCyan),
+        ));
+    }
+    if state.handoff_in_flight {
         notes.push((
             "starting the bind in a new tab…".to_string(),
             Style::default().fg(Color::Yellow),

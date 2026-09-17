@@ -186,6 +186,12 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
                 Some(Zone::LinearStripRow(space_id)) => {
                     super::linear::click_strip_row(app, &space_id)
                 }
+                Some(Zone::LinearHeaderView) => {
+                    if let Some(state) = app.linear.as_mut() {
+                        state.strip_focus = false;
+                    }
+                    super::linear::open_view_picker(app)
+                }
                 _ => vec![],
             }
         }

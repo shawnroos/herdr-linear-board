@@ -4,8 +4,8 @@
 //! Linear, to the plugin's records, or to the herdr layout.
 
 use board_core::protocol::{
-    LinearBindHandoffResult, LinearGroup, LinearIssue, LinearListEnvelope, LinearListKind,
-    LinearListResult, LinearSnapshot, LinearSpaceRow, LinearSpacesList,
+    LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearListEnvelope,
+    LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow, LinearSpacesList,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -17,8 +17,18 @@ use super::{App, Effect, Msg, Screen};
 pub enum LinearFailure {
     /// The daemon answered "unknown method": it predates `linear.snapshot`.
     MethodNotFound,
+    /// No answer within the client's read limit for that request.
+    TimedOut(std::time::Duration),
     /// Any other failure, with the daemon's or the transport's message.
     Failed(String),
+}
+
+/// A read's timeout as the board says it: `r` sends the read again.
+pub(super) fn read_timeout_text(limit: std::time::Duration) -> String {
+    format!(
+        "the daemon did not answer within {}s; press r to try again",
+        limit.as_secs()
+    )
 }
 
 /// What a Linear worker delivers: one snapshot or one list, each classified.
@@ -98,6 +108,9 @@ pub struct LinearState {
     pub bind_space: Option<LinearSpaceRow>,
     /// A `linear.bind_handoff` is on the way; a second choice sends nothing.
     pub handoff_in_flight: bool,
+    /// The picker (list kind and argument) that started the handoff in
+    /// flight; only that picker closes when it succeeds.
+    pub handoff_picker: Option<(LinearListKind, Option<String>)>,
     /// Set when a handoff opened its tab; the board names the refresh key
     /// until the next refresh.
     pub bind_note: Option<String>,
@@ -132,6 +145,7 @@ impl LinearState {
             strip_sel: 0,
             bind_space: None,
             handoff_in_flight: false,
+            handoff_picker: None,
             bind_note: None,
         }
     }
@@ -191,6 +205,24 @@ impl LinearState {
 
     pub fn detail_issue(&self) -> Option<&LinearIssue> {
         self.issue(self.detail.as_deref()?)
+    }
+
+    /// The project the space's record binds, when the space is bound.
+    pub fn bound_project_id(&self) -> Option<&str> {
+        if !self.bound() {
+            return None;
+        }
+        self.snapshot()?.record.project_id.as_deref()
+    }
+
+    /// The binding of the detail's selected pane row; the first binding when
+    /// the card lists no panes.
+    pub fn detail_binding(&self) -> Option<&LinearBinding> {
+        let binding = self
+            .detail_pane_rows()
+            .get(self.pane_cursor)
+            .map_or(0, |row| row.binding);
+        self.detail_issue()?.bindings.get(binding)
     }
 
     pub fn pane_status(&self, pane_id: &str) -> &str {
@@ -404,6 +436,10 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.stale_daemon = Some((state.board_version.clone(), state.daemon_version.clone()));
             Screen::LinearStaleDaemon
         }
+        Err(LinearFailure::TimedOut(limit)) => {
+            state.error = Some(read_timeout_text(limit));
+            Screen::LinearError
+        }
         Err(LinearFailure::Failed(text)) => {
             state.error = Some(sanitise(&text));
             Screen::LinearError
@@ -481,6 +517,7 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         }
         Screen::LinearNotBound | Screen::LinearStaleDaemon => match k.code {
             KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
+            KeyCode::Char('v') if app.screen == Screen::LinearNotBound => open_view_picker(app),
             _ => vec![],
         },
         _ => vec![],
@@ -504,6 +541,10 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             state.strip = StripView::Spaces;
             state.strip_focus = !state.unbound_spaces().is_empty();
             return vec![];
+        }
+        KeyCode::Char('v') => {
+            state.strip_focus = false;
+            return open_view_picker(app);
         }
         _ => {}
     }
@@ -543,6 +584,28 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('q') | KeyCode::Esc => return vec![Effect::Quit],
         _ => {}
+    }
+    vec![]
+}
+
+/// The view picker for the bound project; a space with no bound project has
+/// no views to list, so it says so instead of opening an empty picker.
+pub(super) fn open_view_picker(app: &mut App) -> Vec<Effect> {
+    let Some(project) = app
+        .linear
+        .as_ref()
+        .and_then(|s| s.bound_project_id())
+        .map(str::to_string)
+    else {
+        app.set_toast("this space has no project to list views for", true);
+        return vec![];
+    };
+    let id = Some(project);
+    if super::linear_picker::open_linear_picker(app, LinearListKind::Views, id.clone()) {
+        return vec![Effect::LinearList {
+            kind: LinearListKind::Views,
+            id,
+        }];
     }
     vec![]
 }
@@ -675,6 +738,7 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                 None => app.set_toast("this card has no worktree binding", true),
             }
         }
+        KeyCode::Char('b') => return bind_detail_card(app),
         KeyCode::Char('q') | KeyCode::Esc => {
             state.detail = None;
             app.screen = Screen::LinearBoard;
@@ -682,6 +746,43 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// `b` in the card detail: a bind for the selected binding, in its worktree.
+/// Only a state the plugin can confirm or repair is sent (R10); every other
+/// state is refused by name.
+fn bind_detail_card(app: &mut App) -> Vec<Effect> {
+    let Some(state) = app.linear.as_ref() else {
+        return vec![];
+    };
+    let (Some(issue), Some(binding)) = (state.detail_issue(), state.detail_binding()) else {
+        app.set_toast("this card has no worktree binding to bind", true);
+        return vec![];
+    };
+    let refusal = match binding.state.as_str() {
+        "proposed" | "stale" | "misplaced" => None,
+        "bound" => Some("this worktree is already bound".to_string()),
+        "worktree_missing" => Some("this binding's worktree is missing; nothing to bind".into()),
+        other => Some(format!(
+            "a binding in state {other:?} cannot be bound from here"
+        )),
+    };
+    if let Some(text) = refusal {
+        app.set_toast(text, true);
+        return vec![];
+    }
+    let Some(project) = state.bound_project_id() else {
+        app.set_toast("this space has no bound project", true);
+        return vec![];
+    };
+    let target = super::BindTarget {
+        space: state.workspace_id.clone(),
+        project: project.to_string(),
+        issue: Some(issue.identifier.clone()),
+        working_directory: Some(binding.worktree_path.clone()),
+        ..Default::default()
+    };
+    super::linear_picker::start_bind_handoff(app, target)
 }
 
 // -- sanitising -------------------------------------------------------------
