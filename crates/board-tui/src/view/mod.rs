@@ -375,6 +375,7 @@ pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
 
 mod layout;
 mod linear;
+mod linear_issue;
 mod linear_picker;
 mod linear_strip;
 mod overlays;

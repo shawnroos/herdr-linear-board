@@ -136,6 +136,9 @@ pub struct LinearState {
     /// How the last read for the open issue failed, and whether `r` can retry
     /// it. A plugin that ships no issue script is not retryable.
     pub detail_error: Option<DetailError>,
+    /// Which selectable row of the issue page the cursor is on, as an index
+    /// into the rows the page derives per draw.
+    pub detail_row_cursor: usize,
 }
 
 /// A failed issue read, as the page says it.
@@ -182,6 +185,7 @@ impl LinearState {
             detail_doc: None,
             detail_in_flight: None,
             detail_error: None,
+            detail_row_cursor: 0,
         }
     }
 

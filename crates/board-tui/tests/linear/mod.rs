@@ -243,24 +243,110 @@ fn unsupported_grouping_is_named_in_the_header() {
     assert!(frame.contains("Backlog (1)"), "fallback columns:\n{frame}");
 }
 
+/// A document with one of everything the page draws, so a snapshot of it is a
+/// regression test for the whole layout rather than for one section.
+fn page_document() -> board_core::protocol::LinearIssueDocument {
+    use board_core::protocol::*;
+    let linked = |ident: &str, title: &str, state: &str, kind: &str| LinearLinkedIssue {
+        id: Some(ident.to_lowercase()),
+        identifier: ident.into(),
+        title: title.into(),
+        state: LinearIssueState {
+            id: Some(state.to_lowercase()),
+            name: Some(state.into()),
+            kind: Some(kind.into()),
+        },
+    };
+    LinearIssueDocument {
+        schema: 1,
+        status: "ok".into(),
+        message: None,
+        truncated: vec![],
+        issue: Some(LinearIssueDetail {
+            id: Some("i1".into()),
+            identifier: "WEB-3312".into(),
+            title: "Example issue: a saved item is empty after reload".into(),
+            description: Some("The saved item comes back empty.\n\nOnly after a reload.".into()),
+            due_date: Some("2026-09-30".into()),
+            estimate: Some(3.0),
+            project: Some(LinearNamed {
+                id: Some("p1".into()),
+                name: Some("AI Canvas Tools".into()),
+            }),
+            milestone: Some(LinearNamed {
+                id: Some("m1".into()),
+                name: Some("M2".into()),
+            }),
+            cycle: Some(LinearCycle {
+                id: Some("c1".into()),
+                number: Some(14),
+                name: Some("Cycle 14".into()),
+            }),
+            parent: Some(linked("WEB-2870", "Tool: Detach Foreground", "Dev Done", "started")),
+            children: vec![
+                linked("WEB-3319", "Per-issue fetch", "Done", "completed"),
+                linked("WEB-3320", "Markdown renderer", "Todo", "unstarted"),
+            ],
+            relations: vec![LinearRelation {
+                r#type: "blocks".into(),
+                direction: "outward".into(),
+                issue: linked("WEB-3400", "Ship the drawer", "Todo", "unstarted"),
+            }],
+            comments: vec![
+                LinearComment {
+                    id: Some("cm1".into()),
+                    body: "Reproduced on staging.".into(),
+                    created_at: Some("2026-09-05T09:00:00.000Z".into()),
+                    author: Some("Example User".into()),
+                    parent_id: None,
+                },
+                LinearComment {
+                    id: Some("cm2".into()),
+                    body: "Same here.".into(),
+                    created_at: Some("2026-09-05T10:00:00.000Z".into()),
+                    author: Some("Other User".into()),
+                    parent_id: Some("cm1".into()),
+                },
+            ],
+            history: vec![LinearHistoryEvent {
+                id: Some("h1".into()),
+                created_at: Some("2026-09-05T08:00:00.000Z".into()),
+                actor: Some("Example User".into()),
+                to_state: Some("In Progress".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
 #[test]
 fn detail_lists_bindings_tabs_and_panes_with_live_status() {
-    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    // A real document, so the snapshot captures the page a reader sees rather
+    // than the failure a missing fixture produces.
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
     open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    // A fixed clock, a day after the document's events: the page's relative
+    // times are then part of what the snapshot pins rather than something that
+    // changes with the day it runs.
+    d.app.now = 1_788_600_000;
     let frame = draw(&d.app, W, H);
-    assert!(
-        frame.contains("[bound] $SANDBOX/worktrees/web-3312"),
-        "{frame}"
-    );
+    // The sidebar is narrow, so the path keeps its TAIL: the worktree name is
+    // what tells two bindings apart, and the head is the same for every one.
+    assert!(frame.contains("worktrees/web-3312"), "{frame}");
+    assert!(frame.contains("[bound] "), "{frame}");
     assert!(frame.contains("tab: Plugin PM (wA:t1)"), "{frame}");
     assert!(
         frame.contains("wA:p1  idle") && frame.contains("▶ wA:p2  working"),
         "{frame}"
     );
-    assert!(
-        frame.contains("url: https://linear.app/example/issue/web-3312/x"),
-        "{frame}"
-    );
+    // No raw URL row: Linear's own issue page has no URL property, and `u`
+    // opens the issue, which the hint line offers.
+    assert!(!frame.contains("https://linear.app"), "{frame}");
+    assert!(frame.contains("u Linear"), "{frame}");
     insta::assert_snapshot!("linear_detail", frame);
 }
 
@@ -396,10 +482,11 @@ fn control_characters_never_reach_the_frame() {
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     press(&mut d, KeyCode::Enter);
     let frame = draw(&d.app, W, H);
-    assert!(
-        frame.contains("WEB-3318 — Example panel[2J is blank"),
-        "{frame}"
-    );
+    // The page draws the identifier and the title on their own rows, so the
+    // joined form the overlay used is gone; the guard is that the stripped
+    // title reaches the frame and no control character does.
+    assert!(frame.contains("Example panel[2J is blank"), "{frame}");
+    assert!(frame.contains("WEB-3318"), "{frame}");
     assert!(
         !frame.contains('\u{202E}') && !frame.contains('\u{1b}'),
         "{frame}"
@@ -1877,12 +1964,13 @@ fn scrolling_moves_the_card_selection_and_stops_at_the_ends() {
 }
 
 #[test]
-fn a_click_while_the_detail_overlay_is_open_does_not_reach_the_board() {
+fn a_click_on_the_issue_page_does_not_reach_the_board() {
     let mut d = mouse_driver();
     open_web_3312(&mut d);
     let frame = render_at(&mut d, W, H);
-    // Column 1 is outside the overlay, so the first column's card shows there.
-    assert!(frame_row(&frame, 3).starts_with("│W"), "{frame}");
+    // The page replaces the board rather than covering it, so no card is drawn
+    // anywhere on screen to click through to.
+    assert!(!frame_row(&frame, 3).starts_with("│W"), "{frame}");
     for (x, y) in [(1, 4), (90, 9), (95, 2)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearDetail, "click at {x},{y}");
