@@ -724,9 +724,9 @@ fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3312(&mut d);
     assert_eq!(
-        d.app.linear.as_ref().unwrap().pane_cursor,
-        1,
-        "wA:p2 is working"
+        d.app.linear.as_ref().unwrap().detail_selection,
+        Some(board_tui::view::IssueRowKind::Pane(1)),
+        "the page opens on the working pane, wA:p2"
     );
     press(&mut d, KeyCode::Char('o'));
     let requests = log.lock().unwrap();
@@ -3090,4 +3090,215 @@ fn opening_and_reading_a_page_sends_no_write() {
         "the issue page called something other than a linear read: {called:?}"
     );
     assert!(called.iter().any(|m| m == "linear.issue"), "{called:?}");
+}
+
+// -- one cursor, Enter, and the back stack (R11, R12, R13, R17) -------------
+
+use board_tui::view::IssueRowKind;
+
+/// Open WEB-3312 with its document loaded, so the page has issue rows as well
+/// as pane rows.
+fn open_page_with_document(d: &mut Driver) {
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(d);
+    assert!(d.deliver_pending_linear_issue());
+}
+
+fn rows(d: &Driver) -> Vec<board_tui::view::IssueRow> {
+    board_tui::view::issue_page_rows(&d.app)
+}
+
+fn page_selection(d: &Driver) -> Option<IssueRowKind> {
+    d.app.linear.as_ref().unwrap().detail_selection.clone()
+}
+
+/// R11 -- one cursor over every selectable row, in the order the page draws
+/// them: the main column's rows before the sidebar's, at both widths.
+#[test]
+fn the_cursor_moves_through_every_selectable_row_in_reading_order() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    let kinds: Vec<IssueRowKind> = rows(&d).into_iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            // Sub-issues, in the main column.
+            IssueRowKind::Issue("WEB-3319".into()),
+            IssueRowKind::Issue("WEB-3320".into()),
+            // Then the sidebar: parent, relations, panes.
+            IssueRowKind::Issue("WEB-2870".into()),
+            IssueRowKind::Issue("WEB-3400".into()),
+            IssueRowKind::Pane(0),
+            IssueRowKind::Pane(1),
+        ],
+        "reading order"
+    );
+
+    // From the working pane, `k` walks back up through every row.
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+    for expected in kinds.iter().rev().skip(1) {
+        press(&mut d, KeyCode::Char('k'));
+        assert_eq!(page_selection(&d).as_ref(), Some(expected));
+    }
+    // And stops at the first rather than wrapping.
+    press(&mut d, KeyCode::Char('k'));
+    assert_eq!(page_selection(&d), Some(kinds[0].clone()));
+}
+
+/// An issue with no sub-issues and no relations has only its panes to move
+/// through: a section with no rows contributes no row to stop on.
+#[test]
+fn a_section_with_no_rows_is_not_a_stop() {
+    let mut empty = page_document();
+    if let Some(issue) = empty.issue.as_mut() {
+        issue.children.clear();
+        issue.relations.clear();
+        issue.parent = None;
+    }
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", empty);
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    let kinds: Vec<IssueRowKind> = rows(&d).into_iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, vec![IssueRowKind::Pane(0), IssueRowKind::Pane(1)]);
+}
+
+/// The rows arrive in two waves: panes as soon as the page opens, then the
+/// issue rows ABOVE them when the read lands. The selection has to survive
+/// that, which an index could not.
+#[test]
+fn the_selection_survives_the_document_arriving_above_it() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // Before the read lands, the page has only pane rows.
+    assert_eq!(rows(&d).len(), 2, "{:?}", rows(&d));
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+
+    let before = draw(&d.app, W, H);
+    assert!(before.contains("▶ wA:p2"), "{before}");
+
+    assert!(d.deliver_pending_linear_issue());
+
+    // Four issue rows arrived above the panes. Asserting the stored value alone
+    // would prove nothing -- nothing rewrites it -- so this checks the row the
+    // cursor RESOLVES to, and that the marker is still drawn on that pane.
+    let rows_after = rows(&d);
+    assert_eq!(rows_after.len(), 6, "{rows_after:?}");
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+    assert_eq!(
+        board_tui::app::LinearState::selected_kind(
+            &rows_after,
+            d.app.linear.as_ref().unwrap().detail_selection.as_ref()
+        ),
+        Some(IssueRowKind::Pane(1)),
+        "the cursor resolved to a different row once the document arrived"
+    );
+    let after = draw(&d.app, W, H);
+    assert!(after.contains("▶ wA:p2"), "{after}");
+}
+
+/// R12 -- Enter on an issue row opens that issue in place, and Esc walks back
+/// one issue at a time before leaving the page.
+#[test]
+fn enter_opens_a_linked_issue_and_esc_walks_back() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3312", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // Move to the first sub-issue and open it.
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Issue("WEB-3319".into())));
+    press(&mut d, KeyCode::Enter);
+
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3319")
+    );
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3312"),
+        "Esc went back to the board instead of the previous issue"
+    );
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(d.app.linear.as_ref().unwrap().detail.is_none());
+}
+
+/// R17 -- a back-step re-shows what that page last displayed while its fresh
+/// read runs; it does not empty to loading markers on the way back.
+#[test]
+fn a_back_step_shows_the_previous_page_immediately() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3312", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    press(&mut d, KeyCode::Enter);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+
+    // The document is back on screen BEFORE its refresh is delivered.
+    let state = d.app.linear.as_ref().unwrap();
+    let (issue, doc) = state.detail_doc.as_ref().expect("previous page restored");
+    assert_eq!(issue, "WEB-3312");
+    assert_eq!(doc.issue.as_ref().unwrap().children.len(), 2);
+    assert_eq!(state.detail_in_flight.as_deref(), Some("WEB-3312"));
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("Sub-issues"), "{frame}");
+}
+
+/// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
+/// page's own issue whatever row is selected.
+#[test]
+fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let (client, log) = RecordingClient::new(client);
+    let mut d = linear_driver_deferred(client, start_with_socket());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // On a pane row, `o` focuses it.
+    press(&mut d, KeyCode::Char('o'));
+    assert_eq!(toast(&d), "focused pane wA:p2");
+
+    // On an issue row, `o` says what it is for rather than focusing the first
+    // pane it can find.
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Issue("WEB-3319".into())));
+    press(&mut d, KeyCode::Char('o'));
+    assert!(toast(&d).contains("o focuses a pane"), "{}", toast(&d));
+
+    // `y` still copies the page's own worktree path from an issue row.
+    press(&mut d, KeyCode::Char('y'));
+    assert!(!toast(&d).contains("no worktree binding"), "{}", toast(&d));
+
+    let called = methods(&log);
+    assert!(called.iter().all(|m| m.starts_with("linear.") || m == "pane.focus"), "{called:?}");
 }

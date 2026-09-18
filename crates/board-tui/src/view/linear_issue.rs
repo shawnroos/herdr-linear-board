@@ -33,7 +33,7 @@ const SIDEBAR_W: u16 = 34;
 /// One row the cursor can land on. `line` is its index in the rendered column,
 /// which is what lets the page scroll to keep the selected row on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Row {
+pub struct Row {
     pub line: usize,
     pub kind: RowKind,
     pub column: Column,
@@ -42,13 +42,13 @@ pub(super) struct Row {
 /// Which column a row was drawn in. Marking the selected row needs this: the
 /// two columns have their own line numbering when they sit side by side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Column {
+pub enum Column {
     Main,
     Sidebar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RowKind {
+pub enum RowKind {
     /// An issue the reader can open: a sub-issue, the parent, or a relation.
     Issue(String),
     /// A pane the reader can focus, by its index in the page's pane rows.
@@ -57,7 +57,7 @@ pub(super) enum RowKind {
 
 /// Everything one draw needs: the rendered lines of each column, and the rows
 /// the cursor can reach, in reading order.
-pub(super) struct Page {
+pub struct Page {
     pub main: Vec<Line<'static>>,
     pub sidebar: Vec<Line<'static>>,
     /// Rows of the main column, then the sidebar's, which is the order they are
@@ -553,16 +553,8 @@ pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> 
         rows,
         stacked,
     };
-    // The marker follows the PANE cursor, which is still what `o` acts on. A
-    // page that marks one row while a key acts on another is worse than no
-    // marker; U5 replaces both with the single row cursor.
-    let selected = page
-        .rows
-        .iter()
-        .position(|row| row.kind == RowKind::Pane(state.pane_cursor));
-    if let Some(selected) = selected {
-        mark_selected(&mut page, selected, stacked, main_len);
-    }
+    let selected = LinearState::selected_row(&page.rows, state.detail_selection.as_ref());
+    mark_selected(&mut page, selected, stacked, main_len);
     Some(page)
 }
 
@@ -726,7 +718,8 @@ fn page_scroll(page: &Page, state: &LinearState, height: usize) -> usize {
         return 0;
     }
     let max = total - height;
-    let Some(row) = page.rows.get(state.detail_row_cursor) else {
+    let selected = LinearState::selected_row(&page.rows, state.detail_selection.as_ref());
+    let Some(row) = page.rows.get(selected) else {
         return 0;
     };
     let pad = 1usize;

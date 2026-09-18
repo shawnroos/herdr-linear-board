@@ -93,7 +93,6 @@ pub struct LinearState {
     pub sel_card: usize,
     /// The identifier open on `Screen::LinearDetail`.
     pub detail: Option<String>,
-    pub pane_cursor: usize,
     pub in_flight: bool,
     /// An automatic refresh (a reconnect) asked for while one was in flight;
     /// it is sent when that one lands, so it is not lost.
@@ -136,9 +135,23 @@ pub struct LinearState {
     /// How the last read for the open issue failed, and whether `r` can retry
     /// it. A plugin that ships no issue script is not retryable.
     pub detail_error: Option<DetailError>,
-    /// Which selectable row of the issue page the cursor is on, as an index
-    /// into the rows the page derives per draw.
-    pub detail_row_cursor: usize,
+    /// Which row of the issue page is selected, by identity rather than by
+    /// index. The rows arrive in two waves - panes as soon as the page opens,
+    /// then sub-issues, parent and relations when the read lands ABOVE them -
+    /// so an index would quietly come to mean a different row.
+    pub detail_selection: Option<crate::view::IssueRowKind>,
+    /// The issues opened to get to the one on screen, oldest first. Each entry
+    /// keeps what its page last showed, so stepping back re-renders it while
+    /// its own fresh read runs rather than emptying to loading markers (R17).
+    pub detail_stack: Vec<DetailStep>,
+}
+
+/// One step of the issue page's history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailStep {
+    pub issue: String,
+    pub doc: Option<LinearIssueDocument>,
+    pub selection: Option<crate::view::IssueRowKind>,
 }
 
 /// A failed issue read, as the page says it.
@@ -165,7 +178,6 @@ impl LinearState {
             sel_group: 0,
             sel_card: 0,
             detail: None,
-            pane_cursor: 0,
             in_flight: false,
             queued: false,
             error: None,
@@ -185,7 +197,8 @@ impl LinearState {
             detail_doc: None,
             detail_in_flight: None,
             detail_error: None,
-            detail_row_cursor: 0,
+            detail_selection: None,
+            detail_stack: vec![],
         }
     }
 
@@ -279,11 +292,17 @@ impl LinearState {
 
     /// The binding of the detail's selected pane row; the first binding when
     /// the card lists no panes.
+    /// The binding `b` and `y` act on: the one the selected pane belongs to,
+    /// and otherwise the issue's first. A selection on an issue row is not a
+    /// binding, so those keys act on the page's own issue.
     pub fn detail_binding(&self) -> Option<&LinearBinding> {
-        let binding = self
-            .detail_pane_rows()
-            .get(self.pane_cursor)
-            .map_or(0, |row| row.binding);
+        let binding = match &self.detail_selection {
+            Some(crate::view::IssueRowKind::Pane(index)) => self
+                .detail_pane_rows()
+                .get(*index)
+                .map_or(0, |row| row.binding),
+            _ => 0,
+        };
         self.detail_issue()?.bindings.get(binding)
     }
 
@@ -292,6 +311,27 @@ impl LinearState {
             .and_then(|s| s.pane_status.get(pane_id))
             .map(String::as_str)
             .unwrap_or("unknown")
+    }
+
+    /// Where the selection sits in `rows`, or the first row when the selected
+    /// one is not on the page (it was in a section this issue does not have).
+    pub fn selected_row(
+        rows: &[crate::view::IssueRow],
+        selection: Option<&crate::view::IssueRowKind>,
+    ) -> usize {
+        selection
+            .and_then(|kind| rows.iter().position(|row| &row.kind == kind))
+            .unwrap_or(0)
+    }
+
+    /// What is selected, falling back to the first row so a page always has
+    /// something under the cursor.
+    pub fn selected_kind(
+        rows: &[crate::view::IssueRow],
+        selection: Option<&crate::view::IssueRowKind>,
+    ) -> Option<crate::view::IssueRowKind> {
+        rows.get(Self::selected_row(rows, selection))
+            .map(|row| row.kind.clone())
     }
 
     pub fn pane_count(issue: &LinearIssue) -> usize {
@@ -400,9 +440,11 @@ impl LinearState {
         {
             self.detail = None;
         }
+        // A selection on a pane that the refresh removed falls back to the
+        // first row rather than pointing at a pane that is no longer there.
         let panes = self.detail_issue().map_or(0, Self::pane_count);
-        if self.pane_cursor >= panes {
-            self.pane_cursor = panes.saturating_sub(1);
+        if matches!(self.detail_selection, Some(crate::view::IssueRowKind::Pane(i)) if i >= panes) {
+            self.detail_selection = None;
         }
     }
 
@@ -739,11 +781,14 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => {
             if let Some(id) = state.selected_identifier().map(str::to_string) {
                 state.detail = Some(id.clone());
-                let rows = state.detail_pane_rows();
-                state.pane_cursor = rows
+                state.detail_stack.clear();
+                // The working pane, as the overlay opened on: getting to the
+                // pane working on an issue is why a card gets opened.
+                state.detail_selection = state
+                    .detail_pane_rows()
                     .iter()
                     .position(|row| row.status == "working")
-                    .unwrap_or(0);
+                    .map(crate::view::IssueRowKind::Pane);
                 app.screen = Screen::LinearDetail;
                 return request_issue(app, &id);
             }
@@ -860,36 +905,46 @@ pub(super) fn click_group(app: &mut App, group: &str) {
 }
 
 fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    let rows = crate::view::issue_page_rows(app);
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
     if let Some(delta) = nav_delta(k.code) {
-        let max = state
-            .detail_issue()
-            .map_or(0, LinearState::pane_count)
-            .saturating_sub(1);
-        state.pane_cursor = step_clamped(state.pane_cursor, delta, max);
+        let max = rows.len().saturating_sub(1);
+        let at = LinearState::selected_row(&rows, state.detail_selection.as_ref());
+        let next = step_clamped(at, delta, max);
+        state.detail_selection = rows.get(next).map(|r| r.kind.clone());
         return vec![];
     }
+    let selected = LinearState::selected_kind(&rows, state.detail_selection.as_ref());
     match k.code {
-        KeyCode::Char('o') => {
-            let rows = state.detail_pane_rows();
-            match rows.get(state.pane_cursor) {
-                Some(row) => return vec![Effect::FocusPane(row.pane_id.clone())],
-                None => app.set_toast("this card has no recorded pane", true),
+        KeyCode::Enter => match selected {
+            // An issue row opens that issue's page in place, and the page it
+            // came from goes on the stack with what it was showing.
+            Some(crate::view::IssueRowKind::Issue(identifier)) => {
+                return open_linked_issue(app, &identifier)
             }
-        }
+            Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
+            None => {}
+        },
+        // `o` acts on a pane and says so on any other row, rather than
+        // silently focusing whatever pane happens to be first.
+        KeyCode::Char('o') => match selected {
+            Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
+            Some(crate::view::IssueRowKind::Issue(_)) => {
+                app.set_toast("o focuses a pane; this row is an issue", true)
+            }
+            None => app.set_toast("this card has no recorded pane", true),
+        },
+        // `u`, `y` and `b` act on the page's OWN issue whatever row the cursor
+        // is on: they are about the issue being read, not the row under the
+        // cursor.
         KeyCode::Char('u') => match state.detail_issue().and_then(|i| i.url.clone()) {
             Some(url) => return vec![Effect::OpenIssueUrl(url)],
             None => app.set_toast("this card has no Linear URL (cached issue)", true),
         },
         KeyCode::Char('y') => {
-            let rows = state.detail_pane_rows();
-            let binding_index = rows.get(state.pane_cursor).map_or(0, |row| row.binding);
-            let binding = state
-                .detail_issue()
-                .and_then(|issue| issue.bindings.get(binding_index))
-                .cloned();
+            let binding = state.detail_binding().cloned();
             match binding {
                 Some(binding) => {
                     return vec![Effect::CopyWorktreePath {
@@ -901,13 +956,84 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             }
         }
         KeyCode::Char('b') => return bind_detail_card(app),
-        KeyCode::Char('q') | KeyCode::Esc => {
-            state.detail = None;
-            app.screen = Screen::LinearBoard;
-        }
+        KeyCode::Char('q') | KeyCode::Esc => return leave_issue_page(app),
         _ => {}
     }
     vec![]
+}
+
+fn focus_selected_pane(app: &mut App, rows: &[crate::view::IssueRow]) -> Vec<Effect> {
+    let Some(state) = app.linear.as_ref() else {
+        return vec![];
+    };
+    let index = match LinearState::selected_kind(rows, state.detail_selection.as_ref()) {
+        Some(crate::view::IssueRowKind::Pane(index)) => index,
+        _ => return vec![],
+    };
+    let pane = state
+        .detail_pane_rows()
+        .get(index)
+        .map(|row| row.pane_id.clone());
+    match pane {
+        Some(pane_id) => vec![Effect::FocusPane(pane_id)],
+        None => {
+            app.set_toast("this card has no recorded pane", true);
+            vec![]
+        }
+    }
+}
+
+/// Enter on a sub-issue, the parent or a relation. The page being left goes on
+/// the stack with what it was showing, so Esc can put it straight back.
+fn open_linked_issue(app: &mut App, identifier: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(from) = state.detail.clone() else {
+        return vec![];
+    };
+    if from == identifier {
+        return vec![];
+    }
+    let doc = state
+        .detail_doc
+        .as_ref()
+        .filter(|(id, _)| *id == from)
+        .map(|(_, doc)| doc.clone());
+    state.detail_stack.push(DetailStep {
+        issue: from,
+        doc,
+        selection: state.detail_selection.clone(),
+    });
+    state.detail = Some(identifier.to_string());
+    state.detail_selection = None;
+    state.detail_doc = None;
+    state.detail_error = None;
+    request_issue(app, identifier)
+}
+
+/// Esc: a step back through the issues opened to get here, and off the page
+/// only from the first one.
+fn leave_issue_page(app: &mut App) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(step) = state.detail_stack.pop() else {
+        state.detail = None;
+        state.detail_doc = None;
+        state.detail_error = None;
+        state.detail_in_flight = None;
+        state.detail_selection = None;
+        app.screen = Screen::LinearBoard;
+        return vec![];
+    };
+    // What that page last showed goes back on screen now; the fresh read below
+    // replaces it when it lands, and leaves it in place if it fails (R17).
+    state.detail = Some(step.issue.clone());
+    state.detail_selection = step.selection;
+    state.detail_error = None;
+    state.detail_doc = step.doc.map(|doc| (step.issue.clone(), doc));
+    request_issue(app, &step.issue)
 }
 
 /// `b` in the card detail: a bind for the selected binding, in its worktree.

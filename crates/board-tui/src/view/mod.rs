@@ -376,6 +376,20 @@ pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
 mod layout;
 mod linear;
 mod linear_issue;
+
+pub use linear_issue::{Row as IssueRow, RowKind as IssueRowKind};
+
+/// The selectable rows of the issue page as it is currently drawn. The key
+/// handler and the renderer derive them from the same function, so what the
+/// cursor moves through and what is on screen cannot disagree.
+pub fn issue_page_rows(app: &crate::app::App) -> Vec<IssueRow> {
+    let Some(state) = app.linear.as_ref() else {
+        return vec![];
+    };
+    linear_issue::build(app, state, app.last_area)
+        .map(|page| page.rows)
+        .unwrap_or_default()
+}
 mod linear_picker;
 mod linear_strip;
 mod overlays;
