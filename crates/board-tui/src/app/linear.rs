@@ -380,6 +380,10 @@ impl LinearState {
     }
 }
 
+fn empty_groups_last(snapshot: &mut LinearSnapshot) {
+    snapshot.groups.sort_by_key(|g| g.issues.is_empty());
+}
+
 pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
         // `board_changed` never refreshes a Linear board (R21).
@@ -445,6 +449,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
+            empty_groups_last(&mut snapshot);
             effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
                 &snapshot,
                 &state.workspace_id,

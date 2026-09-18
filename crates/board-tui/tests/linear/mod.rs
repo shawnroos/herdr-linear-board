@@ -1023,7 +1023,11 @@ fn cards_in_a_column_are_separated_by_a_blank_row() {
 #[test]
 fn a_column_of_zero_cards_renders_its_header_and_nothing_else() {
     let mut snapshot = bound_with_view();
-    snapshot.groups[0].issues.clear();
+    // Every group, because an empty one now sorts behind the columns that have
+    // cards and would not be the column drawn at this width.
+    for group in &mut snapshot.groups {
+        group.issues.clear();
+    }
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
     assert!(rows[2].contains("Backlog (0)"), "{rows:#?}");
@@ -2813,5 +2817,26 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
     assert!(
         frame.contains(&format!("did not answer within {limit}s; press r")),
         "{frame}"
+    );
+}
+
+#[test]
+fn empty_columns_move_to_the_end_in_view_order() {
+    let mut snapshot = bound_with_view();
+    let dev_done = snapshot.groups.remove(3);
+    snapshot.groups.insert(0, dev_done);
+    let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let keys: Vec<&str> = d
+        .app
+        .linear
+        .as_ref()
+        .unwrap()
+        .groups()
+        .iter()
+        .map(|g| g.key.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done"]
     );
 }
