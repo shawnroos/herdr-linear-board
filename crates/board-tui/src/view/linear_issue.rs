@@ -168,9 +168,9 @@ fn join_time(now: i64, text: &str, at: Option<&str>) -> String {
     }
 }
 
-/// The description, until U6 renders its Markdown: wrapped plain text, so the
-/// page is readable now and the renderer is a drop-in later.
-fn description_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+/// Plain text, wrapped. Used for a title and anything else that is not
+/// Markdown; `crate::markdown::render` handles the fields that are.
+fn plain_lines(text: &str, width: usize) -> Vec<Line<'static>> {
     let mut out = vec![];
     for paragraph in text.split('\n') {
         if paragraph.trim().is_empty() {
@@ -211,7 +211,7 @@ fn main_column(
     rows: &mut Vec<Row>,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line> = vec![];
-    for line_of_title in description_lines(&issue.title, width) {
+    for line_of_title in plain_lines(&issue.title, width) {
         out.push(Line::from(Span::styled(
             line_of_title.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
@@ -221,7 +221,7 @@ fn main_column(
 
     match detail.and_then(|d| d.description.as_deref()) {
         Some(text) if !text.trim().is_empty() => {
-            out.extend(description_lines(text, width));
+            out.extend(crate::markdown::render(text, width));
         }
         _ if loading => out.push(Line::from(Span::styled("loading…", dim()))),
         Some(_) | None => out.push(Line::from(Span::styled("no description", dim()))),
@@ -281,7 +281,7 @@ fn main_column(
             ),
             width,
         )));
-        for body in description_lines(&comment.body, width.saturating_sub(4)) {
+        for body in crate::markdown::render(&comment.body, width.saturating_sub(4)) {
             out.push(Line::from(format!("    {body}")));
         }
         for reply in comments
@@ -296,7 +296,7 @@ fn main_column(
                 ),
                 width,
             )));
-            for body in description_lines(&reply.body, width.saturating_sub(6)) {
+            for body in crate::markdown::render(&reply.body, width.saturating_sub(6)) {
                 out.push(Line::from(format!("      {body}")));
             }
         }

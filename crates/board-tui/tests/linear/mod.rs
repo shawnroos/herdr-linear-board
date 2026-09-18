@@ -3302,3 +3302,38 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
     let called = methods(&log);
     assert!(called.iter().all(|m| m.starts_with("linear.") || m == "pane.focus"), "{called:?}");
 }
+
+/// Covers AE5. The description's Markdown reaches the page as structure, not
+/// as markup, and the media it cannot draw is named rather than dropped.
+#[test]
+fn the_description_renders_its_markdown_on_the_page() {
+    let mut doc = page_document();
+    if let Some(issue) = doc.issue.as_mut() {
+        issue.description = Some(
+            "## What happens\n\nThe drawer is **blank**.\n\n\
+             - [ ] reproduce\n- [x] triage\n\n\
+             ```\nlet **x** = 1;\n```\n\n\
+             ![a shot](https://example.com/shot.png)"
+                .into(),
+        );
+    }
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", doc);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    // The heading keeps its text and loses its hashes.
+    assert!(frame.contains("What happens"), "{frame}");
+    assert!(!frame.contains("## What"), "{frame}");
+    // Emphasis is styling, not asterisks.
+    assert!(frame.contains("The drawer is blank."), "{frame}");
+    // Checkboxes render as boxes.
+    assert!(frame.contains("☐ reproduce"), "{frame}");
+    assert!(frame.contains("☑ triage"), "{frame}");
+    // A fenced block keeps its contents verbatim, markup and all.
+    assert!(frame.contains("let **x** = 1;"), "{frame}");
+    // The image is named with its link rather than silently dropped.
+    assert!(frame.contains("[a shot] https://example.com/shot.png"), "{frame}");
+}
