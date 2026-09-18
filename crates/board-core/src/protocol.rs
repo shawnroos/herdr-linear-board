@@ -1064,6 +1064,177 @@ pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Durat
 /// daemon's list deadline plus its stop grace, as for the snapshot.
 pub const LINEAR_LIST_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 
+/// `linear.issue` params: one issue, read whole for the issue page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearIssueParams {
+    /// The issue's identifier (`WEB-3318`) or id, as the board holds it.
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_socket: Option<String>,
+    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<String>,
+}
+
+/// How long a client waits for a `linear.issue` answer. Shorter than the
+/// snapshot's because the read is one Linear call by contract, not one per
+/// issue page.
+pub const LINEAR_ISSUE_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The document `bin/work-issue.sh` prints. Every field the plugin can print as
+/// `null` is an `Option`, and every connection defaults to empty, because an
+/// explicit null from another process is not the same as an absent key to
+/// serde (`docs/solutions/integration-issues/serde-default-rejects-explicit-null.md`).
+// No `Eq`: the issue carries an estimate, which Linear types as a number and
+// this reads as `f64` so a fractional one still parses.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearIssueDocument {
+    #[serde(default)]
+    pub schema: i64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub status: String,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub truncated: Vec<String>,
+    #[serde(default)]
+    pub issue: Option<LinearIssueDetail>,
+}
+
+/// One issue, with everything the issue page shows.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearIssueDetail {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub identifier: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub title: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub estimate: Option<f64>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub state: LinearIssueState,
+    #[serde(default)]
+    pub assignee: Option<LinearAssignee>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub project: Option<LinearNamed>,
+    #[serde(default)]
+    pub milestone: Option<LinearNamed>,
+    #[serde(default)]
+    pub cycle: Option<LinearCycle>,
+    #[serde(default)]
+    pub parent: Option<LinearLinkedIssue>,
+    #[serde(default)]
+    pub children: Vec<LinearLinkedIssue>,
+    #[serde(default)]
+    pub relations: Vec<LinearRelation>,
+    #[serde(default)]
+    pub comments: Vec<LinearComment>,
+    #[serde(default)]
+    pub history: Vec<LinearHistoryEvent>,
+}
+
+/// An id-and-name pair: a project or a milestone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearNamed {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearCycle {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub number: Option<i64>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// A sub-issue, the parent, or the other end of a relation. Carries enough to
+/// open its own page from the row alone, which is why `title` and `state` are
+/// here and not just an identifier.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearLinkedIssue {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub identifier: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub title: String,
+    #[serde(default)]
+    pub state: LinearIssueState,
+}
+
+/// One relation. `direction` separates the two ends of one Linear edge:
+/// `outward` is what this issue points at, `inward` what points at it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearRelation {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub r#type: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub direction: String,
+    #[serde(default)]
+    pub issue: LinearLinkedIssue,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearComment {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub body: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    /// The thread root this is a reply to; `None` on a root.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+/// One history event, already filtered by the plugin to those that changed
+/// something the page shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearHistoryEvent {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub actor: Option<String>,
+    #[serde(default)]
+    pub from_state: Option<String>,
+    #[serde(default)]
+    pub to_state: Option<String>,
+    #[serde(default)]
+    pub from_assignee: Option<String>,
+    #[serde(default)]
+    pub to_assignee: Option<String>,
+    #[serde(default)]
+    pub from_priority: Option<i64>,
+    #[serde(default)]
+    pub to_priority: Option<i64>,
+    #[serde(default)]
+    pub added_labels: Vec<String>,
+    #[serde(default)]
+    pub removed_labels: Vec<String>,
+}
+
 /// Which plugin list `linear.list` runs: `bin/work-spaces.sh`,
 /// `bin/work-projects.sh` or `bin/work-views.sh`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

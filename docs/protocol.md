@@ -18,8 +18,10 @@ protocol version.
   Error objects may add `kind` and `details`; old clients may ignore those members.
 - Error codes: `1` bad request / unknown method, `2` not found, `3` invalid state
   (e.g. delete column with running card), `4` herdr unavailable, `5` internal, `6` work plugin
-  unavailable (`linear.snapshot` and `linear.list` only: no resolvable plugin root, a plugin below
-  the floor version, or a script run that produced no usable document). The CLI passes `1..=6`
+  unavailable (the `linear.*` plugin ops only: no resolvable plugin root, a plugin below
+  the floor version, or a script run that produced no usable document), `7` the installed plugin
+  ships no script for this op. `6` and `7` are separate because their remedies are opposite: `6` is
+  worth retrying, `7` is fixed only by updating the work plugin. The CLI passes `1..=6`
   through as its exit status (`board linear snapshot`, `board linear space list`,
   `board linear project list` and `board linear view list` are the commands that raise `6`). The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
@@ -537,8 +539,8 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   and a partial document is returned as partial. Pane status is a best-effort second read: one
   `session.snapshot` on `origin_socket`, whether or not the daemon has a herdr handle of its own;
   with no `origin_socket` or any failure every status is `"unknown"`. Error 1 for an empty
-  `workspace_id`; error 6 for no resolvable root (the message names all three sources), a plugin
-  below the floor, a missing script, a timeout or a stop (the child is stopped and reaped), a
+  `workspace_id`; error 7 for a plugin that ships no such script; error 6 for no resolvable root
+  (the message names all three sources), a plugin below the floor, a timeout or a stop (the child is stopped and reaped), a
   non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
   to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
   unparseable document, or a `schema` other than `1`.
@@ -560,8 +562,19 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   itself through the forwarded `HERDR_SOCKET_PATH`. Clients wait at most
   `LINEAR_LIST_CLIENT_TIMEOUT` (130 s) from the CLI; the TUI reads lists under the 150 s snapshot
   limit. Error 1 for an id on `spaces` or `projects`, a missing id on `views`, or an id of the
-  wrong shape; error 6 for every plugin-side failure `linear.snapshot` names (no exit `3` here: a
-  list script documents only `2`, argument refused).
+  wrong shape; errors 6 and 7 for every plugin-side failure `linear.snapshot` names (no exit `3`
+  here: a list script documents only `2`, argument refused).
+- `linear.issue {issue, origin_socket?, plugin_root?}` → the issue document — one Linear issue read
+  whole for the board's issue page: description, sub-issues, parent and relations, comments and
+  history, plus project, milestone, cycle, estimate and due date. Runs `bin/work-issue.sh <issue>`,
+  whose contract is `plugins/work/docs/issue.md` in the work plugin. The read is ONE Linear call by
+  contract — each paged connection is asked for one page and what did not fit is named in
+  `truncated`, with `status` `partial` — so the deadline is sized for a single call rather than a
+  page count, and a busy issue opens as fast as an empty one. A reachability failure is carried in
+  the document as `status: "unavailable"` with `issue: null`, not as an error code, so a reader can
+  tell "this issue could not be read" from "this plugin has no such script" (error 7). Clients wait
+  at most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape; otherwise the
+  same 6 and 7 the ops above name.
 - `linear.bind_handoff {space, project, view?, issue?, working_directory?, origin_socket}` →
   `{tab_id, pane_id}` — start the work plugin's interactive bind in a new tab of the **caller's
   own** herdr session. Every id must match the `linear.list` id shape; `view` and `issue` are
