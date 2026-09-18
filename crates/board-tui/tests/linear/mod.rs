@@ -2821,6 +2821,59 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
 }
 
 #[test]
+fn columns_sort_by_workflow_state_type_not_the_views_order() {
+    let mut snapshot = bound_with_view();
+    for (index, kind) in [
+        (0, "completed"),
+        (1, "triage"),
+        (2, "started"),
+        (3, "backlog"),
+        (4, "unstarted"),
+    ] {
+        snapshot.groups[index].kind = Some(kind.into());
+        snapshot.groups[index].issues = vec!["WEB-3318".into()];
+    }
+    let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let keys: Vec<&str> = d
+        .app
+        .linear
+        .as_ref()
+        .unwrap()
+        .groups()
+        .iter()
+        .map(|g| g.key.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["st-todo", "st-devdone", "st-done", "st-prog", "st-backlog"]
+    );
+}
+
+#[test]
+fn columns_with_no_state_type_keep_the_views_order() {
+    // A grouping other than workflow state: the plugin sends no kind at all.
+    let mut snapshot = bound_with_view();
+    for group in &mut snapshot.groups {
+        group.kind = None;
+        group.issues = vec!["WEB-3318".into()];
+    }
+    let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let keys: Vec<&str> = d
+        .app
+        .linear
+        .as_ref()
+        .unwrap()
+        .groups()
+        .iter()
+        .map(|g| g.key.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done"]
+    );
+}
+
+#[test]
 fn empty_columns_move_to_the_end_in_view_order() {
     let mut snapshot = bound_with_view();
     let dev_done = snapshot.groups.remove(3);

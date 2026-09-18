@@ -38,10 +38,26 @@ fn pinned() -> (String, BTreeMap<String, String>) {
     (version, hashes)
 }
 
+fn triple(version: &str) -> (u32, u32, u32) {
+    let mut parts = version.split('.').map(|p| p.parse().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
 #[test]
 fn version_names_the_plugin_release_and_at_least_one_fixture() {
     let (version, hashes) = pinned();
-    assert_eq!(version, "0.3.0");
+    // Fixtures may lag a release that did not change the document, never the
+    // other way round: a board reading them must accept the plugin that wrote
+    // them.
+    assert!(
+        triple(&version) <= triple(board_core::PLUGIN_VERSION_FLOOR),
+        "fixtures pin plugin {version}, newer than the {} floor this board enforces",
+        board_core::PLUGIN_VERSION_FLOOR
+    );
     assert!(!hashes.is_empty());
 }
 

@@ -5,6 +5,7 @@
         "WEB-3318"
       ],
       "key": "st-backlog",
+      "kind": "backlog",
       "label": "Backlog"
     },
     {
@@ -12,6 +13,7 @@
         "WEB-3317"
       ],
       "key": "st-todo",
+      "kind": "unstarted",
       "label": "Todo"
     },
     {
@@ -19,16 +21,19 @@
         "WEB-3312"
       ],
       "key": "st-prog",
+      "kind": "started",
       "label": "In Progress"
     },
     {
       "issues": [],
       "key": "st-devdone",
+      "kind": "started",
       "label": "Dev Done"
     },
     {
       "issues": [],
       "key": "st-done",
+      "kind": "completed",
       "label": "Done"
     }
   ],

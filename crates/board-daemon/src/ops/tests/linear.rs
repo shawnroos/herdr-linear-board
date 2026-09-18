@@ -500,22 +500,20 @@ fn the_installed_plugins_user_record_is_the_last_resort() {
 #[test]
 fn a_plugin_below_the_floor_is_refused_naming_both_versions() {
     let home = tempfile::tempdir().unwrap();
-    // 0.3.x shipped the snapshot script but none of the list scripts.
-    let plugin = fake_plugin("0.3.9", &cat_fixture());
+    let plugin = fake_plugin("0.0.1", &cat_fixture());
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
 
     assert_eq!(err.code(), 6);
     let msg = err.to_string();
-    assert!(msg.contains("0.3.9"), "message: {msg}");
-    assert!(msg.contains("0.4.0"), "message: {msg}");
-    assert_eq!(PLUGIN_VERSION_FLOOR, "0.4.0");
+    assert!(msg.contains("0.0.1"), "message: {msg}");
+    assert!(msg.contains(PLUGIN_VERSION_FLOOR), "message: {msg}");
 }
 
 #[test]
 fn a_plugin_at_or_above_the_floor_is_accepted() {
     let home = tempfile::tempdir().unwrap();
-    for version in ["0.4.0", "0.10.0", "1.0.0"] {
+    for version in [PLUGIN_VERSION_FLOOR, "0.10.0", "1.0.0"] {
         let plugin = fake_plugin(version, &cat_fixture());
         snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None))
             .unwrap_or_else(|e| panic!("version {version} refused: {e}"));
@@ -882,7 +880,7 @@ fn a_list_script_printing_non_json_or_an_unknown_status_is_code_6() {
 #[test]
 fn a_list_from_a_plugin_below_the_floor_is_refused_naming_both_versions() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = list_plugin("0.3.9");
+    let plugin = list_plugin("0.0.1");
 
     let err = list(
         &runner(Some(plugin.path()), home.path(), &[]),
@@ -892,8 +890,8 @@ fn a_list_from_a_plugin_below_the_floor_is_refused_naming_both_versions() {
 
     assert_eq!(err.code(), 6);
     let msg = err.to_string();
-    assert!(msg.contains("0.3.9"), "message: {msg}");
-    assert!(msg.contains("0.4.0"), "message: {msg}");
+    assert!(msg.contains("0.0.1"), "message: {msg}");
+    assert!(msg.contains(PLUGIN_VERSION_FLOOR), "message: {msg}");
 }
 
 #[test]

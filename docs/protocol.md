@@ -520,7 +520,7 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   `BOARD_WORK_PLUGIN_ROOT`; then the daemon's `BOARD_WORK_PLUGIN_ROOT`; then `[daemon]
   work_plugin_root` read from the board config now; then the `user`-scope `installPath` of
   `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
-  `.claude-plugin/plugin.json` version below `0.4.0` naming both versions, and runs
+  `.claude-plugin/plugin.json` version below `0.5.0` naming both versions, and runs
   `bin/work-snapshot.sh <workspace_id>` with a bounded deadline and an environment built from
   scratch: `HOME`, `PATH`, `HERDR_SOCKET_PATH` (the canonicalized `origin_socket`, when given),
   every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, `HERDR_BIN` only when
@@ -543,7 +543,7 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
   unparseable document, or a `schema` other than `1`.
 - `linear.list {kind, id?, origin_socket?, plugin_root?}` → `{status, message, rows}` — one of the
-  work plugin's lists, run through the same plugin-root resolution, `0.4.0` floor, environment,
+  work plugin's lists, run through the same plugin-root resolution, `0.5.0` floor, environment,
   stderr rule, stdout cap and stop rules as `linear.snapshot`, under its own bounded deadline.
   `kind` is `spaces` (`bin/work-spaces.sh`), `projects` (`bin/work-projects.sh`) or `views`
   (`bin/work-views.sh <id>`). `views` requires `id`, a Linear project id; `spaces` and `projects`

@@ -41,7 +41,7 @@ fn plugin_error(out: &Output) -> String {
 /// entry per named pane; the test daemon has no herdr, so every one is unknown.
 #[test]
 fn snapshot_returns_the_fixture_document_with_pane_statuses() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
     let doc = json_output(&snapshot(&td));
     assert_eq!(doc["schema"], 1);
@@ -60,11 +60,14 @@ fn snapshot_returns_the_fixture_document_with_pane_statuses() {
 /// (b) A plugin below the floor is refused with both versions in the message.
 #[test]
 fn a_plugin_below_the_floor_is_refused_naming_both_versions() {
-    let root = fake_plugin_root("0.3.9", &[]);
+    let root = fake_plugin_root("0.0.1", &[]);
     let td = daemon_with_root(root.path());
     let message = plugin_error(&snapshot(&td));
-    assert!(message.contains("0.3.9"), "{message}");
-    assert!(message.contains("0.4.0"), "{message}");
+    assert!(message.contains("0.0.1"), "{message}");
+    assert!(
+        message.contains(board_core::PLUGIN_VERSION_FLOOR),
+        "{message}"
+    );
 }
 
 /// (c) With no env, no TOML key, and no installed_plugins.json under the
@@ -88,7 +91,7 @@ fn no_root_anywhere_names_every_source() {
 #[test]
 fn a_script_exit_3_names_no_such_space() {
     let root = fake_plugin_root(
-        "0.4.0",
+        board_core::PLUGIN_VERSION_FLOOR,
         &[
             ("FAKE_WORK_SNAPSHOT_EXIT", "3"),
             ("FAKE_WORK_SNAPSHOT_STDERR", "wA is not a space here"),
@@ -108,7 +111,10 @@ fn a_script_exit_3_names_no_such_space() {
 /// (e) `[daemon] work_plugin_root` alone resolves the root.
 #[test]
 fn the_toml_key_alone_resolves_the_root() {
-    let root = fake_plugin_root("0.4.0", &[("FAKE_WORK_SNAPSHOT_FIXTURE", "unbound")]);
+    let root = fake_plugin_root(
+        board_core::PLUGIN_VERSION_FLOOR,
+        &[("FAKE_WORK_SNAPSHOT_FIXTURE", "unbound")],
+    );
     let td = TestDaemon::start_with_config(
         &[],
         &format!("work_plugin_root = \"{}\"\n", root.path().display()),
@@ -126,7 +132,7 @@ fn the_origin_socket_reaches_the_script() {
     let dump_dir = tempfile::tempdir().unwrap();
     let dump = dump_dir.path().join("script-env");
     let root = fake_plugin_root(
-        "0.4.0",
+        board_core::PLUGIN_VERSION_FLOOR,
         &[("FAKE_WORK_SNAPSHOT_ENV_FILE", dump.to_str().unwrap())],
     );
     let td = daemon_with_root(root.path());
@@ -144,7 +150,7 @@ fn the_origin_socket_reaches_the_script() {
 /// Without `--json` the document is still printed as JSON.
 #[test]
 fn snapshot_without_json_prints_the_document() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
     let out = td.board(&["linear", "snapshot", "wA"]);
     assert!(
@@ -162,7 +168,7 @@ fn snapshot_without_json_prints_the_document() {
 fn the_callers_plugin_root_is_used_by_a_daemon_started_without_one() {
     let td = TestDaemon::start(&[]);
     plugin_error(&snapshot(&td));
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let out = td.board_with_env(
         &["linear", "snapshot", "wA", "--json"],
         &[("BOARD_WORK_PLUGIN_ROOT", root.path().to_str().unwrap())],
@@ -176,7 +182,7 @@ fn the_callers_plugin_root_is_used_by_a_daemon_started_without_one() {
 fn a_toml_key_added_after_start_is_read_without_a_restart() {
     let td = TestDaemon::start(&[]);
     plugin_error(&snapshot(&td));
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let cfg = td._dir.path().join("config.toml");
     let mut text = std::fs::read_to_string(&cfg).unwrap();
     text.push_str(&format!(
@@ -211,7 +217,7 @@ fn a_client_that_disconnects_mid_snapshot_stops_the_script() {
     let dir = tempfile::tempdir().unwrap();
     let pid_file = dir.path().join("pid");
     let root = fake_plugin_root(
-        "0.4.0",
+        board_core::PLUGIN_VERSION_FLOOR,
         &[
             ("FAKE_WORK_SNAPSHOT_PID_FILE", pid_file.to_str().unwrap()),
             ("FAKE_WORK_SNAPSHOT_SLEEP", "90"),
@@ -241,7 +247,7 @@ fn a_client_that_disconnects_mid_snapshot_stops_the_script() {
         || pid_gone(pid),
     );
     // The daemon still serves the next client.
-    let root_ok = fake_plugin_root("0.4.0", &[]);
+    let root_ok = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let out = td.board_with_env(
         &["linear", "snapshot", "wA", "--json"],
         &[("BOARD_WORK_PLUGIN_ROOT", root_ok.path().to_str().unwrap())],
@@ -256,7 +262,7 @@ fn stopping_the_daemon_mid_snapshot_stops_the_script() {
     let dir = tempfile::tempdir().unwrap();
     let pid_file = dir.path().join("pid");
     let root = fake_plugin_root(
-        "0.4.0",
+        board_core::PLUGIN_VERSION_FLOOR,
         &[
             ("FAKE_WORK_SNAPSHOT_PID_FILE", pid_file.to_str().unwrap()),
             ("FAKE_WORK_SNAPSHOT_SLEEP", "90"),
@@ -325,7 +331,7 @@ fn with_socket(td: &TestDaemon) -> std::path::PathBuf {
 
 #[test]
 fn space_list_prints_a_table_and_its_json() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
     let socket = with_socket(&td);
     let env = [("HERDR_SOCKET_PATH", socket.to_str().unwrap())];
@@ -354,7 +360,7 @@ fn space_list_prints_a_table_and_its_json() {
 
 #[test]
 fn project_list_prints_a_table_and_its_json() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
 
     let text = stdout_text(&td.board(&["linear", "project", "list"]));
@@ -371,7 +377,7 @@ fn project_list_prints_a_table_and_its_json() {
 
 #[test]
 fn view_list_passes_the_project_id_and_prints_a_table_and_its_json() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
 
     let text = stdout_text(&td.board(&["linear", "view", "list", "proj-1"]));
@@ -394,7 +400,10 @@ fn view_list_without_a_project_id_is_a_usage_error() {
 /// A plugin failure is an error only: nothing reaches stdout, in either mode.
 #[test]
 fn a_list_plugin_failure_exits_6_with_empty_stdout_and_an_envelope() {
-    let root = fake_plugin_root("0.4.0", &[("FAKE_WORK_LIST_EXIT", "9")]);
+    let root = fake_plugin_root(
+        board_core::PLUGIN_VERSION_FLOOR,
+        &[("FAKE_WORK_LIST_EXIT", "9")],
+    );
     let td = daemon_with_root(root.path());
     for verb in [
         vec!["linear", "project", "list"],
@@ -416,7 +425,7 @@ fn a_list_plugin_failure_exits_6_with_empty_stdout_and_an_envelope() {
 #[test]
 fn a_partial_list_exits_0_and_prints_its_status_line() {
     let root = fake_plugin_root(
-        "0.4.0",
+        board_core::PLUGIN_VERSION_FLOOR,
         &[(
             "FAKE_WORK_LIST_JSON",
             r#"{"status":"partial","message":"listed the first pages only","rows":[{"id":"proj-1","name":"Example","team_key":"EX"}]}"#,
@@ -438,7 +447,7 @@ fn a_partial_list_exits_0_and_prints_its_status_line() {
 
 #[test]
 fn without_a_herdr_socket_spaces_are_unavailable_while_projects_answer_fully() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
 
     let out = td.board(&["linear", "space", "list"]);
@@ -457,7 +466,10 @@ fn without_a_herdr_socket_spaces_are_unavailable_while_projects_answer_fully() {
 #[test]
 fn a_name_carrying_a_bidi_override_prints_stripped() {
     let envelope = "{\"status\":\"ok\",\"message\":null,\"rows\":[{\"id\":\"proj-1\",\"name\":\"Exa\u{202e}mple\",\"team_key\":\"EX\"},{\"id\":\"proj-2\",\"name\":\"Sam\\nple\",\"team_key\":\"SA\"}]}";
-    let root = fake_plugin_root("0.4.0", &[("FAKE_WORK_LIST_JSON", envelope)]);
+    let root = fake_plugin_root(
+        board_core::PLUGIN_VERSION_FLOOR,
+        &[("FAKE_WORK_LIST_JSON", envelope)],
+    );
     let td = daemon_with_root(root.path());
 
     let text = stdout_text(&td.board(&["linear", "project", "list"]));
@@ -476,7 +488,10 @@ fn a_name_carrying_a_bidi_override_prints_stripped() {
 #[test]
 fn a_project_with_no_team_prints_an_empty_team_cell_and_a_null_key() {
     let envelope = r#"{"status":"ok","message":null,"rows":[{"id":"proj-1","name":"Example","team_key":null}]}"#;
-    let root = fake_plugin_root("0.4.0", &[("FAKE_WORK_LIST_JSON", envelope)]);
+    let root = fake_plugin_root(
+        board_core::PLUGIN_VERSION_FLOOR,
+        &[("FAKE_WORK_LIST_JSON", envelope)],
+    );
     let td = daemon_with_root(root.path());
 
     let text = stdout_text(&td.board(&["linear", "project", "list"]));
@@ -495,7 +510,7 @@ fn a_project_with_no_team_prints_an_empty_team_cell_and_a_null_key() {
 /// The positional is optional; the pane's space id stands in for it.
 #[test]
 fn snapshot_without_a_positional_uses_herdr_workspace_id() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
     let doc = json_output(&td.board_with_env(
         &["linear", "snapshot", "--json"],
@@ -506,7 +521,7 @@ fn snapshot_without_a_positional_uses_herdr_workspace_id() {
 
 #[test]
 fn snapshot_with_neither_a_positional_nor_herdr_workspace_id_exits_64() {
-    let root = fake_plugin_root("0.4.0", &[]);
+    let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let td = daemon_with_root(root.path());
     let out = td.board(&["linear", "snapshot", "--json"]);
     assert_eq!(code(&out), CLI_ERROR);
