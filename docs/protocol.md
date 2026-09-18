@@ -28,7 +28,7 @@ protocol version.
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
   down as well.
-- **Protocol codes are not exit codes.** `board` maps `1..=5` straight onto its process exit status
+- **Protocol codes are not exit codes.** `board` maps `1..=7` straight onto its process exit status
   so scripts can branch on `$?`; any other protocol code exits `70` (`EX_SOFTWARE`) because an exit
   status is taken modulo 256 and `256` would silently read as success — the `--json` envelope still
   carries the exact code the daemon sent. Errors raised by the CLI itself, before or instead of an

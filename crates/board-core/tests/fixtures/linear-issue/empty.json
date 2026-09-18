@@ -1,0 +1,32 @@
+{
+  "issue": {
+    "assignee": null,
+    "children": [],
+    "comments": [],
+    "cycle": null,
+    "description": null,
+    "due_date": null,
+    "estimate": null,
+    "history": [],
+    "id": "11111111-1111-4111-8111-111111111111",
+    "identifier": "WEB-3318",
+    "labels": [],
+    "milestone": null,
+    "parent": null,
+    "priority": 0,
+    "project": null,
+    "relations": [],
+    "state": {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Backlog",
+      "type": "backlog"
+    },
+    "title": "AI Tools drawer is blank",
+    "updated_at": "2026-09-04T15:55:10.206Z",
+    "url": "https://linear.app/example/issue/WEB-3318/ai-tools-drawer-is-blank"
+  },
+  "message": null,
+  "schema": 1,
+  "status": "ok",
+  "truncated": []
+}
