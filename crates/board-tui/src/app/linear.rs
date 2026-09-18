@@ -6,8 +6,9 @@
 //! one `bind` tab; the bind skill's confirmation in that tab gates every write.
 
 use board_core::protocol::{
-    LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearListEnvelope,
-    LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow, LinearSpacesList,
+    LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearIssueDocument,
+    LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
+    LinearSpacesList,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -19,6 +20,10 @@ use super::{App, Effect, Msg, Screen};
 pub enum LinearFailure {
     /// The daemon answered "unknown method": it predates `linear.snapshot`.
     MethodNotFound,
+    /// The work plugin is installed and current but ships no script for this
+    /// op (protocol code 7). Its remedy is to update the plugin, so a reader
+    /// must not offer the retry it offers for `Failed`.
+    OpUnsupported(String),
     /// No answer within the client's read limit for that request.
     TimedOut(std::time::Duration),
     /// Any other failure, with the daemon's or the transport's message.
@@ -37,6 +42,12 @@ pub(super) fn read_timeout_text(limit: std::time::Duration) -> String {
 #[derive(Debug)]
 pub enum LinearArrival {
     Snapshot(Box<Result<LinearSnapshot, LinearFailure>>),
+    Issue {
+        /// The issue this read was asked for. Compared against the open page
+        /// before anything is applied.
+        issue: String,
+        result: Box<Result<LinearIssueDocument, LinearFailure>>,
+    },
     List {
         kind: LinearListKind,
         id: Option<String>,
@@ -116,6 +127,25 @@ pub struct LinearState {
     /// Set when a handoff opened its tab; the board names the refresh key
     /// until the next refresh.
     pub bind_note: Option<String>,
+    /// The fetched detail for the issue page that is open, and the issue it was
+    /// fetched for. Keyed so a read that lands after the reader has moved on is
+    /// dropped rather than painted over the page they are looking at.
+    pub detail_doc: Option<(String, LinearIssueDocument)>,
+    /// The issue a `linear.issue` read is in flight for.
+    pub detail_in_flight: Option<String>,
+    /// How the last read for the open issue failed, and whether `r` can retry
+    /// it. A plugin that ships no issue script is not retryable.
+    pub detail_error: Option<DetailError>,
+}
+
+/// A failed issue read, as the page says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailError {
+    pub issue: String,
+    pub message: String,
+    /// False when the plugin ships no issue script: the remedy is to update the
+    /// plugin, so offering `r` would retry something that cannot succeed.
+    pub retryable: bool,
 }
 
 impl LinearState {
@@ -149,6 +179,9 @@ impl LinearState {
             handoff_in_flight: false,
             handoff_picker: None,
             bind_note: None,
+            detail_doc: None,
+            detail_in_flight: None,
+            detail_error: None,
         }
     }
 
@@ -392,9 +425,85 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
                 super::linear_picker::list_arrived(app, kind, id, result);
                 vec![]
             }
+            LinearArrival::Issue { issue, result } => {
+                issue_arrived(app, &issue, *result);
+                vec![]
+            }
             LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
         },
         Msg::Key(k) => linear_key(app, k),
+    }
+}
+
+/// Start the issue-page read for `issue`, unless one is already in flight for
+/// it. The page is already on screen by now: R14 opens it on what the snapshot
+/// holds, and this fills in the rest.
+pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    if state.detail_in_flight.as_deref() == Some(issue) {
+        return vec![];
+    }
+    state.detail_in_flight = Some(issue.to_string());
+    state.detail_error = None;
+    // The document for a DIFFERENT issue is dropped here rather than left on
+    // screen under the new issue's title.
+    if state.detail_doc.as_ref().is_some_and(|(id, _)| id != issue) {
+        state.detail_doc = None;
+    }
+    vec![Effect::LinearIssue {
+        issue: issue.to_string(),
+    }]
+}
+
+/// R18 -- a read that lands after the reader has opened another issue is
+/// dropped. Overlapping reads are the normal case once Enter opens a linked
+/// issue in place, so this is the rule, not an edge case.
+fn issue_arrived(app: &mut App, issue: &str, result: Result<LinearIssueDocument, LinearFailure>) {
+    let Some(state) = app.linear.as_mut() else {
+        return;
+    };
+    if state.detail.as_deref() != Some(issue) {
+        // Not the page on screen. Clear the in-flight marker only when it is
+        // this read's, so a newer read for the open issue keeps its own.
+        if state.detail_in_flight.as_deref() == Some(issue) {
+            state.detail_in_flight = None;
+        }
+        return;
+    }
+    state.detail_in_flight = None;
+    match result {
+        Ok(document) => {
+            state.detail_error = None;
+            state.detail_doc = Some((issue.to_string(), document));
+        }
+        Err(failure) => {
+            state.detail_error = Some(detail_failure(issue, failure));
+        }
+    }
+}
+
+fn detail_failure(issue: &str, failure: LinearFailure) -> DetailError {
+    let (message, retryable) = match failure {
+        // The plugin is installed and current but has no issue script: `r`
+        // would retry something that cannot succeed, so the page says what to
+        // do instead (R16).
+        LinearFailure::OpUnsupported(_) => (
+            "this issue page needs a newer work plugin; update it to read the issue".to_string(),
+            false,
+        ),
+        LinearFailure::MethodNotFound => (
+            "this board's daemon predates the issue read; restart the daemon".to_string(),
+            false,
+        ),
+        LinearFailure::TimedOut(limit) => (read_timeout_text(limit), true),
+        LinearFailure::Failed(text) => (sanitise(&text), true),
+    };
+    DetailError {
+        issue: issue.to_string(),
+        message,
+        retryable,
     }
 }
 
@@ -465,7 +574,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.error = Some(read_timeout_text(limit));
             Screen::LinearError
         }
-        Err(LinearFailure::Failed(text)) => {
+        Err(LinearFailure::OpUnsupported(text)) | Err(LinearFailure::Failed(text)) => {
             state.error = Some(sanitise(&text));
             Screen::LinearError
         }
@@ -511,6 +620,21 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     }
     if matches!(k.code, KeyCode::Char('r') | KeyCode::Char('R')) && app.screen != Screen::Help {
+        if app.screen == Screen::LinearDetail {
+            let retry = app.linear.as_ref().and_then(|state| {
+                let open = state.detail.clone()?;
+                // Only a retryable failure: an unsupported op or a stale daemon
+                // is fixed by updating something, not by asking again.
+                state
+                    .detail_error
+                    .as_ref()
+                    .is_some_and(|e| e.retryable && e.issue == open)
+                    .then_some(open)
+            });
+            if let Some(issue) = retry {
+                return request_issue(app, &issue);
+            }
+        }
         return request_snapshot(app);
     }
     match app.screen {
@@ -610,13 +734,14 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter => {
             if let Some(id) = state.selected_identifier().map(str::to_string) {
-                state.detail = Some(id);
+                state.detail = Some(id.clone());
                 let rows = state.detail_pane_rows();
                 state.pane_cursor = rows
                     .iter()
                     .position(|row| row.status == "working")
                     .unwrap_or(0);
                 app.screen = Screen::LinearDetail;
+                return request_issue(app, &id);
             }
         }
         KeyCode::Char('q') | KeyCode::Esc => return vec![Effect::Quit],

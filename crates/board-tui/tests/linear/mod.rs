@@ -454,6 +454,9 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
             "linear.snapshot",
             "pane.set_title",
             "linear.list",
+            // Opening WEB-3312's page reads it; the point of this test is that
+            // no `board.get` ever appears, not that the page reads nothing.
+            "linear.issue",
             "linear.snapshot",
             "pane.set_title",
             "linear.list"
@@ -672,7 +675,12 @@ fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     open_web_3312(&mut d);
     press(&mut d, KeyCode::Char('o'));
     assert!(toast(&d).contains("HERDR_SOCKET_PATH"), "{}", toast(&d));
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    // `linear.issue` since the issue page: opening a card reads it. What this
+    // test pins is that `o` with no socket sends nothing MORE than that.
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list", "linear.issue"]
+    );
 }
 
 #[test]
@@ -767,7 +775,10 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list", "linear.issue"]
+    );
 }
 
 #[test]
@@ -2814,4 +2825,181 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
         frame.contains(&format!("did not answer within {limit}s; press r")),
         "{frame}"
     );
+}
+
+// -- the issue-page read (R14, R15, R17, R18, R19) --------------------------
+
+fn issue_doc(identifier: &str) -> board_core::protocol::LinearIssueDocument {
+    board_core::protocol::LinearIssueDocument {
+        schema: 1,
+        status: "ok".into(),
+        message: None,
+        truncated: vec![],
+        issue: Some(board_core::protocol::LinearIssueDetail {
+            identifier: identifier.into(),
+            title: format!("{identifier} title"),
+            description: Some(format!("body of {identifier}")),
+            ..Default::default()
+        }),
+    }
+}
+
+fn detail_state(d: &Driver) -> &board_tui::app::LinearState {
+    d.app.linear.as_ref().unwrap()
+}
+
+/// R14 -- the page opens on what the snapshot already holds and asks for the
+/// rest; it never waits on a blank screen.
+#[test]
+fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", issue_doc("WEB-3312"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3312(&mut d);
+
+    assert_eq!(
+        detail_state(&d).detail_in_flight.as_deref(),
+        Some("WEB-3312")
+    );
+    assert!(detail_state(&d).detail_doc.is_none(), "not landed yet");
+
+    assert!(d.deliver_pending_linear_issue());
+    let (issue, doc) = detail_state(&d).detail_doc.as_ref().unwrap();
+    assert_eq!(issue, "WEB-3312");
+    assert_eq!(doc.issue.as_ref().unwrap().identifier, "WEB-3312");
+    assert!(detail_state(&d).detail_in_flight.is_none());
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
+/// R18 -- overlapping reads are the normal case once Enter opens a linked issue
+/// in place, so a result for an issue the reader has left must be dropped
+/// rather than painted under the open issue's title.
+#[test]
+fn a_result_for_an_issue_the_reader_has_left_is_dropped() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3312", issue_doc("WEB-3312"))
+        .with_linear_issue("WEB-3317", issue_doc("WEB-3317"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3312(&mut d);
+    // The reader moves to another issue before the first read lands.
+    d.app.linear.as_mut().unwrap().detail = Some("WEB-3317".into());
+
+    assert!(d.deliver_pending_linear_issue());
+
+    assert!(
+        detail_state(&d).detail_doc.is_none(),
+        "WEB-3312's document was applied to WEB-3317's page"
+    );
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
+/// The same rule for a failure: a failed read for an issue the reader has left
+/// must not put a failure line on a page that loaded fine.
+#[test]
+fn a_failure_for_an_issue_the_reader_has_left_is_dropped() {
+    let client = fake_with(bound_with_view()).with_linear_issue_error("WEB-3312", "Linear is down");
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3312(&mut d);
+    d.app.linear.as_mut().unwrap().detail = Some("WEB-3317".into());
+
+    assert!(d.deliver_pending_linear_issue());
+
+    assert!(detail_state(&d).detail_error.is_none(), "failure leaked");
+}
+
+/// R15 -- a failed read keeps what the page already shows, says what happened,
+/// and `r` sends the read again.
+#[test]
+fn a_failed_read_is_retryable_with_r() {
+    let client = fake_with(bound_with_view()).with_linear_issue_error("WEB-3312", "Linear is down");
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d).detail_error.clone().unwrap();
+    assert_eq!(error.issue, "WEB-3312");
+    assert!(error.retryable);
+    assert!(error.message.contains("Linear is down"), "{error:?}");
+    // The snapshot fields are untouched: the card is still on the board.
+    assert!(detail_state(&d).detail_issue().is_some());
+
+    press(&mut d, KeyCode::Char('r'));
+    assert_eq!(
+        detail_state(&d).detail_in_flight.as_deref(),
+        Some("WEB-3312"),
+        "r did not re-send the issue read"
+    );
+}
+
+/// R16 -- a plugin that ships no issue script is fixed by updating it, so the
+/// page must not offer a retry that can never succeed.
+#[test]
+fn a_plugin_without_the_issue_script_is_not_retryable() {
+    let client = fake_with(bound_with_view()).with_linear_issue_unsupported();
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d).detail_error.clone().unwrap();
+    assert!(!error.retryable, "{error:?}");
+    assert!(error.message.contains("work plugin"), "{error:?}");
+
+    // `r` falls through to the snapshot refresh rather than retrying the read.
+    press(&mut d, KeyCode::Char('r'));
+    assert!(
+        detail_state(&d).detail_in_flight.is_none(),
+        "r retried an unsupported op"
+    );
+
+    // The rest of Linear mode is unaffected: the board still has its snapshot.
+    assert!(detail_state(&d).last_good.is_some());
+}
+
+/// R17 -- each open fetches fresh; nothing is cached between opens.
+#[test]
+fn opening_the_same_issue_again_reads_it_again() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", issue_doc("WEB-3312"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+    // Enter alone: the selection is already on WEB-3312, and the helper's `l`
+    // presses would move it on.
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+
+    assert_eq!(
+        detail_state(&d).detail_in_flight.as_deref(),
+        Some("WEB-3312"),
+        "the second open did not read again"
+    );
+}
+
+/// R19 -- the page is read-only. The effect gate is the guard (its exhaustive
+/// classification is proven in `driver::linear`); what this adds is that
+/// reading a page sends no write to the daemon at all.
+#[test]
+fn opening_and_reading_a_page_sends_no_write() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", issue_doc("WEB-3312"));
+    let (client, log) = RecordingClient::new(client);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let called = methods(&log);
+    assert!(
+        called.iter().all(|m| m.starts_with("linear.")),
+        "the issue page called something other than a linear read: {called:?}"
+    );
+    assert!(called.iter().any(|m| m == "linear.issue"), "{called:?}");
 }
