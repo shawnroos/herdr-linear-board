@@ -19,7 +19,8 @@ pub(super) fn picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     };
     if let Some(delta) = nav_delta(k.code) {
-        picker.sel = step_clamped(picker.sel, delta, picker.rows.len().saturating_sub(1));
+        let len = picker.visible_rows().len();
+        picker.sel = step_clamped(picker.sel, delta, len.saturating_sub(1));
         return vec![];
     }
     // Visibility cycling (active → all → archived) works on board/project pickers.
@@ -42,7 +43,7 @@ pub(super) fn picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => {
             // A row list can be empty, so this indexes with `get`: an empty
             // picker's Enter does nothing rather than panicking.
-            let Some(row) = picker.rows.get(picker.sel) else {
+            let Some(row) = picker.selected_row() else {
                 return vec![];
             };
             let purpose = picker.purpose;
@@ -52,6 +53,7 @@ pub(super) fn picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             let (label, item_id, row_action) = match row {
                 PickerRow::Item(label, id) => (label.clone(), Some(*id), None),
                 PickerRow::Action(label, action) => (label.clone(), None, Some(*action)),
+                PickerRow::Linear(_) => return vec![],
             };
             return match (purpose, item_id, row_action) {
                 // -- project picker -------------------------------------------
@@ -178,7 +180,7 @@ fn handle_archive_request(app: &mut App) -> Vec<Effect> {
     let Some(picker) = app.picker.as_ref() else {
         return vec![];
     };
-    let Some(row) = picker.rows.get(picker.sel) else {
+    let Some(row) = picker.selected_row() else {
         return vec![];
     };
     let return_to = picker.return_to;
@@ -231,7 +233,7 @@ fn handle_restore_request(app: &mut App) -> Vec<Effect> {
     let Some(picker) = app.picker.as_ref() else {
         return vec![];
     };
-    let Some(row) = picker.rows.get(picker.sel) else {
+    let Some(row) = picker.selected_row() else {
         return vec![];
     };
     match (picker.purpose, row) {

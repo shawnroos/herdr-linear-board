@@ -145,17 +145,16 @@ fn delete_column(app: &mut App) -> Vec<Effect> {
             app.set_toast("no other column to move cards to", true);
             return vec![];
         }
-        app.picker = Some(Picker {
-            title: "Move cards to which column?".into(),
-            rows: options
+        app.picker = Some(Picker::new(
+            "Move cards to which column?".into(),
+            options
                 .into_iter()
                 .map(|(label, id)| PickerRow::Item(label, id))
                 .collect(),
-            sel: 0,
-            purpose: PickerPurpose::DeleteColumnMoveTo { column_id: col_id },
-            return_to: Screen::Board,
-            project_id: app.board.board.project_id,
-        });
+            PickerPurpose::DeleteColumnMoveTo { column_id: col_id },
+            Screen::Board,
+            app.board.board.project_id,
+        ));
         app.screen = Screen::Picker;
     } else {
         app.confirm = Some(Confirm {

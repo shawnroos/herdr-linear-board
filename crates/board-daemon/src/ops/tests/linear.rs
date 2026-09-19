@@ -4,10 +4,11 @@
 
 use super::*;
 use crate::ops::linear::{
-    child_env, snapshot, utf8_env, SnapshotRunner, HERDR_CALLS_MAX, HERDR_CALL_BUDGET_SECONDS,
+    child_env, list, snapshot, utf8_env, ScriptRunner, HERDR_CALLS_MAX, HERDR_CALL_BUDGET_SECONDS,
     INSTALLED_PLUGINS_RELATIVE, KEYCHAIN_BUDGET_SECONDS, LINEAR_RETRY_MAX, LINEAR_TIMEOUT_SECONDS,
-    LINEAR_VIEW_PAGE_MAX, PLUGIN_ROOT_ENV, PLUGIN_ROOT_TOML_KEY, PLUGIN_VERSION_FLOOR,
-    SCRIPT_DEADLINE, SCRIPT_WORST_CASE, STDOUT_CAP_BYTES, TERM_GRACE,
+    LINEAR_VIEW_PAGE_MAX, LIST_SCRIPT_DEADLINE, LIST_SCRIPT_WORST_CASE, PLUGIN_ROOT_ENV,
+    PLUGIN_ROOT_TOML_KEY, PLUGIN_VERSION_FLOOR, SCRIPT_DEADLINE, SCRIPT_WORST_CASE,
+    STDOUT_CAP_BYTES, TERM_GRACE,
 };
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -24,6 +25,12 @@ const FIXTURE: &str = concat!(
 /// A plugin root holding `plugin.json` at `version` and a snapshot script
 /// whose body is `body` (run by bash; `$1` is the workspace id).
 fn fake_plugin(version: &str, body: &str) -> tempfile::TempDir {
+    fake_plugin_scripts(version, &[("work-snapshot.sh", body)])
+}
+
+/// A plugin root holding `plugin.json` at `version` and one `bin/` script per
+/// `(file name, body)` pair.
+fn fake_plugin_scripts(version: &str, scripts: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
     std::fs::write(
@@ -32,9 +39,11 @@ fn fake_plugin(version: &str, body: &str) -> tempfile::TempDir {
     )
     .unwrap();
     std::fs::create_dir_all(dir.path().join("bin")).unwrap();
-    let script = dir.path().join("bin/work-snapshot.sh");
-    std::fs::write(&script, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (name, body) in scripts {
+        let script = dir.path().join("bin").join(name);
+        std::fs::write(&script, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     dir
 }
 
@@ -44,7 +53,7 @@ fn cat_fixture() -> String {
 
 /// A runner whose environment is exactly `HOME`, `PATH`, the root override and
 /// `extra`. `PATH` is read from this process so `/usr/bin/env` can find bash.
-fn runner(root: Option<&Path>, home: &Path, extra: &[(&str, &str)]) -> SnapshotRunner {
+fn runner(root: Option<&Path>, home: &Path, extra: &[(&str, &str)]) -> ScriptRunner {
     let mut env = BTreeMap::new();
     env.insert("HOME".to_string(), home.display().to_string());
     env.insert("PATH".to_string(), std::env::var("PATH").unwrap());
@@ -54,10 +63,12 @@ fn runner(root: Option<&Path>, home: &Path, extra: &[(&str, &str)]) -> SnapshotR
     for (key, value) in extra {
         env.insert((*key).to_string(), (*value).to_string());
     }
-    SnapshotRunner {
+    ScriptRunner {
         env,
         config_root: None,
-        deadline: Duration::from_secs(5),
+        // Measured: at load average 260 a fake script that only cats the
+        // fixture passed 5s. Tests that pin a deadline set their own.
+        deadline: Duration::from_secs(30),
         cancelled: Arc::new(|| false),
     }
 }
@@ -124,7 +135,7 @@ fn read_env_dump(path: &Path) -> BTreeMap<String, String> {
 #[test]
 fn snapshot_returns_the_document_with_a_live_status_per_pane() {
     let herdr = herdr_with_panes(&[("wA:p1", "working"), ("wA:p2", "idle")]);
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let home = tempfile::tempdir().unwrap();
 
     let doc = snapshot(
@@ -159,7 +170,7 @@ fn a_script_past_the_deadline_gets_sigterm_so_its_exit_trap_runs_and_is_reaped()
     let pid_file = home.path().join("pid");
     let trap_ran = home.path().join("trap-ran");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!(
             "trap 'touch {}' EXIT\necho $$ > {}\nsleep 30",
             trap_ran.display(),
@@ -188,7 +199,7 @@ fn a_script_that_ignores_sigterm_is_killed_after_the_grace() {
     let home = tempfile::tempdir().unwrap();
     let pid_file = home.path().join("pid");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!(
             "trap '' TERM\necho $$ > {}\nwhile :; do sleep 0.1; done",
             pid_file.display()
@@ -211,7 +222,7 @@ fn a_cancelled_request_stops_the_script_before_its_deadline() {
     let home = tempfile::tempdir().unwrap();
     let pid_file = home.path().join("pid");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!("echo $$ > {}\nsleep 60", pid_file.display()),
     );
     let mut runner = runner(Some(plugin.path()), home.path(), &[]);
@@ -239,7 +250,7 @@ fn a_grandchild_left_holding_the_output_does_not_hold_the_answer() {
     let home = tempfile::tempdir().unwrap();
     let pid_file = home.path().join("straggler");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!(
             "sleep 30 &\necho $! > {}\n{}",
             pid_file.display(),
@@ -273,7 +284,7 @@ fn a_grandchild_left_holding_the_output_does_not_hold_the_answer() {
 fn output_past_the_cap_is_refused_and_the_run_still_ends() {
     let home = tempfile::tempdir().unwrap();
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!("head -c {} /dev/zero", STDOUT_CAP_BYTES + 100),
     );
     let mut runner = runner(Some(plugin.path()), home.path(), &[]);
@@ -288,7 +299,7 @@ fn output_past_the_cap_is_refused_and_the_run_still_ends() {
 #[test]
 fn a_script_that_uses_the_whole_budget_is_not_killed() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", &format!("sleep 1\n{}", cat_fixture()));
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &format!("sleep 1\n{}", cat_fixture()));
     let mut runner = runner(Some(plugin.path()), home.path(), &[]);
     // Measured: a 2.5s sleep under a 4s deadline was killed on a loaded box
     // (bash startup plus the fixture's cat took >1.5s); the ratio, not the
@@ -326,7 +337,7 @@ fn a_client_waits_longer_than_the_daemon_can_take_to_answer() {
 #[test]
 fn truncated_json_is_a_parse_error_not_a_panic() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", r#"printf '{"schema":1,"groups":['"#);
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, r#"printf '{"schema":1,"groups":['"#);
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
 
@@ -338,12 +349,17 @@ fn truncated_json_is_a_parse_error_not_a_panic() {
 fn a_crash_names_its_exit_code_and_how_to_see_its_output_and_never_shows_stderr() {
     let home = tempfile::tempdir().unwrap();
     // What a plugin tracing its own run would print.
+    let dump = home.path().join("stderr-is");
     let plugin = fake_plugin(
-        "0.3.0",
-        r#"echo '+ curl -H "Authorization: lin_api_TRACEDTRACEDTRACED"' >&2; exit 1"#,
+        PLUGIN_VERSION_FLOOR,
+        &format!(
+            r#"{}echo '+ curl -H "Authorization: lin_api_TRACEDTRACEDTRACED"' >&2; exit 1"#,
+            stderr_probe(&dump)
+        ),
     );
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
+    assert_eq!(std::fs::read_to_string(&dump).unwrap().trim(), "null");
 
     assert_eq!(err.code(), 6);
     let msg = err.to_string();
@@ -362,7 +378,7 @@ fn a_crash_names_its_exit_code_and_how_to_see_its_output_and_never_shows_stderr(
 #[test]
 fn exit_0_with_empty_stdout_is_an_error_that_shows_no_stderr() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", "echo nothing-to-say >&2; exit 0");
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, "echo nothing-to-say >&2; exit 0");
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
 
@@ -392,7 +408,7 @@ fn a_non_utf8_environment_value_is_dropped_rather_than_panicking() {
 fn the_callers_plugin_root_is_preferred_over_the_daemons() {
     let home = tempfile::tempdir().unwrap();
     let old = fake_plugin("0.2.0", &cat_fixture());
-    let new = fake_plugin("0.3.0", &cat_fixture());
+    let new = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let runner = runner(Some(old.path()), home.path(), &[]);
     let mut p = params(None);
     p.plugin_root = Some(new.path().display().to_string());
@@ -411,7 +427,7 @@ fn the_callers_plugin_root_is_preferred_over_the_daemons() {
 fn the_closed_exit_codes_are_named() {
     let home = tempfile::tempdir().unwrap();
     for (code, phrase) in [(2, "argument was refused"), (3, "no such space")] {
-        let plugin = fake_plugin("0.3.0", &format!("exit {code}"));
+        let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &format!("exit {code}"));
         let err =
             snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
         assert!(err.to_string().contains(phrase), "exit {code}: {err}");
@@ -421,7 +437,7 @@ fn the_closed_exit_codes_are_named() {
 #[test]
 fn a_schema_other_than_one_is_refused() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", r#"echo '{"schema":2}'"#);
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, r#"echo '{"schema":2}'"#);
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
 
@@ -448,7 +464,7 @@ fn no_resolvable_root_names_the_env_var_the_toml_key_and_the_installed_path() {
 #[test]
 fn the_toml_root_is_used_when_the_env_var_is_absent() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let mut runner = runner(None, home.path(), &[]);
     runner.config_root = Some(plugin.path().to_path_buf());
 
@@ -459,7 +475,7 @@ fn the_toml_root_is_used_when_the_env_var_is_absent() {
 #[test]
 fn the_installed_plugins_user_record_is_the_last_resort() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let installed = home.path().join(INSTALLED_PLUGINS_RELATIVE);
     std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
     std::fs::write(
@@ -468,8 +484,8 @@ fn the_installed_plugins_user_record_is_the_last_resort() {
             "version": 2,
             "plugins": {
                 "work@shrimpshack": [
-                    {"scope": "project", "installPath": "/nowhere/project", "version": "0.3.0"},
-                    {"scope": "user", "installPath": plugin.path(), "version": "0.3.0"}
+                    {"scope": "project", "installPath": "/nowhere/project", "version": PLUGIN_VERSION_FLOOR},
+                    {"scope": "user", "installPath": plugin.path(), "version": PLUGIN_VERSION_FLOOR}
                 ]
             }
         })
@@ -484,20 +500,20 @@ fn the_installed_plugins_user_record_is_the_last_resort() {
 #[test]
 fn a_plugin_below_the_floor_is_refused_naming_both_versions() {
     let home = tempfile::tempdir().unwrap();
-    let plugin = fake_plugin("0.2.9", &cat_fixture());
+    let plugin = fake_plugin("0.0.1", &cat_fixture());
 
     let err = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap_err();
 
     assert_eq!(err.code(), 6);
     let msg = err.to_string();
-    assert!(msg.contains("0.2.9"), "message: {msg}");
+    assert!(msg.contains("0.0.1"), "message: {msg}");
     assert!(msg.contains(PLUGIN_VERSION_FLOOR), "message: {msg}");
 }
 
 #[test]
 fn a_plugin_at_or_above_the_floor_is_accepted() {
     let home = tempfile::tempdir().unwrap();
-    for version in ["0.3.0", "0.10.0", "1.0.0"] {
+    for version in [PLUGIN_VERSION_FLOOR, "0.10.0", "1.0.0"] {
         let plugin = fake_plugin(version, &cat_fixture());
         snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None))
             .unwrap_or_else(|e| panic!("version {version} refused: {e}"));
@@ -509,7 +525,7 @@ fn pane_status_comes_from_the_origin_socket_even_without_a_startup_herdr_handle(
     let herdr = herdr_with_panes(&[("wA:p1", "working")]);
     // Default test daemon: `herdr` is `None`, exactly a daemon auto-started
     // before herdr was up. The origin socket is what the caller runs inside.
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let home = tempfile::tempdir().unwrap();
 
     let doc = snapshot(
@@ -536,7 +552,7 @@ fn pane_status_comes_from_the_origin_socket_even_without_a_startup_herdr_handle(
 
 #[test]
 fn without_an_origin_socket_every_pane_status_is_unknown() {
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let home = tempfile::tempdir().unwrap();
 
     let doc = snapshot(&runner(Some(plugin.path()), home.path(), &[]), params(None)).unwrap();
@@ -547,7 +563,7 @@ fn without_an_origin_socket_every_pane_status_is_unknown() {
 
 #[test]
 fn an_unreachable_origin_socket_still_yields_the_document_with_unknown_statuses() {
-    let plugin = fake_plugin("0.3.0", &cat_fixture());
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
     let home = tempfile::tempdir().unwrap();
 
     let doc = snapshot(
@@ -566,7 +582,7 @@ fn the_child_environment_is_built_from_scratch_and_filtered_by_prefix() {
     let home = tempfile::tempdir().unwrap();
     let dump = home.path().join("env.txt");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!("env > {}\n{}", dump.display(), cat_fixture()),
     );
 
@@ -612,7 +628,7 @@ fn herdr_bin_is_forwarded_only_from_a_herdr_bin_path_naming_a_file() {
     let home = tempfile::tempdir().unwrap();
     let dump = home.path().join("env.txt");
     let plugin = fake_plugin(
-        "0.3.0",
+        PLUGIN_VERSION_FLOOR,
         &format!("env > {}\n{}", dump.display(), cat_fixture()),
     );
     let real_bin = home.path().join("herdr");
@@ -657,4 +673,393 @@ fn child_env_without_herdr_bin_path_sets_no_herdr_bin() {
     assert!(!child.contains_key("HERDR_BIN"));
     assert!(!child.contains_key("HERDR_BIN_PATH"));
     assert_eq!(child.len(), 7, "{child:?}");
+}
+
+// -- linear.list ------------------------------------------------------------
+
+const SPACES_ENVELOPE: &str = r#"{"status":"ok","message":null,"rows":[{"id":"wA","label":"alpha","live":true,"state":"bound","project_id":"proj-1","project_name":"Example"},{"id":"wB","label":"wB","live":false,"state":"unbound","project_id":null,"project_name":null}]}"#;
+const PROJECTS_ENVELOPE: &str = r#"{"status":"partial","message":"listed the first pages only","rows":[{"id":"proj-1","name":"Example","team_key":"EX"}]}"#;
+
+/// A body that refuses any argument with exit 2, as the no-argument scripts do.
+fn no_argument_script(then: &str) -> String {
+    format!("[ \"$#\" -eq 0 ] || exit 2\n{then}")
+}
+
+fn echo_envelope(envelope: &str) -> String {
+    format!("printf '%s\\n' '{envelope}'")
+}
+
+/// A plugin holding all three list scripts. The views script echoes its one
+/// argument back as the row id, so a test sees what the daemon passed.
+fn list_plugin(version: &str) -> tempfile::TempDir {
+    let views = "[ \"$#\" -eq 1 ] || exit 2\nprintf '{\"status\":\"ok\",\"message\":null,\"rows\":[{\"id\":\"%s\",\"name\":\"Board\"}]}\\n' \"$1\"";
+    fake_plugin_scripts(
+        version,
+        &[
+            (
+                "work-spaces.sh",
+                &no_argument_script(&echo_envelope(SPACES_ENVELOPE)),
+            ),
+            (
+                "work-projects.sh",
+                &no_argument_script(&echo_envelope(PROJECTS_ENVELOPE)),
+            ),
+            ("work-views.sh", views),
+        ],
+    )
+}
+
+fn list_params(kind: LinearListKind, id: Option<&str>) -> LinearListParams {
+    LinearListParams {
+        kind,
+        id: id.map(str::to_string),
+        origin_socket: None,
+        plugin_root: None,
+    }
+}
+
+fn script_name(kind: LinearListKind) -> &'static str {
+    match kind {
+        LinearListKind::Spaces => "work-spaces.sh",
+        LinearListKind::Projects => "work-projects.sh",
+        LinearListKind::Views => "work-views.sh",
+    }
+}
+
+fn id_for(kind: LinearListKind) -> Option<&'static str> {
+    (kind == LinearListKind::Views).then_some("proj-1")
+}
+
+const KINDS: [LinearListKind; 3] = [
+    LinearListKind::Spaces,
+    LinearListKind::Projects,
+    LinearListKind::Views,
+];
+
+#[test]
+fn each_list_kind_returns_its_scripts_envelope() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = list_plugin(PLUGIN_VERSION_FLOOR);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    match list(&runner, list_params(LinearListKind::Spaces, None)).unwrap() {
+        LinearListResult::Spaces(spaces) => {
+            assert_eq!(spaces.status, LinearListStatus::Ok);
+            assert_eq!(spaces.rows.len(), 2);
+            assert_eq!(spaces.rows[0].project_name.as_deref(), Some("Example"));
+            assert_eq!(spaces.rows[1].live, Some(false));
+        }
+        other => panic!("{other:?}"),
+    }
+    match list(&runner, list_params(LinearListKind::Projects, None)).unwrap() {
+        LinearListResult::Projects(projects) => {
+            assert_eq!(projects.status, LinearListStatus::Partial);
+            assert_eq!(projects.rows[0].team_key.as_deref(), Some("EX"));
+            assert_eq!(
+                projects.message.as_deref(),
+                Some("listed the first pages only")
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match list(&runner, list_params(LinearListKind::Views, Some("proj-1"))).unwrap() {
+        LinearListResult::Views(views) => {
+            assert_eq!(views.status, LinearListStatus::Ok);
+            assert_eq!(views.rows[0].id, "proj-1", "the id is the one argument");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn list_is_routed_and_refuses_a_views_list_without_a_project_id() {
+    let d = test_daemon(Config::default());
+    let err = handle_request(&d, "linear.list", json!({"kind": "views"})).unwrap_err();
+    assert_eq!(err.code(), 1, "routed? {err}");
+    assert!(err.to_string().contains("project id"), "message: {err}");
+    let err = handle_request(&d, "linear.list", json!({"kind": "issues"})).unwrap_err();
+    assert_eq!(err.code(), 1, "{err}");
+}
+
+#[test]
+fn an_id_outside_the_identifier_shape_is_refused_before_any_spawn() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("spawned");
+    let touch = format!("touch {}\n", marker.display());
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[
+            (
+                "work-spaces.sh",
+                &format!("{touch}{}", echo_envelope(SPACES_ENVELOPE)),
+            ),
+            (
+                "work-projects.sh",
+                &format!("{touch}{}", echo_envelope(PROJECTS_ENVELOPE)),
+            ),
+            (
+                "work-views.sh",
+                &format!("{touch}{}", echo_envelope(PROJECTS_ENVELOPE)),
+            ),
+        ],
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+    let too_long = "a".repeat(65);
+    let refused: Vec<(LinearListKind, Option<&str>)> = vec![
+        (LinearListKind::Views, None),
+        (LinearListKind::Views, Some("")),
+        (LinearListKind::Views, Some("-rf")),
+        (LinearListKind::Views, Some("_leading")),
+        (LinearListKind::Views, Some("a.b")),
+        (LinearListKind::Views, Some("a b")),
+        (LinearListKind::Views, Some("a/b")),
+        (LinearListKind::Views, Some("proj\n1")),
+        (LinearListKind::Views, Some("pröj")),
+        (LinearListKind::Views, Some(&too_long)),
+        (LinearListKind::Spaces, Some("wA")),
+        (LinearListKind::Projects, Some("proj-1")),
+    ];
+    for (kind, id) in refused {
+        let err = list(&runner, list_params(kind, id)).unwrap_err();
+        assert_eq!(err.code(), 1, "{kind:?} {id:?}: {err}");
+        assert!(!marker.exists(), "{kind:?} {id:?} spawned the script");
+    }
+
+    let longest = "a".repeat(64);
+    for id in ["p", "Proj_1-x", longest.as_str()] {
+        list(&runner, list_params(LinearListKind::Views, Some(id)))
+            .unwrap_or_else(|e| panic!("{id} refused: {e}"));
+    }
+    assert!(marker.exists(), "an accepted id reaches the script");
+}
+
+#[test]
+fn a_list_script_exiting_non_zero_is_code_6_naming_that_script() {
+    let home = tempfile::tempdir().unwrap();
+    for kind in KINDS {
+        let name = script_name(kind);
+        for (code, phrase) in [(1, "exit code 1"), (2, "argument was refused")] {
+            let plugin =
+                fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[(name, &format!("exit {code}"))]);
+            let err = list(
+                &runner(Some(plugin.path()), home.path(), &[]),
+                list_params(kind, id_for(kind)),
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), 6, "{kind:?} exit {code}: {err}");
+            let msg = err.to_string();
+            assert!(msg.contains(phrase), "{kind:?} exit {code}: {msg}");
+            assert!(msg.contains(name), "{kind:?} exit {code}: {msg}");
+            assert!(!msg.contains("work-snapshot.sh"), "{msg}");
+            assert!(!msg.contains("no such space"), "{msg}");
+        }
+    }
+}
+
+#[test]
+fn a_list_script_printing_non_json_or_an_unknown_status_is_code_6() {
+    let home = tempfile::tempdir().unwrap();
+    for body in [
+        "echo not-json",
+        r#"printf '{"status":"ok","rows":['"#,
+        r#"echo '{"status":"fine","rows":[]}'"#,
+    ] {
+        let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-projects.sh", body)]);
+        let err = list(
+            &runner(Some(plugin.path()), home.path(), &[]),
+            list_params(LinearListKind::Projects, None),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), 6, "{body}: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("cannot parse"), "{body}: {msg}");
+        assert!(msg.contains("work-projects.sh"), "{body}: {msg}");
+    }
+}
+
+#[test]
+fn a_list_from_a_plugin_below_the_floor_is_refused_naming_both_versions() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = list_plugin("0.0.1");
+
+    let err = list(
+        &runner(Some(plugin.path()), home.path(), &[]),
+        list_params(LinearListKind::Spaces, None),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    let msg = err.to_string();
+    assert!(msg.contains("0.0.1"), "message: {msg}");
+    assert!(msg.contains(PLUGIN_VERSION_FLOOR), "message: {msg}");
+}
+
+#[test]
+fn a_plugin_without_the_list_script_names_the_missing_script() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
+
+    let err = list(
+        &runner(Some(plugin.path()), home.path(), &[]),
+        list_params(LinearListKind::Views, Some("proj-1")),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    assert!(
+        err.to_string().contains("bin/work-views.sh"),
+        "message: {err}"
+    );
+}
+
+#[test]
+fn a_list_script_that_ignores_sigterm_is_killed_after_the_grace() {
+    let home = tempfile::tempdir().unwrap();
+    let pid_file = home.path().join("pid");
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[(
+            "work-spaces.sh",
+            &format!(
+                "trap '' TERM\necho $$ > {}\nwhile :; do sleep 0.1; done",
+                pid_file.display()
+            ),
+        )],
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    // Long enough for bash to write the pid file on a loaded box.
+    runner.deadline = Duration::from_millis(6000);
+
+    let started = Instant::now();
+    let err = list(&runner, list_params(LinearListKind::Spaces, None)).unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    let msg = err.to_string();
+    assert!(msg.contains("work-spaces.sh timed out"), "message: {msg}");
+    assert!(gone(read_pid(&pid_file)));
+    assert!(started.elapsed() < runner.deadline + TERM_GRACE + Duration::from_secs(3));
+}
+
+#[test]
+fn a_cancelled_list_stops_its_script() {
+    let home = tempfile::tempdir().unwrap();
+    let pid_file = home.path().join("pid");
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[(
+            "work-views.sh",
+            &format!("echo $$ > {}\nsleep 60", pid_file.display()),
+        )],
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    runner.deadline = Duration::from_secs(60);
+    let flag = pid_file.clone();
+    runner.cancelled = Arc::new(move || flag.exists());
+
+    let started = Instant::now();
+    let err = list(&runner, list_params(LinearListKind::Views, Some("proj-1"))).unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    let msg = err.to_string();
+    assert!(msg.contains("work-views.sh was stopped"), "message: {msg}");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(gone(read_pid(&pid_file)));
+}
+
+#[test]
+fn list_output_past_the_cap_is_refused_and_the_run_still_ends() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[(
+            "work-projects.sh",
+            &format!("head -c {} /dev/zero", STDOUT_CAP_BYTES + 100),
+        )],
+    );
+    let mut runner = runner(Some(plugin.path()), home.path(), &[]);
+    runner.deadline = Duration::from_secs(30);
+
+    let err = list(&runner, list_params(LinearListKind::Projects, None)).unwrap_err();
+
+    assert_eq!(err.code(), 6);
+    assert!(err.to_string().contains("more than"), "message: {err}");
+}
+
+/// Writes `null` to `dump` when the script's fd 2 is `/dev/null`, `other`
+/// otherwise. The error text cannot show this: an inherited stderr reaches the
+/// daemon's own output without touching any message.
+fn stderr_probe(dump: &Path) -> String {
+    format!(
+        "if [ /dev/fd/2 -ef /dev/null ]; then echo null; else echo other; fi > {}\n",
+        dump.display()
+    )
+}
+
+#[test]
+fn a_list_scripts_stderr_reaches_neither_the_result_nor_the_daemons_output() {
+    let home = tempfile::tempdir().unwrap();
+    let dump = home.path().join("stderr-is");
+    let body = format!(
+        "{}echo '+ curl -H \"Authorization: lin_api_TRACEDTRACEDTRACED\"' >&2\n{}",
+        stderr_probe(&dump),
+        echo_envelope(PROJECTS_ENVELOPE)
+    );
+    let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-projects.sh", &body)]);
+
+    let result = list(
+        &runner(Some(plugin.path()), home.path(), &[]),
+        list_params(LinearListKind::Projects, None),
+    )
+    .unwrap();
+
+    let text = serde_json::to_string(&result).unwrap();
+    assert!(!text.contains("TRACED"), "{text}");
+    assert_eq!(std::fs::read_to_string(&dump).unwrap().trim(), "null");
+}
+
+#[test]
+fn every_string_in_a_list_envelope_is_sanitised_on_arrival() {
+    let home = tempfile::tempdir().unwrap();
+    // ESC, a bidi override, a zero-width space and BEL, written by printf.
+    let body = r#"printf '{"status":"unavailable","message":"Linear \\u001b[31mrefused\\u202e","rows":[{"id":"v1","name":"Board\\u200b view\\u0007\\tnext\\nline"}]}\n'"#;
+    let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-views.sh", body)]);
+
+    let result = list(
+        &runner(Some(plugin.path()), home.path(), &[]),
+        list_params(LinearListKind::Views, Some("proj-1")),
+    )
+    .unwrap();
+
+    match result {
+        LinearListResult::Views(views) => {
+            assert_eq!(views.message.as_deref(), Some("Linear [31mrefused"));
+            assert_eq!(views.rows[0].name, "Board view\tnext\nline");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_list_deadline_exceeds_its_worst_case_and_fits_the_tuis_client_timeout() {
+    let pages = LINEAR_VIEW_PAGE_MAX * LINEAR_TIMEOUT_SECONDS + KEYCHAIN_BUDGET_SECONDS;
+    let herdr = HERDR_CALLS_MAX * HERDR_CALL_BUDGET_SECONDS;
+    assert!(LIST_SCRIPT_WORST_CASE >= Duration::from_secs(pages.max(herdr)));
+    assert!(LIST_SCRIPT_DEADLINE > LIST_SCRIPT_WORST_CASE);
+    // The TUI reads lists under the snapshot client timeout.
+    assert!(LIST_SCRIPT_DEADLINE <= SCRIPT_DEADLINE);
+}
+
+#[test]
+fn a_list_client_waits_longer_than_the_daemon_can_take_to_answer() {
+    let daemon_longest = LIST_SCRIPT_DEADLINE + TERM_GRACE + Duration::from_secs(2);
+    assert!(
+        board_core::protocol::LINEAR_LIST_CLIENT_TIMEOUT > daemon_longest,
+        "client {:?} vs daemon {:?}",
+        board_core::protocol::LINEAR_LIST_CLIENT_TIMEOUT,
+        daemon_longest
+    );
 }

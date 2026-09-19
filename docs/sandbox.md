@@ -43,7 +43,7 @@ scripts/sandbox.sh gates     # the full deterministic suite, offline
 4. `cargo test --workspace --all-features`,
 5. the Python test tier (`scripts/tests`),
 6. the static harness gate (`e2e/test-harness.sh`),
-7. all provider-free live Herdr scenarios via `e2e/run-all.sh --require-all`.
+7. all provider-free live Herdr scenarios via `e2e/run-all.sh --require-all --provider-free`.
 
 The first failing gate is named and the exit code is non-zero; a failing E2E
 scenario is identified by the suite's own summary. `prepare` is the only step

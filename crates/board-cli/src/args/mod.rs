@@ -20,7 +20,9 @@ pub(crate) use board::{BoardCmd, TemplateCmd};
 pub(crate) use card::{CardCmd, CommentCmd};
 pub(crate) use column::ColumnCmd;
 pub(crate) use common::ConfirmArgs;
-pub(crate) use discovery::{HarnessCmd, LinearCmd, SessionCmd, SpaceCmd};
+pub(crate) use discovery::{
+    HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
+};
 pub(crate) use project::ProjectCmd;
 pub(crate) use run::RunCmd;
 

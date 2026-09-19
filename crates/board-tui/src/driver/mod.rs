@@ -36,6 +36,7 @@ pub struct LinearStart {
     pub origin: OriginContext,
     pub board_version: String,
     pub daemon_version: Option<String>,
+    pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
 }
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
@@ -55,11 +56,11 @@ pub struct Driver {
     needs_full_redraw: bool,
     platform: Box<dyn PlatformActions>,
     /// Linear mode: the snapshot worker's delivery channel. `None` upstream.
-    linear_tx: Option<mpsc::Sender<linear::LinearArrival>>,
-    linear_rx: Option<mpsc::Receiver<linear::LinearArrival>>,
-    /// Test hook: `Some(pending)` holds snapshot fetches instead of running
-    /// them. See `defer_linear_snapshots`.
-    deferred_linear: Option<usize>,
+    linear_tx: Option<mpsc::Sender<crate::app::LinearArrival>>,
+    linear_rx: Option<mpsc::Receiver<crate::app::LinearArrival>>,
+    /// Test hook: `Some(pending)` holds Linear reads instead of running them.
+    /// See `defer_linear_snapshots`.
+    deferred_linear: Option<std::collections::VecDeque<linear::Pending>>,
 }
 
 impl Driver {
@@ -83,11 +84,12 @@ impl Driver {
         defer_snapshots: bool,
     ) -> Driver {
         let (tx, rx) = linear::arrival_channel();
-        let state = LinearState::new(
+        let mut state = LinearState::new(
             start.workspace_id,
             start.board_version,
             start.daemon_version,
         );
+        state.herdr_keys = start.herdr_keys;
         let mut driver = Driver {
             app: App::linear(state, start.origin.clone()),
             client,
@@ -97,7 +99,7 @@ impl Driver {
             platform,
             linear_tx: Some(tx),
             linear_rx: Some(rx),
-            deferred_linear: defer_snapshots.then_some(0),
+            deferred_linear: defer_snapshots.then(Default::default),
         };
         driver.handle(Msg::LinearRefresh);
         driver

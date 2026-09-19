@@ -98,12 +98,30 @@ pub enum Effect {
     LoadFormOptions,
     /// Keep the Herdr pane border title in sync with the archive filters.
     SetPaneTitle(CardFilter),
+    /// Linear mode: the whole pane title, already built and stripped.
+    SetLinearPaneTitle(String),
     /// Reload the project and board pickers with the given visibilities.
     ReloadPickers,
     Quit,
     /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
     /// production, synchronous against the fake).
     LinearSnapshot,
+    /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
+    /// project id). The reducer marks the read in flight before emitting it.
+    LinearList {
+        kind: board_core::protocol::LinearListKind,
+        id: Option<String>,
+    },
+    /// Linear mode: `linear.bind_handoff` on the origin session. Ids and a
+    /// directory only: a name never reaches the bind line. The reducer marks
+    /// the handoff in flight before emitting it.
+    BindHandoff {
+        space: String,
+        project: String,
+        view: Option<String>,
+        issue: Option<String>,
+        working_directory: Option<String>,
+    },
     /// Linear mode: `pane.focus` on the origin session.
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.

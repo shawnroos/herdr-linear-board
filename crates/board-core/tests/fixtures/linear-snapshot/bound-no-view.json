@@ -2,33 +2,38 @@
   "groups": [
     {
       "issues": [
-        "WEB-3318"
+        "WEB-3308"
       ],
       "key": "st-backlog",
+      "kind": "backlog",
       "label": "Backlog"
     },
     {
       "issues": [
-        "WEB-3317"
+        "WEB-3307"
       ],
       "key": "st-todo",
+      "kind": "unstarted",
       "label": "Todo"
     },
     {
       "issues": [
-        "WEB-3312"
+        "WEB-3302"
       ],
       "key": "st-prog",
+      "kind": "started",
       "label": "In Progress"
     },
     {
       "issues": [],
       "key": "st-devdone",
+      "kind": "started",
       "label": "Dev Done"
     },
     {
       "issues": [],
       "key": "st-done",
+      "kind": "completed",
       "label": "Done"
     }
   ],
@@ -37,7 +42,7 @@
     "version": "0.9.0"
   },
   "issues": {
-    "WEB-3312": {
+    "WEB-3302": {
       "assignee": {
         "id": "66666666-6666-4666-8666-666666666666",
         "name": "Example User"
@@ -53,11 +58,11 @@
             "id": "wA:t1",
             "label": "Plugin PM"
           },
-          "worktree_path": "$SANDBOX/worktrees/web-3312"
+          "worktree_path": "$SANDBOX/worktrees/web-3302"
         }
       ],
       "id": "13131313-1313-4131-8131-131313131313",
-      "identifier": "WEB-3312",
+      "identifier": "WEB-3302",
       "labels": [],
       "priority": 2,
       "stale": false,
@@ -67,13 +72,13 @@
         "type": "started"
       },
       "title": "Example issue: a saved item is empty after reload",
-      "url": "https://linear.app/example/issue/web-3312/x"
+      "url": "https://linear.app/example/issue/web-3302/x"
     },
-    "WEB-3317": {
+    "WEB-3307": {
       "assignee": null,
       "bindings": [],
       "id": "12121212-1212-4121-8121-121212121212",
-      "identifier": "WEB-3317",
+      "identifier": "WEB-3307",
       "labels": [],
       "priority": 3,
       "stale": false,
@@ -83,16 +88,16 @@
         "type": "unstarted"
       },
       "title": "Example issue: a long task stops when its panel is closed",
-      "url": "https://linear.app/example/issue/web-3317/x"
+      "url": "https://linear.app/example/issue/web-3307/x"
     },
-    "WEB-3318": {
+    "WEB-3308": {
       "assignee": {
         "id": "66666666-6666-4666-8666-666666666666",
         "name": "Example User"
       },
       "bindings": [],
       "id": "11111111-1111-4111-8111-111111111111",
-      "identifier": "WEB-3318",
+      "identifier": "WEB-3308",
       "labels": [
         "Bug"
       ],
@@ -104,7 +109,7 @@
         "type": "backlog"
       },
       "title": "Example issue: a panel is blank while an item is still loading",
-      "url": "https://linear.app/example/issue/web-3318/x"
+      "url": "https://linear.app/example/issue/web-3308/x"
     }
   },
   "linear": {
@@ -121,7 +126,7 @@
   },
   "project": {
     "id": "44444444-4444-4444-8444-444444444444",
-    "name": "AI Canvas Tools",
+    "name": "Frame Effects",
     "team_key": "WEB",
     "url": "https://linear.app/example/project/ai-canvas-tools"
   },

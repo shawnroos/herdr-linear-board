@@ -3,9 +3,12 @@ use ratatui::layout::Rect;
 
 use crate::widgets::{UiAction, Zone};
 
-use super::{App, DetailScrollTarget, Effect, Screen};
+use super::{App, DetailScrollTarget, Effect, Mode, Screen};
 
 pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if app.mode == Mode::Linear {
+        return on_linear_mouse(app, m);
+    }
     // New Compact-mode widgets (header buttons, switcher rows, button bars,
     // sheet close) are checked first, on every screen, via the HitMap the
     // last `view()` call registered. Existing board/detail hit-testing below
@@ -157,6 +160,75 @@ pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// Linear mode is default-deny: the shared zone arms below route through the
+/// kanban reducer (`SheetClose` sends it `Esc`), so a zone this function does
+/// not name is swallowed, which is also how an overlay shadows the board.
+fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if app.screen == Screen::LinearPicker {
+        return on_linear_picker_mouse(app, m);
+    }
+    if app.screen == Screen::LinearNotBound {
+        if m.kind != MouseEventKind::Down(MouseButton::Left) {
+            return vec![];
+        }
+        let hit = app.hit_map.borrow().hit(m.column, m.row);
+        return match hit {
+            Some(Zone::LinearStripRow(space_id)) => super::linear::click_strip_row(app, &space_id),
+            _ => vec![],
+        };
+    }
+    if app.screen != Screen::LinearBoard {
+        return vec![];
+    }
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let hit = app.hit_map.borrow().hit(m.column, m.row);
+            match hit {
+                Some(Zone::LinearCard { group, identifier }) => {
+                    super::linear::click_card(app, &group, &identifier)
+                }
+                Some(Zone::LinearGroup(group)) => {
+                    super::linear::click_group(app, &group);
+                    vec![]
+                }
+                Some(Zone::LinearStripRow(space_id)) => {
+                    super::linear::click_strip_row(app, &space_id)
+                }
+                Some(Zone::LinearHeaderView) => {
+                    if let Some(state) = app.linear.as_mut() {
+                        state.strip_focus = false;
+                    }
+                    super::linear::open_view_picker(app)
+                }
+                _ => vec![],
+            }
+        }
+        MouseEventKind::ScrollDown => super::linear::linear_key(app, key(KeyCode::Down)),
+        MouseEventKind::ScrollUp => super::linear::linear_key(app, key(KeyCode::Up)),
+        _ => vec![],
+    }
+}
+
+/// Only a picker row answers; the rest of the picker, and the board behind
+/// it, swallow the click.
+fn on_linear_picker_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
+    if m.kind != MouseEventKind::Down(MouseButton::Left) {
+        return vec![];
+    }
+    let hit = app.hit_map.borrow().hit(m.column, m.row);
+    let Some(Zone::PickerRow(idx)) = hit else {
+        return vec![];
+    };
+    let Some(picker) = app.picker.as_mut() else {
+        return vec![];
+    };
+    if idx >= picker.visible_rows().len() {
+        return vec![];
+    }
+    picker.sel = idx;
+    super::linear::linear_key(app, key(KeyCode::Enter))
 }
 
 /// Move the hovered column's scroll offset, then — if the wheel landed on
@@ -330,7 +402,7 @@ fn handle_zone(app: &mut App, zone: Zone) -> Option<Vec<Effect>> {
             let valid = app
                 .picker
                 .as_ref()
-                .is_some_and(|picker| idx < picker.rows.len());
+                .is_some_and(|picker| idx < picker.visible_rows().len());
             if valid {
                 app.picker.as_mut().expect("validated picker").sel = idx;
                 Some(super::on_key(app, key(KeyCode::Enter)))

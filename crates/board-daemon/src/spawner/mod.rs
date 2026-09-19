@@ -17,7 +17,7 @@ pub use card_tabs::CardTabRegistry;
 pub use error::SpawnError;
 pub use herdr::HerdrSpawner;
 pub use local::LocalSpawner;
-pub(crate) use placement::CardOwnership;
+pub(crate) use placement::{is_pane_not_found, CardOwnership};
 pub(crate) use rescue::{rescue_run_pane, RescueOutcome, RescuePlan};
 
 /// One-shot bootstrap placement evidence from a workspace this dispatch just

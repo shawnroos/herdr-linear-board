@@ -1,0 +1,23 @@
+---
+source: crates/board-tui/tests/linear/mod.rs
+expression: "rows.join(\"\\n\")"
+---
+ Linear  Frame Effects · view: Canva
+ Enter detail · r refresh · ? help ·
+┌ Backlog (1) · 1/5 ───────────────┐
+│WEB-3308  P0                      │
+│Example issue: the panel stays    │
+│blank while a long list of items …│
+│@Example User                     │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+│                                  │
+└──────────────────────────────────┘
+ Spaces with no project · s select …
+    Beta notes (wB)                 
+    Gamma docs (wC)

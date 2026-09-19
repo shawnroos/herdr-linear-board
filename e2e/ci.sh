@@ -53,7 +53,7 @@ echo "Pinned Herdr SHA-256: $HERDR_SHA256"
 
 export HERDR_BIN_PATH="$HERDR_BIN"
 set +e
-E2E_FORCE_BUILD=1 "$REPO_ROOT/e2e/run-all.sh" --require-all 2>&1 | tee "$EXPORT_DIR/suite.log"
+E2E_FORCE_BUILD=1 "$REPO_ROOT/e2e/run-all.sh" --require-all --provider-free 2>&1 | tee "$EXPORT_DIR/suite.log"
 suite_status=${PIPESTATUS[0]}
 set -e
 printf '%s\n' "$suite_status" >"$EXPORT_DIR/suite.status"

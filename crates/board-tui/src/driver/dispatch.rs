@@ -60,8 +60,8 @@ impl Driver {
     }
 
     pub(super) fn dispatch(&mut self, eff: Effect) {
-        // KTD8: the closed allow set is the gate; a refused effect never
-        // builds a request.
+        // The closed allow set is the gate; a refused effect never builds a
+        // request.
         if self.app.mode == Mode::Linear && !linear_allows(&eff) {
             self.app.set_toast("not available in Linear mode", true);
             return;
@@ -271,12 +271,32 @@ impl Driver {
             Effect::EditFocusedTextArea => self.edit_focused(),
             Effect::LoadFormOptions => self.load_form_options(),
             Effect::SetPaneTitle(filter) => self.set_pane_title(filter),
+            Effect::SetLinearPaneTitle(title) => self.send_pane_title(&title),
             Effect::Quit => self.app.should_quit = true,
             Effect::LinearSnapshot => self.fetch_linear_snapshot(),
+            Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
+            Effect::BindHandoff {
+                space,
+                project,
+                view,
+                issue,
+                working_directory,
+            } => self.start_bind_handoff(crate::app::BindTarget {
+                space,
+                project,
+                view,
+                issue,
+                working_directory,
+            }),
             Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
             Effect::OpenIssueUrl(url) => self.open_issue_url(url),
             Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),
         }
+    }
+
+    pub(super) fn set_pane_title(&mut self, filter: CardFilter) {
+        let title = pane_title(&self.app.board.board, filter);
+        self.send_pane_title(&title);
     }
 
     /// Update the label Herdr renders in this pane's border, through the
@@ -288,7 +308,7 @@ impl Driver {
     /// subprocess exit status was. Outside a Herdr plugin pane (tests,
     /// examples, standalone TUI) it is a no-op — there is no pane to rename,
     /// and no invoking session to rename it in.
-    pub(super) fn set_pane_title(&mut self, filter: CardFilter) {
+    fn send_pane_title(&mut self, title: &str) {
         if self.origin.plugin_id.as_deref() != Some("herdr-board") {
             return;
         }
@@ -298,8 +318,7 @@ impl Driver {
         ) else {
             return;
         };
-        let title = pane_title(&self.app.board.board, filter);
-        let _ = self.client.pane_set_title(&pane_id, &title, &origin_socket);
+        let _ = self.client.pane_set_title(&pane_id, title, &origin_socket);
     }
 
     fn focus_run(&mut self, card_id: i64, run_id: i64) {

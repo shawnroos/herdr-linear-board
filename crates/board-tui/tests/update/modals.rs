@@ -259,14 +259,13 @@ fn q_closes_the_switcher_sheet() {
 #[test]
 fn enter_on_an_empty_picker_does_not_panic() {
     let mut app = demo_app();
-    app.picker = Some(board_tui::app::Picker {
-        title: "nothing to pick".into(),
-        rows: Vec::new(),
-        sel: 0,
-        purpose: PickerPurpose::SwitchBoard,
-        return_to: Screen::Board,
-        project_id: app.project.id,
-    });
+    app.picker = Some(board_tui::app::Picker::new(
+        "nothing to pick".into(),
+        Vec::new(),
+        PickerPurpose::SwitchBoard,
+        Screen::Board,
+        app.project.id,
+    ));
     app.screen = Screen::Picker;
     let effects = update(&mut app, key(KeyCode::Enter));
     assert!(effects.is_empty());

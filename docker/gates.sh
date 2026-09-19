@@ -46,7 +46,7 @@ export E2E_FORCE_BUILD=1
 export HERDR_BIN_PATH=/usr/local/bin/herdr
 export BOARD_BIN="$CARGO_TARGET_DIR/release/board"
 e2e_rc=0
-bash /repo/e2e/run-all.sh --require-all "$@" 2>&1 | tee /artifacts/run-all.log \
+bash /repo/e2e/run-all.sh --require-all --provider-free "$@" 2>&1 | tee /artifacts/run-all.log \
   || e2e_rc=${PIPESTATUS[0]}
 
 # Export the suite's artifact root (validated like e2e/ci.sh does) so the

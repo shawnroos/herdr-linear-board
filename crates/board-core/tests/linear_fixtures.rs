@@ -38,10 +38,26 @@ fn pinned() -> (String, BTreeMap<String, String>) {
     (version, hashes)
 }
 
+fn triple(version: &str) -> (u32, u32, u32) {
+    let mut parts = version.split('.').map(|p| p.parse().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
 #[test]
 fn version_names_the_plugin_release_and_at_least_one_fixture() {
     let (version, hashes) = pinned();
-    assert_eq!(version, "0.3.0");
+    // Fixtures may lag a release that did not change the document, never the
+    // other way round: a board reading them must accept the plugin that wrote
+    // them.
+    assert!(
+        triple(&version) <= triple(board_core::PLUGIN_VERSION_FLOOR),
+        "fixtures pin plugin {version}, newer than the {} floor this board enforces",
+        board_core::PLUGIN_VERSION_FLOOR
+    );
     assert!(!hashes.is_empty());
 }
 
@@ -91,7 +107,7 @@ fn every_pinned_fixture_deserialises_into_linear_snapshot() {
 fn bound_with_view_carries_bindings_panes_and_unmapped_tabs() {
     let text = std::fs::read_to_string(fixture_dir().join("bound-with-view.json")).unwrap();
     let snapshot: LinearSnapshot = serde_json::from_str(&text).unwrap();
-    let issue = &snapshot.issues["WEB-3312"];
+    let issue = &snapshot.issues["WEB-3302"];
     assert_eq!(issue.state.kind.as_deref(), Some("started"));
     assert_eq!(issue.bindings[0].tab.as_ref().unwrap().id, "wA:t1");
     assert_eq!(issue.bindings[0].panes, vec!["wA:p1", "wA:p2"]);

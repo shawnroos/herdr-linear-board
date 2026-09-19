@@ -301,20 +301,54 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "Enter", "card detail"),
     (Screen::LinearBoard, "r / R", "refresh snapshot"),
     (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearBoard, "s", "focus the spaces strip"),
+    (Screen::LinearBoard, "t", "strip: spaces / tabs"),
+    (Screen::LinearBoard, "↑/↓ k/j", "strip: select a space"),
+    (Screen::LinearBoard, "Enter", "strip: choose a project"),
+    (Screen::LinearBoard, "Esc", "strip: back to the board"),
+    (Screen::LinearBoard, "v", "choose a view to bind"),
+    (Screen::LinearBoard, "click", "open card / focus column"),
+    (
+        Screen::LinearBoard,
+        "click strip",
+        "choose a project for it",
+    ),
+    (Screen::LinearBoard, "click view", "choose a view to bind"),
+    (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
     (Screen::LinearDetail, "u", "open issue in Linear"),
     (Screen::LinearDetail, "y", "copy worktree path"),
+    (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh snapshot"),
     (Screen::LinearDetail, "q / Esc", "back to board"),
-    (Screen::LinearNotBound, "r / R", "refresh after /work:bind"),
-    (Screen::LinearNotBound, "q / Esc", "quit"),
+    (Screen::LinearNotBound, "s", "focus the spaces strip"),
+    (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
+    (
+        Screen::LinearNotBound,
+        "click strip",
+        "choose a project for it",
+    ),
+    (Screen::LinearNotBound, "t", "strip: spaces / tabs"),
+    (Screen::LinearNotBound, "r / R", "refresh after a bind"),
+    (Screen::LinearNotBound, "Esc", "strip: unfocus, else quit"),
+    (Screen::LinearNotBound, "q", "quit"),
     (Screen::LinearError, "r / R", "retry the snapshot"),
     (Screen::LinearError, "Esc", "dismiss, keep last good"),
     (Screen::LinearError, "q", "quit"),
     (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
     (Screen::LinearStaleDaemon, "q / Esc", "quit"),
+    (Screen::LinearPicker, "--", "-- linear picker --"),
+    (
+        Screen::LinearPicker,
+        "type / Bksp",
+        "filter text; ? r q too",
+    ),
+    (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
+    (Screen::LinearPicker, "Esc", "clear filter, then close"),
+    (Screen::LinearPicker, "click", "choose that row"),
 ];
 
 /// The upstream `?` sheet renders only the rows before this sentinel, so its
@@ -341,6 +375,8 @@ pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
 
 mod layout;
 mod linear;
+mod linear_picker;
+mod linear_strip;
 mod overlays;
 
 pub use detail::{
@@ -348,6 +384,7 @@ pub use detail::{
     detail_layout, detail_toggle_rect, runs_viewport_height, DetailLayout,
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
+pub use linear::{linear_help_max_scroll, linear_pane_title};
 pub use overlays::{
     comment_history_rect, comment_history_wrapped_rows, help_content_width, help_list_rect,
     help_regular_max_scroll, help_wrapped_rows,
@@ -414,7 +451,8 @@ pub fn view(app: &App, f: &mut Frame) {
         | Screen::LinearDetail
         | Screen::LinearNotBound
         | Screen::LinearError
-        | Screen::LinearStaleDaemon => {}
+        | Screen::LinearStaleDaemon
+        | Screen::LinearPicker => {}
     }
 
     overlays::draw_footer(app, f, area);

@@ -1,9 +1,14 @@
-use anyhow::{bail, Result};
-use board_core::client::BoardClient;
-use board_core::protocol::LinearSnapshotParams;
+use anyhow::{anyhow, bail, Result};
+use board_core::client::{BoardClient, UnixClient};
+use board_core::protocol::{
+    LinearListKind, LinearListParams, LinearSnapshotParams, LINEAR_LIST_CLIENT_TIMEOUT,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+};
 use serde_json::json;
 
-use crate::args::{HarnessCmd, LinearCmd, SessionCmd, SpaceCmd};
+use crate::args::{
+    HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
+};
 use crate::context::Ctx;
 use crate::helpers::{efforts_str, harness_capabilities, union_efforts};
 use crate::render::{emit, emit_line};
@@ -77,23 +82,61 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
     let json = ctx.json();
     match sub {
         LinearCmd::Snapshot { workspace_id } => {
-            let origin_socket = std::env::var("HERDR_SOCKET_PATH")
-                .ok()
-                .filter(|socket| !socket.is_empty());
-            let plugin_root = std::env::var("BOARD_WORK_PLUGIN_ROOT")
-                .ok()
-                .filter(|root| !root.is_empty());
-            let client = ctx.client()?;
-            client.set_read_timeout(Some(board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT))?;
-            let document = client.linear_snapshot(&LinearSnapshotParams {
-                workspace_id,
-                origin_socket,
-                plugin_root,
-            });
-            client.set_read_timeout(None)?;
-            let document = document?;
+            // Resolved before connecting, so a missing id never starts a daemon.
+            let workspace_id = match workspace_id.filter(|id| !id.is_empty()) {
+                Some(id) => id,
+                None => non_empty_env("HERDR_WORKSPACE_ID")
+                    .ok_or_else(|| anyhow!("no space id given and $HERDR_WORKSPACE_ID is unset"))?,
+            };
+            let document = with_read_timeout(ctx, LINEAR_SNAPSHOT_CLIENT_TIMEOUT, |client| {
+                client.linear_snapshot(&LinearSnapshotParams {
+                    workspace_id,
+                    origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
+                    plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+                })
+            })?;
             let text = serde_json::to_string_pretty(&document)?;
             emit_line(&document, json, text)
         }
+        LinearCmd::Space {
+            sub: LinearSpaceCmd::List,
+        } => linear_list(ctx, LinearListKind::Spaces, None),
+        LinearCmd::Project {
+            sub: LinearProjectCmd::List,
+        } => linear_list(ctx, LinearListKind::Projects, None),
+        LinearCmd::View {
+            sub: LinearViewCmd::List { project_id },
+        } => linear_list(ctx, LinearListKind::Views, Some(project_id)),
     }
+}
+
+fn linear_list(ctx: &mut Ctx, kind: LinearListKind, id: Option<String>) -> Result<()> {
+    let json = ctx.json();
+    let list = with_read_timeout(ctx, LINEAR_LIST_CLIENT_TIMEOUT, |client| {
+        client.linear_list(&LinearListParams {
+            kind,
+            id,
+            origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
+            plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+        })
+    })?;
+    emit(&list, json)
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+/// A plugin script can outlast the client's default read timeout; the timeout
+/// is put back before the call's error is returned.
+fn with_read_timeout<T>(
+    ctx: &mut Ctx,
+    timeout: std::time::Duration,
+    call: impl FnOnce(&mut UnixClient) -> Result<T>,
+) -> Result<T> {
+    let client = ctx.client()?;
+    client.set_read_timeout(Some(timeout))?;
+    let result = call(client);
+    client.set_read_timeout(None)?;
+    result
 }

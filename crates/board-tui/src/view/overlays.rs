@@ -21,7 +21,7 @@ use super::{
 /// Draw the existing sheet frame and add the same discoverable close affordance
 /// to centered sheets that compact sheets already have.  The action remains
 /// `SheetClose -> Esc`; this is chrome only, never a second reducer path.
-fn render_overlay_frame(
+pub(super) fn render_overlay_frame(
     f: &mut Frame,
     box_area: Rect,
     compact: bool,
@@ -71,10 +71,11 @@ fn render_overlay_frame(
 // -- picker / confirm / help / transient toast -----------------------------
 
 /// The display text of a picker row (item or action).
-fn row_label(row: &PickerRow) -> &str {
+pub(super) fn row_label(row: &PickerRow) -> &str {
     match row {
         PickerRow::Item(name, _) => name.as_str(),
         PickerRow::Action(name, _) => name.as_str(),
+        PickerRow::Linear(row) => row.name.as_str(),
     }
 }
 
@@ -83,8 +84,12 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
     let mode = app.layout_mode();
     let compact = mode == LayoutMode::Compact;
     let label = row_label;
-    let content_w = picker
-        .rows
+    let shown: Vec<&PickerRow> = picker
+        .visible_rows()
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect();
+    let content_w = shown
         .iter()
         .map(|row| label(row).chars().count())
         .max()
@@ -95,8 +100,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
     // A wrapped option may need more than one row.  Let centered sheets grow
     // to their content preference; `sheet_area` still clamps to the board
     // content region.
-    let desired_rows: usize = picker
-        .rows
+    let desired_rows: usize = shown
         .iter()
         .map(|row| wrapped_row_count(label(row), content_w.saturating_sub(3).max(1)))
         .sum();
@@ -117,6 +121,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
         PickerPurpose::SwitchBoard => "Switch board",
         PickerPurpose::SwitchProject => "Switch project",
         PickerPurpose::DeleteColumnMoveTo { .. } => "Move column cards",
+        PickerPurpose::LinearList(_) => picker.title.as_str(),
     };
     let mut hit_map = app.hit_map.borrow_mut();
     let inner = render_overlay_frame(
@@ -139,7 +144,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
         (inner, Rect::new(inner.x, inner.y, 0, 0))
     };
 
-    if picker.rows.is_empty() {
+    if shown.is_empty() {
         f.render_widget(
             Paragraph::new(Span::styled(
                 "(no choices available)",
@@ -152,8 +157,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
 
     // Always reserve a gutter when overflow is possible.  This makes wrapping
     // and row windows identical before/after selection or resize.
-    let preliminary: Vec<u16> = picker
-        .rows
+    let preliminary: Vec<u16> = shown
         .iter()
         .map(|row| {
             wrapped_row_count(label(row), picker_area.width.saturating_sub(2).max(1)).max(1) as u16
@@ -165,8 +169,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
         .width
         .saturating_sub(if overflow { 1 } else { 0 })
         .max(1);
-    let heights: Vec<u16> = picker
-        .rows
+    let heights: Vec<u16> = shown
         .iter()
         .map(|row| {
             // One cell is the selection marker; text itself remains whole-row wrapped.
@@ -185,7 +188,7 @@ pub(super) fn draw_picker(app: &App, f: &mut Frame, area: Rect) {
         .constraints(constraints)
         .split(row_area);
     for (visible, row_idx) in (start..end).enumerate() {
-        let row = &picker.rows[row_idx];
+        let row = shown[row_idx];
         let selected = row_idx == picker.sel;
         let line = Line::from(vec![
             Span::styled(

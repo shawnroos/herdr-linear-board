@@ -1,5 +1,6 @@
-//! `linear.snapshot`: run the work plugin's `bin/work-snapshot.sh` for one
-//! herdr space and return the parsed document with live pane status attached.
+//! `linear.snapshot` and `linear.list`: run one of the work plugin's `bin/`
+//! scripts and return what it printed. The snapshot gets live pane status
+//! attached; a list comes back as the plugin's envelope, sanitised.
 //!
 //! Nothing here logs the child's argv or environment: the environment carries
 //! the Linear credential settings the plugin reads.
@@ -19,13 +20,16 @@ use board_herdr::AgentStatus;
 
 use crate::herdr_snapshot::snapshot_pane_statuses;
 
-pub(crate) const PLUGIN_VERSION_FLOOR: &str = "0.3.0";
+pub(crate) use board_core::PLUGIN_VERSION_FLOOR;
 pub(crate) const PLUGIN_ROOT_ENV: &str = "BOARD_WORK_PLUGIN_ROOT";
 pub(crate) const PLUGIN_ROOT_TOML_KEY: &str = "[daemon] work_plugin_root";
 pub(crate) const INSTALLED_PLUGINS_RELATIVE: &str = ".claude/plugins/installed_plugins.json";
 const PLUGIN_ID: &str = "work@shrimpshack";
 const PLUGIN_MANIFEST_RELATIVE: &str = ".claude-plugin/plugin.json";
-const SCRIPT_RELATIVE: &str = "bin/work-snapshot.sh";
+const SNAPSHOT_SCRIPT_RELATIVE: &str = "bin/work-snapshot.sh";
+const SPACES_SCRIPT_RELATIVE: &str = "bin/work-spaces.sh";
+const PROJECTS_SCRIPT_RELATIVE: &str = "bin/work-projects.sh";
+const VIEWS_SCRIPT_RELATIVE: &str = "bin/work-views.sh";
 
 // The knobs the daemon sets in the child. `HERDR_LINEAR_RETRY_MAX=1` is one
 // attempt: `lib/linear.sh` returns rate-limited once `attempt >= RETRY_MAX`,
@@ -53,6 +57,19 @@ pub(crate) const SCRIPT_WORST_CASE: Duration = Duration::from_secs(
 );
 pub(crate) const SCRIPT_DEADLINE: Duration =
     Duration::from_secs(SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
+
+// A list script is the larger of two shapes: the projects and views scripts
+// read every page once plus one keychain read, and the spaces script makes the
+// same herdr reads the snapshot does. The sum covers both. It stays at or
+// under the snapshot deadline because the TUI reads lists under the snapshot
+// client timeout.
+pub(crate) const LIST_SCRIPT_WORST_CASE: Duration = Duration::from_secs(
+    LINEAR_VIEW_PAGE_MAX * LINEAR_TIMEOUT_SECONDS
+        + HERDR_CALLS_MAX * HERDR_CALL_BUDGET_SECONDS
+        + KEYCHAIN_BUDGET_SECONDS,
+);
+pub(crate) const LIST_SCRIPT_DEADLINE: Duration =
+    Duration::from_secs(LIST_SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
 /// SIGTERM first so the script's EXIT trap removes its temp directory; SIGKILL
 /// after this long.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
@@ -66,26 +83,44 @@ const CHILD_POLL: Duration = Duration::from_millis(20);
 const EXIT_ARGUMENT_REFUSED: i32 = 2;
 const EXIT_NO_SUCH_SPACE: i32 = 3;
 
+const SNAPSHOT_EXITS: &[(i32, &str)] = &[
+    (EXIT_ARGUMENT_REFUSED, "the space id argument was refused"),
+    (
+        EXIT_NO_SUCH_SPACE,
+        "herdr lists no such space and no record exists",
+    ),
+];
+const LIST_EXITS: &[(i32, &str)] = &[(EXIT_ARGUMENT_REFUSED, "the argument was refused")];
+
+/// One plugin script run: which script, its one optional argument, and the
+/// exit codes it documents beyond 0. The runner carries the deadline.
+struct ScriptRun<'a> {
+    relative: &'static str,
+    arg: Option<&'a str>,
+    exits: &'static [(i32, &'static str)],
+}
+
 /// Everything the handler reads from outside the request. Production builds
 /// it from the process; tests inject it so no test touches the process
 /// environment.
-pub(crate) struct SnapshotRunner {
+pub(crate) struct ScriptRunner {
     pub env: BTreeMap<String, String>,
     pub config_root: Option<PathBuf>,
+    /// The longest one script may run; each op's handler sets its own.
     pub deadline: Duration,
     /// Polled while the script runs: true stops it (the daemon is stopping, or
     /// the client that asked has gone).
     pub cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
-impl SnapshotRunner {
-    pub(crate) fn from_daemon(d: &Arc<Daemon>) -> SnapshotRunner {
+impl ScriptRunner {
+    pub(crate) fn from_daemon(d: &Arc<Daemon>, deadline: Duration) -> ScriptRunner {
         let daemon = d.clone();
         let request = crate::cancel::current();
-        SnapshotRunner {
+        ScriptRunner {
             env: utf8_env(std::env::vars_os()),
             config_root: fresh_config_root(&d.settings),
-            deadline: SCRIPT_DEADLINE,
+            deadline,
             cancelled: Arc::new(move || {
                 daemon.is_shutdown() || request.as_ref().is_some_and(|r| r.is_cancelled())
             }),
@@ -116,17 +151,127 @@ fn fresh_config_root(settings: &crate::settings::DaemonSettings) -> Option<PathB
 }
 
 pub(super) fn linear_snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Result<Value> {
-    let runner = SnapshotRunner::from_daemon(d);
+    let runner = ScriptRunner::from_daemon(d, SCRIPT_DEADLINE);
     Ok(json!(snapshot(&runner, p)?))
 }
 
-pub(crate) fn snapshot(runner: &SnapshotRunner, p: LinearSnapshotParams) -> Result<LinearSnapshot> {
+pub(super) fn linear_list(d: &Arc<Daemon>, p: LinearListParams) -> Result<Value> {
+    let runner = ScriptRunner::from_daemon(d, LIST_SCRIPT_DEADLINE);
+    Ok(json!(list(&runner, p)?))
+}
+
+pub(crate) fn snapshot(runner: &ScriptRunner, p: LinearSnapshotParams) -> Result<LinearSnapshot> {
     if p.workspace_id.trim().is_empty() {
         return Err(Error::BadRequest(
             "linear.snapshot requires a non-empty workspace_id".into(),
         ));
     }
-    let root = resolve_plugin_root(runner, p.plugin_root.as_deref())?;
+    let origin_socket = normalized_origin(p.origin_socket.as_deref());
+    let run = ScriptRun {
+        relative: SNAPSHOT_SCRIPT_RELATIVE,
+        arg: Some(&p.workspace_id),
+        exits: SNAPSHOT_EXITS,
+    };
+    let script = plugin_script(runner, p.plugin_root.as_deref(), run.relative)?;
+    let stdout = run_script(&script, &run, origin_socket.as_deref(), runner)?;
+    let who = run_label(&script, &run);
+    let mut document: LinearSnapshot = serde_json::from_slice(&stdout).map_err(|e| {
+        Error::PluginUnavailable(format!(
+            "{who} printed a document the board cannot parse: {e}; {}",
+            by_hand(&script, &run)
+        ))
+    })?;
+    if document.schema != 1 {
+        return Err(Error::PluginUnavailable(format!(
+            "{who} printed schema {} and this board reads schema 1",
+            document.schema
+        )));
+    }
+    document.pane_status = pane_statuses(origin_socket.as_deref(), &document.pane_ids());
+    Ok(document)
+}
+
+pub(crate) fn list(runner: &ScriptRunner, p: LinearListParams) -> Result<LinearListResult> {
+    let id = p.id.as_deref().filter(|id| !id.is_empty());
+    let relative = match (p.kind, id) {
+        (LinearListKind::Views, None) => {
+            return Err(Error::BadRequest(
+                "linear.list kind views requires a project id".into(),
+            ))
+        }
+        (LinearListKind::Views, Some(id)) if !is_list_identifier(id) => {
+            return Err(Error::BadRequest(
+                "linear.list project id must be 1 to 64 ASCII letters, digits, `_` or `-`, \
+                 starting with a letter or digit"
+                    .into(),
+            ))
+        }
+        (LinearListKind::Views, Some(_)) => VIEWS_SCRIPT_RELATIVE,
+        (LinearListKind::Spaces | LinearListKind::Projects, Some(_)) => {
+            return Err(Error::BadRequest(format!(
+                "linear.list kind {} takes no id",
+                kind_name(p.kind)
+            )))
+        }
+        (LinearListKind::Spaces, None) => SPACES_SCRIPT_RELATIVE,
+        (LinearListKind::Projects, None) => PROJECTS_SCRIPT_RELATIVE,
+    };
+    let origin_socket = normalized_origin(p.origin_socket.as_deref());
+    let run = ScriptRun {
+        relative,
+        arg: id,
+        exits: LIST_EXITS,
+    };
+    let script = plugin_script(runner, p.plugin_root.as_deref(), run.relative)?;
+    let stdout = run_script(&script, &run, origin_socket.as_deref(), runner)?;
+    let parse_error = |e: serde_json::Error| {
+        Error::PluginUnavailable(format!(
+            "{} printed a list the board cannot parse: {e}; {}",
+            run_label(&script, &run),
+            by_hand(&script, &run)
+        ))
+    };
+    let value: Value = serde_json::from_slice(&stdout).map_err(parse_error)?;
+    LinearListResult::from_value(p.kind, board_core::text::sanitise_json(value))
+        .map_err(parse_error)
+}
+
+/// Identifier shape: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. The first
+/// character keeps an id from reading as an option to the script.
+pub(super) fn is_list_identifier(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
+}
+
+fn kind_name(kind: LinearListKind) -> &'static str {
+    match kind {
+        LinearListKind::Spaces => "spaces",
+        LinearListKind::Projects => "projects",
+        LinearListKind::Views => "views",
+    }
+}
+
+fn normalized_origin(raw: Option<&str>) -> Option<String> {
+    raw.map(|raw| {
+        crate::herdr_conn::normalize_socket(Path::new(raw), "origin")
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| raw.to_string())
+    })
+    .filter(|s| !s.trim().is_empty())
+}
+
+/// The script at `relative` under the resolved plugin root, refused when the
+/// plugin is older than the floor or does not ship it.
+fn plugin_script(
+    runner: &ScriptRunner,
+    requested_root: Option<&str>,
+    relative: &str,
+) -> Result<PathBuf> {
+    let root = resolve_plugin_root(runner, requested_root)?;
     let version = plugin_version(&root)?;
     if semver_triple(&version) < semver_triple(PLUGIN_VERSION_FLOOR) {
         return Err(Error::PluginUnavailable(format!(
@@ -136,34 +281,21 @@ pub(crate) fn snapshot(runner: &SnapshotRunner, p: LinearSnapshotParams) -> Resu
             root.display()
         )));
     }
-    let script = root.join(SCRIPT_RELATIVE);
+    let script = root.join(relative);
     if !script.is_file() {
         return Err(Error::PluginUnavailable(format!(
-            "work plugin {version} at {} has no {SCRIPT_RELATIVE}",
+            "work plugin {version} at {} has no {relative}",
             root.display()
         )));
     }
-
-    let origin_socket = p
-        .origin_socket
-        .as_deref()
-        .map(|raw| {
-            crate::herdr_conn::normalize_socket(Path::new(raw), "origin")
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| raw.to_string())
-        })
-        .filter(|s| !s.trim().is_empty());
-
-    let mut document = run_script(&script, &p.workspace_id, origin_socket.as_deref(), runner)?;
-    document.pane_status = pane_statuses(origin_socket.as_deref(), &document.pane_ids());
-    Ok(document)
+    Ok(script)
 }
 
 /// The caller's `BOARD_WORK_PLUGIN_ROOT` (sent as `plugin_root`), then the
 /// daemon's, then the board config, then the installed-plugins record. The
 /// client is the same user over the same-user socket, so naming the script
 /// the daemon runs grants it nothing it could not run itself.
-fn resolve_plugin_root(runner: &SnapshotRunner, requested: Option<&str>) -> Result<PathBuf> {
+fn resolve_plugin_root(runner: &ScriptRunner, requested: Option<&str>) -> Result<PathBuf> {
     if let Some(root) = requested
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -360,19 +492,49 @@ fn drain<R: Read + Send + 'static>(reader: Option<R>, cap: u64) -> mpsc::Receive
     rx
 }
 
+fn script_name(script: &Path) -> String {
+    script
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| script.display().to_string())
+}
+
+/// The script's file name and argument, as every message names the run.
+fn run_label(script: &Path, run: &ScriptRun) -> String {
+    let name = script_name(script);
+    match run.arg {
+        Some(arg) => format!("{name} {arg}"),
+        None => name,
+    }
+}
+
+fn by_hand(script: &Path, run: &ScriptRun) -> String {
+    let command = match run.arg {
+        Some(arg) => format!("{} {arg}", script.display()),
+        None => script.display().to_string(),
+    };
+    format!("run `{command}` in a shell to see its output")
+}
+
+/// Run one plugin script to completion and return its stdout, which is
+/// non-empty and within the cap. Exit codes outside `run.exits` read as a
+/// crash.
 fn run_script(
     script: &Path,
-    workspace_id: &str,
+    run: &ScriptRun,
     origin_socket: Option<&str>,
-    runner: &SnapshotRunner,
-) -> Result<LinearSnapshot> {
+    runner: &ScriptRunner,
+) -> Result<Vec<u8>> {
+    let name = script_name(script);
+    let who = run_label(script, run);
+    let by_hand = by_hand(script, run);
     let mut command = Command::new(script);
     // Its own process group, so a stop reaches curl, jq and any other
     // grandchild holding the pipe. stderr is not captured: nothing of it is
     // shown, because a plugin tracing its own run would print the credential
     // it resolves, and no filter can know every shape of that.
+    command.args(run.arg);
     command
-        .arg(workspace_id)
         .process_group(0)
         .env_clear()
         .envs(child_env(&runner.env, origin_socket))
@@ -383,10 +545,6 @@ fn run_script(
         .spawn()
         .map_err(|e| Error::PluginUnavailable(format!("running {}: {e}", script.display())))?;
     let stdout = drain(child.stdout.take(), STDOUT_CAP_BYTES);
-    let by_hand = format!(
-        "run `{} {workspace_id}` in a shell to see its output",
-        script.display()
-    );
 
     let deadline = Instant::now() + runner.deadline;
     loop {
@@ -395,15 +553,14 @@ fn run_script(
         }
         if (runner.cancelled)() {
             stop_group(&mut child);
-            return Err(Error::PluginUnavailable(
-                "work-snapshot.sh was stopped: the daemon is stopping or the client went away"
-                    .into(),
-            ));
+            return Err(Error::PluginUnavailable(format!(
+                "{name} was stopped: the daemon is stopping or the client went away"
+            )));
         }
         if Instant::now() >= deadline {
             stop_group(&mut child);
             return Err(Error::PluginUnavailable(format!(
-                "work-snapshot.sh timed out after {:?} and was stopped",
+                "{name} timed out after {:?} and was stopped",
                 runner.deadline
             )));
         }
@@ -414,48 +571,38 @@ fn run_script(
     signal_group(&child, libc::SIGKILL);
     let status = child
         .wait()
-        .map_err(|e| Error::PluginUnavailable(format!("waiting for work-snapshot.sh: {e}")))?;
+        .map_err(|e| Error::PluginUnavailable(format!("waiting for {name}: {e}")))?;
     let (stdout, over_cap) = stdout.recv_timeout(DRAIN_GRACE).map_err(|_| {
         Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} exited and its output stayed open; {by_hand}"
+            "{who} exited and its output stayed open; {by_hand}"
         ))
     })?;
 
     if !status.success() {
         let reason = match status.code() {
-            Some(EXIT_ARGUMENT_REFUSED) => "the space id argument was refused".to_string(),
-            Some(EXIT_NO_SUCH_SPACE) => {
-                "herdr lists no such space and no record exists".to_string()
-            }
-            Some(code) => format!("the script crashed with exit code {code}"),
+            Some(code) => run
+                .exits
+                .iter()
+                .find(|(known, _)| *known == code)
+                .map(|(_, reason)| reason.to_string())
+                .unwrap_or_else(|| format!("the script crashed with exit code {code}")),
             None => "the script was killed by a signal".to_string(),
         };
         return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id}: {reason}; {by_hand}"
+            "{who}: {reason}; {by_hand}"
         )));
     }
     if over_cap {
         return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} printed more than {STDOUT_CAP_BYTES} bytes; {by_hand}"
+            "{who} printed more than {STDOUT_CAP_BYTES} bytes; {by_hand}"
         )));
     }
     if stdout.iter().all(u8::is_ascii_whitespace) {
         return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} exited 0 and printed no document; {by_hand}"
+            "{who} exited 0 and printed no document; {by_hand}"
         )));
     }
-    let document: LinearSnapshot = serde_json::from_slice(&stdout).map_err(|e| {
-        Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} printed a document the board cannot parse: {e}; {by_hand}"
-        ))
-    })?;
-    if document.schema != 1 {
-        return Err(Error::PluginUnavailable(format!(
-            "work-snapshot.sh {workspace_id} printed schema {} and this board reads schema 1",
-            document.schema
-        )));
-    }
-    Ok(document)
+    Ok(stdout)
 }
 
 fn agent_status_name(status: AgentStatus) -> &'static str {

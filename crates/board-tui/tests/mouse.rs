@@ -39,7 +39,7 @@ fn hit_zones(d: &Driver, w: u16, h: u16) -> Vec<((u16, u16), Zone)> {
         for x in 0..w {
             if let Some(zone) = map.hit(x, y) {
                 if !seen.contains(&zone) {
-                    seen.push(zone);
+                    seen.push(zone.clone());
                     out.push(((x, y), zone));
                 }
             }
@@ -61,7 +61,7 @@ const REGULAR: (u16, u16) = (80, 24);
 /// `if app.screen == Screen::Board`, so a click there is inert on any other
 /// screen — a harmless leak, not a misfire, but worth asserting explicitly
 /// rather than silently special-casing it out of the matrix.
-fn is_leaked_board_header_zone(zone: Zone) -> bool {
+fn is_leaked_board_header_zone(zone: &Zone) -> bool {
     matches!(
         zone,
         Zone::HeaderPrev | Zone::HeaderNext | Zone::HeaderSwitch
@@ -308,7 +308,7 @@ fn switcher_columns_level_rows_select_and_close() {
                     assert_eq!(d.app.screen, Screen::Board);
                     assert!(d.app.switcher.is_none());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     // Guarded no-op: see `is_leaked_board_header_zone`.
                     assert_eq!(d.app.screen, Screen::Switcher);
                     assert!(d.app.switcher.is_some());
@@ -357,7 +357,7 @@ fn form_bar_save_submits_and_bar_cancel_closes() {
                     assert_eq!(d.app.screen, Screen::Board);
                     assert!(d.app.form.is_none());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert!(matches!(
                         d.app.screen,
                         Screen::CardForm | Screen::ColumnForm
@@ -396,7 +396,7 @@ fn picker_sheet_close_cancels_without_choosing() {
                     assert_eq!(d.app.screen, Screen::Board);
                     assert!(d.app.picker.is_none());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert_eq!(d.app.screen, Screen::Picker);
                     assert!(d.app.picker.is_some());
                 }
@@ -430,7 +430,7 @@ fn confirm_sheet_close_cancels_without_confirming() {
                     assert_eq!(d.app.screen, Screen::Board);
                     assert!(d.app.confirm.is_none());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert_eq!(d.app.screen, Screen::Confirm);
                     assert!(d.app.confirm.is_some());
                 }
@@ -461,7 +461,7 @@ fn help_sheet_close_returns_to_board() {
             d.handle(left_down(x, y));
             match zone {
                 Zone::SheetClose => assert_eq!(d.app.screen, Screen::Board),
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert_eq!(d.app.screen, Screen::Help);
                 }
                 other => panic!("unexpected zone on the help screen: {other:?}"),
@@ -519,7 +519,7 @@ fn card_detail_comment_zones_row_edit_delete_history() {
                     assert_eq!(d.app.screen, Screen::CommentHistory);
                     assert!(d.app.comment_history.is_some());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert_eq!(d.app.screen, Screen::CardDetail);
                 }
                 other => panic!("unexpected zone on the card detail screen: {other:?}"),
@@ -597,7 +597,7 @@ fn comment_history_sheet_close_returns_to_detail_not_board() {
                     );
                     assert!(d.app.comment_history.is_none());
                 }
-                other if is_leaked_board_header_zone(other) => {
+                other if is_leaked_board_header_zone(&other) => {
                     assert_eq!(d.app.screen, Screen::CommentHistory);
                 }
                 other => panic!("unexpected zone on the comment-history screen: {other:?}"),

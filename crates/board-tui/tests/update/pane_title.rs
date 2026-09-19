@@ -1,18 +1,19 @@
 //! Herdr pane-border title sync, through the daemon's `pane.set_title` RPC.
 //!
 //! The TUI owns no Herdr connection of its own (see `AGENTS.md`), so the only
-//! observable effect of `Effect::SetPaneTitle` is that exact client call — and
+//! observable effect of `Effect::SetPaneTitle` and `Effect::SetLinearPaneTitle`
+//! is that exact client call — and
 //! it must stay a silent no-op everywhere the TUI is not the `herdr-board`
 //! plugin pane.
 
 use std::sync::{Arc, Mutex};
 
 use board_core::client::{BoardClient, FakeBoardClient};
-use board_core::protocol::Event;
-use board_tui::app::CardFilter;
-use board_tui::testkit::{driver_with_origin, key};
+use board_core::protocol::{Event, LinearSnapshot};
+use board_tui::app::{CardFilter, Mode, Screen};
+use board_tui::testkit::{driver_with_origin, key, linear_driver, linear_fixture, linear_start};
 use board_tui::view::pane_title;
-use board_tui::{Driver, OriginContext};
+use board_tui::{Driver, LinearStart, OriginContext};
 use crossterm::event::KeyCode;
 use serde_json::Value;
 
@@ -153,5 +154,109 @@ fn outside_a_herdr_board_plugin_pane_no_title_request_is_ever_sent() {
             "{case}: {:?}",
             titles(&recorded)
         );
+    }
+}
+
+// -- Linear mode ---------------------------------------------------------------
+
+fn linear_title_driver(
+    snapshot: LinearSnapshot,
+    fail: bool,
+    origin: OriginContext,
+) -> (Driver, Arc<Mutex<Vec<Value>>>) {
+    let (mut client, recorded) = TitleClient::new(fail);
+    client.inner = client.inner.with_linear_snapshot(snapshot);
+    let (d, _, _) = linear_driver(
+        client,
+        LinearStart {
+            origin,
+            ..linear_start()
+        },
+    );
+    (d, recorded)
+}
+
+fn sent_titles(recorded: &Arc<Mutex<Vec<Value>>>) -> Vec<String> {
+    titles(recorded)
+        .iter()
+        .map(|params| params["title"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_bound_linear_space_titles_the_pane_with_the_project_name() {
+    let (d, recorded) =
+        linear_title_driver(linear_fixture("bound-with-view"), false, plugin_origin());
+    assert_eq!(d.app.mode, Mode::Linear);
+    assert_eq!(
+        titles(&recorded),
+        vec![serde_json::json!({
+            "pane_id": "w1:p1",
+            "title": "Linear: Frame Effects",
+            "origin_socket": "/run/herdr/sessions/work/herdr.sock",
+        })],
+    );
+}
+
+#[test]
+fn an_unbound_linear_space_titles_the_pane_with_the_space_label() {
+    let (_, recorded) = linear_title_driver(linear_fixture("unbound"), false, plugin_origin());
+    assert_eq!(sent_titles(&recorded), vec!["Linear: Plugins"]);
+}
+
+#[test]
+fn a_linear_space_with_no_label_falls_back_to_the_space_id() {
+    let mut snapshot = linear_fixture("unbound");
+    snapshot.workspace.label = "[\u{202E}]".into();
+    let (_, recorded) = linear_title_driver(snapshot, false, plugin_origin());
+    assert_eq!(sent_titles(&recorded), vec!["Linear: wA"]);
+}
+
+#[test]
+fn a_hostile_project_name_reaches_the_title_stripped() {
+    let mut snapshot = linear_fixture("bound-with-view");
+    snapshot.project.name = Some("Example [Launch]\nBoard\u{202E} [ALL]\u{1b}".into());
+    let (_, recorded) = linear_title_driver(snapshot, false, plugin_origin());
+    assert_eq!(
+        sent_titles(&recorded),
+        vec!["Linear: Example LaunchBoard ALL"]
+    );
+}
+
+#[test]
+fn a_failed_linear_rename_is_swallowed_and_never_toasts() {
+    let (mut d, recorded) =
+        linear_title_driver(linear_fixture("bound-with-view"), true, plugin_origin());
+    assert_eq!(sent_titles(&recorded), vec!["Linear: Frame Effects"]);
+    assert!(toast(&d).is_none(), "toast: {:?}", toast(&d));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+
+    d.handle(key(KeyCode::Char('r')));
+    assert_eq!(sent_titles(&recorded).len(), 2);
+    assert!(toast(&d).is_none(), "toast: {:?}", toast(&d));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn outside_a_herdr_board_plugin_pane_linear_mode_sends_no_title() {
+    for origin in [
+        OriginContext::default(),
+        OriginContext {
+            plugin_id: Some("herdr-file-viewer".into()),
+            ..plugin_origin()
+        },
+        OriginContext {
+            pane_id: None,
+            ..plugin_origin()
+        },
+        OriginContext {
+            origin_socket: None,
+            ..plugin_origin()
+        },
+    ] {
+        let (mut d, recorded) =
+            linear_title_driver(linear_fixture("bound-with-view"), false, origin);
+        d.handle(key(KeyCode::Char('r')));
+        assert!(titles(&recorded).is_empty(), "{:?}", titles(&recorded));
     }
 }

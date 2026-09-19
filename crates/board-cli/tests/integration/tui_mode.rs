@@ -187,8 +187,11 @@ fn a_daemon_without_the_method_receives_no_project_request() {
     let seen = seen.lock().unwrap().clone();
     assert!(
         seen.iter()
-            .all(|m| m == "daemon.status" || m == "linear.snapshot" || m == "events.subscribe"),
-        "only the version read, the snapshot and the event subscription may leave: {seen:?}"
+            .all(|m| m == "daemon.status"
+                || m == "linear.snapshot"
+                || m == "linear.list"
+                || m == "events.subscribe"),
+        "only the version read, the snapshot, the space list and the event subscription may leave: {seen:?}"
     );
     assert!(
         !seen

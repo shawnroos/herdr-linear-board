@@ -235,8 +235,9 @@ impl Drop for TestDaemon {
 }
 
 /// A work plugin root under a temp dir: `.claude-plugin/plugin.json` at
-/// `version` and `bin/work-snapshot.sh` running `fixtures/fake-work-snapshot.sh`
-/// with `knobs` exported. The daemon builds the child environment from scratch,
+/// `version`, `bin/work-snapshot.sh` running `fixtures/fake-work-snapshot.sh`
+/// and the three list scripts running `fixtures/fake-work-list.sh`, each with
+/// `knobs` exported. The daemon builds the child environment from scratch,
 /// so the knobs can only reach the fake through this wrapper.
 pub(crate) fn fake_plugin_root(version: &str, knobs: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -258,6 +259,19 @@ pub(crate) fn fake_plugin_root(version: &str, knobs: &[(&str, &str)]) -> tempfil
     let script = dir.path().join("bin/work-snapshot.sh");
     std::fs::write(&script, wrapper).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for kind in ["spaces", "projects", "views"] {
+        let mut wrapper = String::from("#!/usr/bin/env bash\n");
+        for (key, value) in knobs {
+            wrapper.push_str(&format!("export {key}='{value}'\n"));
+        }
+        wrapper.push_str(&format!(
+            "exec bash '{}' {kind} \"$@\"\n",
+            fixtures_dir().join("fake-work-list.sh").display()
+        ));
+        let script = dir.path().join(format!("bin/work-{kind}.sh"));
+        std::fs::write(&script, wrapper).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     dir
 }
 

@@ -31,7 +31,8 @@ The supported matrix is exact: **Herdr 0.9.0**, **socket protocol 22**, board pr
 v1, and SQLite schema v15. `board-herdr` rejects a different Herdr version or
 protocol before the daemon performs workspace discovery, pane placement, an agent
 launch, a configured runner action, or a notification mutation. This is a policy
-gate, not a protocol-negotiation fallback.
+gate, not a protocol-negotiation fallback. A preview build of the pinned release
+(`0.9.0-preview.*`) passes when it reports protocol 22.
 
 Use these read-only probes before changing a wire call or debugging a live session:
 
@@ -360,6 +361,39 @@ never used as a space identity.
 daemon selects the origin session for the plugin's snapshot script by forwarding the
 origin socket path as `HERDR_SOCKET_PATH` in the child environment; the plugin needs
 no session setting of its own.
+
+## Linear bind handoff: the command travels in `agent.start` argv
+
+`linear.bind_handoff` starts the work plugin's bind skill in a new tab. It does not
+follow the managed launch contract above, and it does not use `agent.prompt`. The
+daemon creates one unfocused tab labelled `bind` with `tab.create` (cwd set, empty
+environment), then calls `agent.start` on that tab's root pane with `kind:"claude"`,
+a name derived from the tab id, and one argument: the bind line
+`/work:bind --space <space> --project <project>`, plus `--view <view>` or
+`--issue <issue>`. Claude Code takes a positional first argument as the first turn of
+a normal interactive conversation, so the slash command runs as a turn the person can
+see and answer.
+
+`agent.prompt` is not used for three reasons:
+
+1. A plain `claude` start can open Claude Code's agent view, and the agent view
+   refuses a slash command delivered as a prompt.
+2. The readiness signal the card launch waits on, a non-empty `agent_session`, comes
+   from herdr's Claude integration, which is optional. Without it there is no
+   reliable moment to send a prompt, and a prompt sent before the session settles can
+   be dropped.
+3. An argument cannot be dropped that way: it is part of the process start.
+
+The agent is addressed by pane id only, never by name, because herdr can drop the
+agent name after its startup timeout while Claude keeps running. The name is still
+unique per tab, because herdr refuses a name an open agent holds.
+
+A fresh tab's login shell can take much longer to accept `agent.start` than a split
+of a warm tab: one measured case took about 60 s under heavy load, answering
+`agent_pane_busy` until then. The handoff therefore retries `agent.start` on the same
+pane for up to 90 s (250 ms first wait, doubling to 5 s a step), where a card run
+gives up after about 3 s. Any failure after the tab exists closes its pane with
+`pane.close`, which closes the tab; `pane_not_found` counts as closed.
 
 ## Version drift
 

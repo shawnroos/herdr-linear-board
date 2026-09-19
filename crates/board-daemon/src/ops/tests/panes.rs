@@ -123,6 +123,29 @@ fn pane_set_title_surfaces_a_herdr_refusal_rather_than_claiming_success() {
     assert!(msg.contains("pane.rename w1:gone"), "message: {msg}");
 }
 
+#[test]
+fn pane_set_title_strips_control_and_format_characters_at_the_sink() {
+    let herdr = renaming_herdr();
+    let d = test_daemon(Config::default());
+
+    // A client that never ran the TUI's own strip.
+    let v = handle_request(
+        &d,
+        "pane.set_title",
+        json!({
+            "pane_id": "w1:p9",
+            "title": "Linear: \u{1b}[31mEx\u{202E}ample\nLaunch\u{200B}\u{7}",
+            "origin_socket": herdr.socket,
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(v, json!({"renamed": true}));
+    let sent = herdr.requests_for("pane.rename");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["params"]["label"], "Linear: [31mExampleLaunch");
+}
+
 /// A fake Herdr that lists exactly `live` panes for `pane.get` and records
 /// every `pane.focus`.
 fn focusing_herdr(live: &'static [&'static str]) -> FakeHerdr {

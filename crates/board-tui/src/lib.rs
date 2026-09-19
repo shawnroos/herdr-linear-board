@@ -26,6 +26,7 @@ pub mod app;
 pub mod driver;
 pub mod editor;
 pub mod forms;
+pub mod herdr_keys;
 pub mod origin;
 pub mod runtime;
 #[cfg(feature = "fake-client")]

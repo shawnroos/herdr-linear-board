@@ -234,8 +234,7 @@ impl HerdrClient {
     /// ask this gate to validate a different contract.
     pub fn require_supported_protocol(&mut self) -> Result<Pong> {
         let pong = self.ping()?;
-        if pong.version != crate::SUPPORTED_HERDR_VERSION
-            || pong.protocol != crate::SUPPORTED_HERDR_PROTOCOL
+        if !is_supported_release(&pong.version) || pong.protocol != crate::SUPPORTED_HERDR_PROTOCOL
         {
             return Err(HerdrError::Protocol {
                 code: "incompatible_protocol".to_string(),
@@ -439,4 +438,13 @@ impl HerdrClient {
     pub fn session_snapshot(&mut self) -> Result<SessionSnapshot> {
         self.call_field("session.snapshot", json!({}), "snapshot")
     }
+}
+
+// A preview build of the pinned release ships the same socket protocol, so it
+// passes; any other release or a protocol mismatch still fails.
+fn is_supported_release(version: &str) -> bool {
+    version == crate::SUPPORTED_HERDR_VERSION
+        || version
+            .strip_prefix(crate::SUPPORTED_HERDR_VERSION)
+            .is_some_and(|rest| rest.starts_with("-preview."))
 }

@@ -12,8 +12,9 @@
 # herdr actions/keybindings run a command (no declarative "open this pane" field),
 # so this shells out to the herdr CLI via $HERDR_BIN_PATH (herdr injects it; fall
 # back to `herdr` on PATH). The pane is identified by its static title (`Board`),
-# the legacy filter title, or the scoped title (`Board [scope · FILTER]`). Any failure
-# degrades to OPEN, preserving always-open behavior.
+# the legacy filter title, the scoped title (`Board [scope · FILTER]`), or the Linear
+# mode title (`Linear: <bound object>`). A board title this does not match is silent:
+# every press opens another overlay. Any failure degrades to OPEN.
 set -uo pipefail
 
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
@@ -46,7 +47,7 @@ for p in panes:
     name = (p.get("label") or p.get("title") or "")
     if name == "Board" or re.fullmatch(
         r"Board \[(?:(?:ACTIVE|ALL|ARCHIVED)|.+ · (?:ACTIVE|ALL|ARCHIVED))\]", name
-    ):
+    ) or re.fullmatch(r"Linear: .+", name):
         board = p
         break
 if not board:

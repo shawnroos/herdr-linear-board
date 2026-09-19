@@ -153,7 +153,9 @@ override values also prevent daemon startup.
 | `BOARD_SOCKET` | Daemon socket. Default: `~/.local/share/herdr-board/boardd.sock`. |
 | `BOARD_LOG_DIR` | Structured diagnostic log directory. Default: `~/.local/share/herdr-board/logs`. |
 | `HERDR_BOARD_CONFIG` | Configuration path override. |
-| `BOARD_WORK_PLUGIN_ROOT` | Linear mode: the work plugin checkout the daemon runs `bin/work-snapshot.sh` from; first in the root resolution order, before `[daemon] work_plugin_root`. The CLI and TUI send their own value with each request, and the daemon's own value is the fallback; both, and the config key, are read per request, so no daemon restart is needed. |
+| `BOARD_WORK_PLUGIN_ROOT` | Linear mode: the work plugin checkout the daemon runs `bin/work-snapshot.sh`, `bin/work-spaces.sh`, `bin/work-projects.sh` and `bin/work-views.sh` from (plugin `0.5.0` or newer); first in the root resolution order, before `[daemon] work_plugin_root`. The CLI and TUI send their own value with each request, and the daemon's own value is the fallback; both, and the config key, are read per request, so no daemon restart is needed. |
+| `HERDR_LINEAR_PROJECTS_ROOT` | Linear mode: the work plugin's projects root, read from the daemon's environment. A bind handoff's working directory must resolve inside this root or `HERDR_LINEAR_WORKTREES_ROOT`, and a handoff with no working directory opens its `bind` tab here. Default: `~/projects`. The deprecated `HERDR_LINEAR_SLATE_ROOT` is read when this is unset or empty. Every `HERDR_LINEAR_*` variable is also forwarded to the plugin scripts. |
+| `HERDR_LINEAR_WORKTREES_ROOT` | Linear mode: the work plugin's worktrees root, read from the daemon's environment; the second root a bind handoff's working directory may resolve inside. Default: `~/worktrees`. |
 | `BOARD_SCOPE_PATH` | Canonicalizable scope override for CLI/TUI automation; when no selection exists yet it selects the project at CLI/TUI startup (the selected project otherwise prevails over the current directory). |
 | `BOARD_SPAWNER` | `herdr` or `local`; overrides `[daemon] spawner`. |
 | `BOARD_CARD_ID` / `BOARD_RUN_ID` | Injected into runs; `comment`/`done` use them by default. |
@@ -162,3 +164,4 @@ override values also prevent daemon startup.
 | `OPENCODE_BIN` | OpenCode binary used for live `opencode models --verbose` model discovery; default `opencode` on `PATH`. An unset/invalid binary keeps the static fallback catalog. |
 | `AGY_BIN` | Antigravity binary used for the live `agy --output-format json models` model catalog; default `agy` on `PATH`. An unset/invalid binary means the catalog is unavailable: model selection becomes free-form (stored models keep running) and the picker is empty. |
 | `BOARD_TIMEOUT_UNIT_SECS` / `BOARD_LOCAL_POLL_MS` / `BOARD_TICK_MS` | Test-tuning knobs. |
+| `XDG_CONFIG_HOME` | Linear mode: where the TUI looks for the herdr config whose keys the `?` sheet lists, `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`. The TUI reads that file once at start and never writes it; a missing, unreadable, unparseable or over-64 KiB file leaves the section out. |

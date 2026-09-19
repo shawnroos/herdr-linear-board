@@ -64,6 +64,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         "detail.rs" => vec!["CardDetail"],
         "forms.rs" => vec!["CardForm", "ColumnForm"],
         "picker.rs" => vec!["Picker"],
+        "linear_picker.rs" => vec!["LinearPicker"],
         "confirm.rs" => vec!["Confirm"],
         "help.rs" => vec!["Help"],
         "switcher.rs" => vec!["Switcher"],
@@ -97,6 +98,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
             "LinearNotBound",
             "LinearError",
             "LinearStaleDaemon",
+            "LinearPicker",
         ],
         // `mouse.rs` *synthesizes* key events to reuse a screen's handler (for
         // example, the Card Detail comment `[ Edit ]` action replays `e`); it
@@ -179,6 +181,7 @@ fn every_screen_with_bindings_has_help_rows() {
         Screen::LinearNotBound,
         Screen::LinearError,
         Screen::LinearStaleDaemon,
+        Screen::LinearPicker,
     ] {
         assert!(
             screens_with_rows.contains(&format!("{screen:?}")),

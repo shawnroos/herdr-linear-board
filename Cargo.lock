@@ -180,9 +180,12 @@ dependencies = [
  "crossterm",
  "insta",
  "ratatui",
+ "serde",
  "serde_json",
  "tempfile",
+ "toml",
  "tui-textarea",
+ "unicode-width",
 ]
 
 [[package]]

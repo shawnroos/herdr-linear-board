@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::state::Daemon;
 
+mod bind_handoff;
 mod boards;
 mod cards;
 mod columns;
@@ -120,6 +121,8 @@ routes!(d, params, {
     "pane.set_title" => panes::pane_set_title(from(params)?),
     "pane.focus" => panes::pane_focus(from(params)?),
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
+    "linear.list" => linear::linear_list(d, from(params)?),
+    "linear.bind_handoff" => bind_handoff::linear_bind_handoff(d, from(params)?),
 });
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {

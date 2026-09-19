@@ -97,7 +97,7 @@ pub enum UiAction {
 }
 
 /// Interactive zones registered by the new Compact-mode widgets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Zone {
     /// A screen-validated action routed through the existing key reducer.
     Action(UiAction),
@@ -154,6 +154,17 @@ pub enum Zone {
     CommentDelete,
     /// Card detail comments action bar: view the focused comment's history.
     CommentHistory,
+    /// A Linear card, keyed by what it showed rather than where: the snapshot
+    /// can change between the draw and the click.
+    LinearCard {
+        group: String,
+        identifier: String,
+    },
+    LinearGroup(String),
+    /// A strip row, keyed by the space id it showed.
+    LinearStripRow(String),
+    /// The header's view text, which opens the view picker.
+    LinearHeaderView,
 }
 
 /// Rects registered during the current frame's draw, consulted by the mouse
@@ -177,7 +188,7 @@ impl HitMap {
         // registrations should shadow earlier ones at the same cell.
         for (rect, zone) in self.zones.iter().rev() {
             if x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height {
-                return Some(*zone);
+                return Some(zone.clone());
             }
         }
         None

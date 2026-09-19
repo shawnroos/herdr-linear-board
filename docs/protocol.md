@@ -18,9 +18,10 @@ protocol version.
   Error objects may add `kind` and `details`; old clients may ignore those members.
 - Error codes: `1` bad request / unknown method, `2` not found, `3` invalid state
   (e.g. delete column with running card), `4` herdr unavailable, `5` internal, `6` work plugin
-  unavailable (`linear.snapshot` only: no resolvable plugin root, a plugin below the floor version,
-  or a script run that produced no document). The CLI passes `1..=6` through as its exit status
-  (`board linear snapshot` is the one command that raises `6`). The CLI preserves
+  unavailable (`linear.snapshot` and `linear.list` only: no resolvable plugin root, a plugin below
+  the floor version, or a script run that produced no usable document). The CLI passes `1..=6`
+  through as its exit status (`board linear snapshot`, `board linear space list`,
+  `board linear project list` and `board linear view list` are the commands that raise `6`). The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
@@ -46,7 +47,7 @@ protocol version.
 ## Herdr compatibility gate
 
 boardd supports **exactly Herdr 0.9.0 / protocol 22**. The board protocol remains v1 and the
-SQLite schema remains v14; neither version is the upstream Herdr socket contract. Because the
+SQLite schema remains v15; neither version is the upstream Herdr socket contract. Because the
 daemon opens a fresh Herdr request connection per operation, the compatibility probe is repeated
 at each operation boundary rather than treated as a one-time startup check:
 
@@ -66,7 +67,9 @@ at each operation boundary rather than treated as a one-time startup check:
   separate CLI discovery step, not a socket call; once it selects a socket, socket operations are
   gated.
 - New pane operations are checked before `pane.get`/`pane.focus` for `run.focus` and `pane.focus`,
-  `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
+  `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, `workspace.list`/`tab.create`/`agent.start`
+  for `linear.bind_handoff` (its closing `pane.close` after a failed start uses the same checked
+  connection), and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
   configured runner used by placement and rescue.
 
 There is one deliberate exception: cleanup and liveness for panes already owned by a daemon run.
@@ -97,8 +100,8 @@ with lightweight recording/fake clients. Production clients perform no SQLite I/
 and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
-`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`, and
-`linear.snapshot`, in addition to the
+`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
+`linear.snapshot`, `linear.list`, and `linear.bind_handoff`, in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
 as `{}` while a named session serializes as `{ "session": "..." }`, preserving the v1 wire contract.
 
@@ -488,7 +491,9 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   exactly as it does for `run.focus` (only the caller knows which Herdr it runs inside); the path is
   canonicalized and then opened through the same gated connect as every other operation, so the
   pinned Herdr 0.9.0 / protocol 22 check runs before the rename. Maps to herdr `pane.rename`, and
-  touches no board state — the daemon exists here only because it owns every Herdr call.
+  touches no board state — the daemon exists here only because it owns every Herdr call. The
+  daemon strips control and format characters (escapes, newlines, bidi overrides, zero-width marks)
+  from `title` before the rename, because any socket client can send one; brackets are kept.
   Error 1 for an empty `pane_id`, error 4 for an unavailable socket, a socket that fails the
   protocol gate, or a `pane.rename` herdr refuses (e.g. an unknown pane). A rename that did not
   happen is always one of those errors, never a successful `{renamed:false}`.
@@ -515,7 +520,7 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   `BOARD_WORK_PLUGIN_ROOT`; then the daemon's `BOARD_WORK_PLUGIN_ROOT`; then `[daemon]
   work_plugin_root` read from the board config now; then the `user`-scope `installPath` of
   `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
-  `.claude-plugin/plugin.json` version below `0.3.0` naming both versions, and runs
+  `.claude-plugin/plugin.json` version below `0.5.0` naming both versions, and runs
   `bin/work-snapshot.sh <workspace_id>` with a bounded deadline and an environment built from
   scratch: `HOME`, `PATH`, `HERDR_SOCKET_PATH` (the canonicalized `origin_socket`, when given),
   every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, `HERDR_BIN` only when
@@ -537,6 +542,57 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
   to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
   unparseable document, or a `schema` other than `1`.
+- `linear.list {kind, id?, origin_socket?, plugin_root?}` → `{status, message, rows}` — one of the
+  work plugin's lists, run through the same plugin-root resolution, `0.5.0` floor, environment,
+  stderr rule, stdout cap and stop rules as `linear.snapshot`, under its own bounded deadline.
+  `kind` is `spaces` (`bin/work-spaces.sh`), `projects` (`bin/work-projects.sh`) or `views`
+  (`bin/work-views.sh <id>`). `views` requires `id`, a Linear project id; `spaces` and `projects`
+  take none. An id must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, so it can never read as an
+  option to the script. The result is the plugin's envelope: `status` is one of `ok`,
+  `unavailable`, `partial` or `unknown` (any other value is an unparseable list, not an empty one),
+  `message` is a string or `null`, and `rows` depends on `kind`:
+  `spaces` rows are `{id, label, live, state, project_id, project_name}` (the binding state of
+  every herdr space, bound or not), `projects` rows are `{id, name, team_key}` (the projects the
+  person is a member of; `team_key` is `null` for a project with no team), and `views` rows are `{id, name}`. The wire carries no kind tag; a client
+  decodes the rows by the kind it asked for. Before answering, the daemon removes control
+  characters other than tab and newline, and format characters, from every string in the envelope,
+  object keys included. The daemon makes no herdr call for a list; the spaces script reaches herdr
+  itself through the forwarded `HERDR_SOCKET_PATH`. Clients wait at most
+  `LINEAR_LIST_CLIENT_TIMEOUT` (130 s) from the CLI; the TUI reads lists under the 150 s snapshot
+  limit. Error 1 for an id on `spaces` or `projects`, a missing id on `views`, or an id of the
+  wrong shape; error 6 for every plugin-side failure `linear.snapshot` names (no exit `3` here: a
+  list script documents only `2`, argument refused).
+- `linear.bind_handoff {space, project, view?, issue?, working_directory?, origin_socket}` →
+  `{tab_id, pane_id}` — start the work plugin's interactive bind in a new tab of the **caller's
+  own** herdr session. Every id must match the `linear.list` id shape; `view` and `issue` are
+  exclusive. `working_directory`, when given, must be absolute and name an existing directory that,
+  fully resolved (symlinks included), lies inside the plugin's projects root or worktrees root:
+  `HERDR_LINEAR_PROJECTS_ROOT` (the deprecated `HERDR_LINEAR_SLATE_ROOT` second, else
+  `~/projects`) and `HERDR_LINEAR_WORKTREES_ROOT` (else `~/worktrees`), read from the daemon's
+  environment and resolved the way the plugin's `lib/contain.sh` resolves them. With no
+  `working_directory` the tab opens in the projects root, where a space or view bind runs. Every
+  check runs before any herdr call. The daemon then opens a gated connection to `origin_socket`,
+  confirms with `workspace.list` that `space` is in that session, and creates one unfocused tab
+  labelled `bind` in `space`, in the working directory, with an empty environment. In that tab's
+  root pane it calls `agent.start` with kind `claude`, a name derived from the new tab id
+  (`bind-<tab id>`, lowercased, at most 32 characters), and exactly one argument, the bind line:
+  `/work:bind --space <space> --project <project>`, followed by ` --view <view>` or
+  ` --issue <issue>` when given. A positional first argument opens a normal interactive Claude
+  conversation whose first turn is that line; `agent.prompt` is not used (see
+  [`herdr.md`](herdr.md) → Linear bind handoff). While the new pane answers `agent_pane_busy`, the
+  daemon retries `agent.start` with a doubling wait (250 ms up to 5 s a step) for at most 90 s, and
+  stops retrying when the daemon stops or the client disconnects. Any failure after the tab exists
+  closes the tab's pane, which closes the tab; a pane already gone counts as closed, and a failed
+  close is appended to the error message. The daemon writes nothing: no board row, no plugin
+  record, no Linear object. The bind skill's own confirmation, asked in the new Claude session, is
+  the only write gate, and it orders the write; it does not prove a person saw it. The result names
+  the new tab and the pane running Claude; the TUI focuses that pane with `pane.focus`. Clients
+  wait at most `LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT` (300 s). There is no CLI verb (see
+  `board skill` → Linear mode). Error 1 for an id of the wrong shape, both `view` and `issue`, or a
+  `working_directory` that is relative, missing, not a directory, or outside both roots (or no
+  `working_directory` and no projects root); error 2 for a `space` the caller's session does not
+  list; error 4 for an unusable `origin_socket`, a socket that fails the protocol gate, or a
+  refused `workspace.list`, `tab.create` or `agent.start` (including a pane still busy at 90 s).
 
 ## Card statuses & signals
 

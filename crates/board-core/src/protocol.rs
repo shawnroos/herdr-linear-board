@@ -1060,6 +1060,158 @@ pub struct LinearSnapshotParams {
 /// the daemon; only a daemon that never answers reaches it.
 pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
+/// How long a client waits for a `linear.list` answer: longer than the
+/// daemon's list deadline plus its stop grace, as for the snapshot.
+pub const LINEAR_LIST_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
+
+/// Which plugin list `linear.list` runs: `bin/work-spaces.sh`,
+/// `bin/work-projects.sh` or `bin/work-views.sh`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinearListKind {
+    #[default]
+    Spaces,
+    Projects,
+    Views,
+}
+
+/// `linear.list` params. `id` is the one argument a kind needs (the project
+/// id for `views`); `origin_socket` and `plugin_root` mean what they mean for
+/// [`LinearSnapshotParams`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearListParams {
+    pub kind: LinearListKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_socket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<String>,
+}
+
+/// A closed vocabulary, unlike the snapshot's string statuses: a picker must
+/// never read a value it does not know as a successful empty list, so an
+/// unrecognised status fails to parse.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinearListStatus {
+    Ok,
+    Unavailable,
+    Partial,
+    #[default]
+    Unknown,
+}
+
+/// The envelope every plugin list script prints. The scripts write
+/// `"message": null` when there is nothing to say, hence `Option`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearListEnvelope<R> {
+    #[serde(default)]
+    pub status: LinearListStatus,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub rows: Vec<R>,
+}
+
+pub type LinearSpacesList = LinearListEnvelope<LinearSpaceRow>;
+pub type LinearProjectsList = LinearListEnvelope<LinearProjectRow>;
+pub type LinearViewsList = LinearListEnvelope<LinearViewRow>;
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSpaceRow {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub label: String,
+    #[serde(default)]
+    pub live: Option<bool>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub state: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearProjectRow {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub name: String,
+    #[serde(default)]
+    pub team_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearViewRow {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub name: String,
+}
+
+/// A `linear.list` answer decoded by the kind that was asked for. The wire
+/// carries no kind tag, and a views row would also parse as a projects row, so
+/// the request's kind is the only safe discriminator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum LinearListResult {
+    Spaces(LinearSpacesList),
+    Projects(LinearProjectsList),
+    Views(LinearViewsList),
+}
+
+impl LinearListResult {
+    pub fn kind(&self) -> LinearListKind {
+        match self {
+            LinearListResult::Spaces(_) => LinearListKind::Spaces,
+            LinearListResult::Projects(_) => LinearListKind::Projects,
+            LinearListResult::Views(_) => LinearListKind::Views,
+        }
+    }
+
+    pub fn from_value(kind: LinearListKind, value: serde_json::Value) -> serde_json::Result<Self> {
+        Ok(match kind {
+            LinearListKind::Spaces => LinearListResult::Spaces(serde_json::from_value(value)?),
+            LinearListKind::Projects => LinearListResult::Projects(serde_json::from_value(value)?),
+            LinearListKind::Views => LinearListResult::Views(serde_json::from_value(value)?),
+        })
+    }
+}
+
+/// How long a client waits for a `linear.bind_handoff` answer: longer than the
+/// daemon's busy retry on a slow new pane plus the herdr calls around it.
+pub const LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
+/// `linear.bind_handoff` params: ids and a directory only, never names. The
+/// daemon validates every field before any herdr call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearBindHandoffParams {
+    pub space: String,
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+    pub origin_socket: String,
+}
+
+/// The unfocused `bind` tab the handoff created and the pane running Claude.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearBindHandoffResult {
+    pub tab_id: String,
+    pub pane_id: String,
+}
+
 /// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
 /// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
 /// defaults so a partial document still parses; statuses stay strings because
@@ -1186,6 +1338,10 @@ pub struct LinearGroup {
     pub key: String,
     #[serde(default)]
     pub label: String,
+    /// The Linear workflow state type this column groups, when it groups by
+    /// state at all; `None` under any other grouping or from the cache.
+    #[serde(default)]
+    pub kind: Option<String>,
     #[serde(default)]
     pub issues: Vec<String>,
 }

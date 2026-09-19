@@ -62,6 +62,15 @@ E2E_FAKE_AGENT="${E2E_FAKE_AGENT:-$E2E_LIB_DIR/fake-agent.sh}"
 HRPC="$E2E_LIB_DIR/hrpc.py"
 E2E_FAKE_PI_BIN_DIR="$E2E_LIB_DIR/fake-bin"
 E2E_PROCESS_IDENTITY="$E2E_LIB_DIR/process_identity.py"
+
+# Derived, never copied: a literal here went stale the moment the floor moved to
+# 0.5.0 and left 40-linear-mode stubbing a plugin the board then refused.
+E2E_PLUGIN_VERSION_FLOOR="$(
+  sed -n 's/.*PLUGIN_VERSION_FLOOR: &str = "\([^"]*\)".*/\1/p' \
+    "$E2E_LIB_DIR/../crates/board-core/src/lib.rs"
+)"
+[ -n "$E2E_PLUGIN_VERSION_FLOOR" ] || { echo "e2e/lib.sh: could not read PLUGIN_VERSION_FLOOR" >&2; exit 1; }
+export E2E_PLUGIN_VERSION_FLOOR
 export BOARD_BIN
 
 e2e_identity_key_ensure() {
@@ -469,8 +478,10 @@ e2e_launch_tui() {
   local pane_id="$1"
   shift
   local cols="${E2E_TUI_COLS:-65}"
+  # A herdr pane exports its space id, and `board tui` opens Linear mode when
+  # it sees one; these scenarios drive the kanban board.
   e2e_herdr_mutate -- pane run "$pane_id" \
-    "stty cols $cols; $* $BOARD_BIN tui"
+    "stty cols $cols; unset HERDR_WORKSPACE_ID HERDR_PLUGIN_CONTEXT_JSON; $* $BOARD_BIN tui"
 }
 
 # --- boardd RPC (columns have no CLI verb) ----------------------------------

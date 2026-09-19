@@ -7,6 +7,7 @@
 //! performs I/O or renders.
 
 use board_core::model::{Column, CommentHistory};
+use board_core::protocol::{LinearListKind, LinearListStatus};
 
 use super::Screen;
 
@@ -80,6 +81,112 @@ pub struct Picker {
     /// The project whose boards a board picker lists; for the project picker
     /// it is the current project. Unused by the delete-column picker.
     pub project_id: i64,
+    /// Typed text narrowing the rows. Only a Linear picker takes typing.
+    pub filter: String,
+    /// The one argument a Linear list needs (a views list's project id).
+    pub list_id: Option<String>,
+    /// What the last Linear list read said; `None` until one lands.
+    pub outcome: Option<ListOutcome>,
+}
+
+impl Picker {
+    pub fn new(
+        title: String,
+        rows: Vec<PickerRow>,
+        purpose: PickerPurpose,
+        return_to: Screen,
+        project_id: i64,
+    ) -> Picker {
+        Picker {
+            title,
+            rows,
+            sel: 0,
+            purpose,
+            return_to,
+            project_id,
+            filter: String::new(),
+            list_id: None,
+            outcome: None,
+        }
+    }
+
+    /// The rows the filter lets through, with their index into `rows`. `sel`,
+    /// drawing and click zones all index this list, never `rows`.
+    pub fn visible_rows(&self) -> Vec<(usize, &PickerRow)> {
+        // A Linear row pads its tag to the widest visible tag, and that width
+        // depends on this filter, so runs of spaces compare as one.
+        let needle = collapse_spaces(&self.filter.to_lowercase());
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                needle.is_empty()
+                    || collapse_spaces(&row.filter_text().to_lowercase()).contains(&needle)
+            })
+            .collect()
+    }
+
+    pub fn selected_row(&self) -> Option<&PickerRow> {
+        self.visible_rows().get(self.sel).map(|(_, row)| *row)
+    }
+
+    /// The identifier of the selected Linear row.
+    pub fn selected_id(&self) -> Option<&str> {
+        match self.selected_row()? {
+            PickerRow::Linear(row) => Some(row.id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Select the visible row carrying `id`, else keep the index in range.
+    pub(crate) fn reselect(&mut self, id: Option<&str>) {
+        let visible = self.visible_rows();
+        let found = id.and_then(|id| {
+            visible
+                .iter()
+                .position(|(_, row)| matches!(row, PickerRow::Linear(r) if r.id == id))
+        });
+        let len = visible.len();
+        self.sel = match found {
+            Some(at) => at,
+            None => self.sel.min(len.saturating_sub(1)),
+        };
+    }
+}
+
+/// A Linear list read as the picker shows it. An in-flight read is board
+/// state on `LinearState`, not an outcome.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListOutcome {
+    Read {
+        status: LinearListStatus,
+        message: Option<String>,
+    },
+    Failed(String),
+}
+
+/// A Linear list row. `tag` is the discriminator a name cannot forge: the
+/// team key for a project, the id for a space or a view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinearPickerRow {
+    pub id: String,
+    pub tag: String,
+    pub name: String,
+}
+
+/// One-row text: the sanitiser keeps tab and newline, which a row cannot show.
+pub fn collapse_line(s: &str) -> String {
+    s.replace(['\n', '\t'], " ")
+}
+
+fn collapse_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if !(c == ' ' && out.ends_with(' ')) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// One selectable row of a [`Picker`]: either a concrete item (a project or
@@ -88,6 +195,17 @@ pub struct Picker {
 pub enum PickerRow {
     Item(String, i64),
     Action(String, PickerAction),
+    Linear(LinearPickerRow),
+}
+
+impl PickerRow {
+    /// The text a filter matches: what the row draws, collapsed to one line.
+    pub fn filter_text(&self) -> String {
+        match self {
+            PickerRow::Item(label, _) | PickerRow::Action(label, _) => collapse_line(label),
+            PickerRow::Linear(row) => collapse_line(&format!("{} {}", row.tag, row.name)),
+        }
+    }
 }
 
 /// The trailing action rows a picker can offer.
@@ -106,6 +224,7 @@ pub enum PickerPurpose {
     SwitchBoard,
     SwitchProject,
     DeleteColumnMoveTo { column_id: i64 },
+    LinearList(LinearListKind),
 }
 
 /// Columns as `(label, id)` picker options, optionally without `exclude` — the
