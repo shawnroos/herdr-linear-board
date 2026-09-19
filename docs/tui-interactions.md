@@ -79,7 +79,7 @@ This is the behavior-preservation source of truth for the functional UI redesign
 
 ## Linear mode
 
-Linear mode is the board for a herdr space the work plugin has bound to a Linear project (see [`design.md`](design.md) section 13). It has its own screens and keys; the kanban rows above do not apply. The layout vocabulary differs: Linear mode has no Compact/Regular/Wide split. It stacks when the body is narrower than two 36-cell columns (72 cells), and the "Narrow behavior" column below describes that stacked layout. Every effect passes the Linear allow set in `driver/linear.rs::linear_allows`; tests below are in `tests/linear/mod.rs` unless named otherwise.
+Linear mode is the board for a herdr space the work plugin has bound to a Linear project (see [`design.md`](design.md) section 13). It has its own screens and keys; the kanban rows above do not apply. The layout vocabulary differs: Linear mode has no Compact/Regular/Wide split. It stacks when the body is narrower than two 36-cell columns (72 cells), and the "Narrow behavior" column below describes that stacked layout. Columns are drawn in Linear's own progression — triage, backlog, unstarted, started, completed, canceled — from the state type the plugin reports per group, and a column with no issues is drawn after every column that has one. A grouping that is not by workflow state carries no type, so those columns keep the view's order. Every effect passes the Linear allow set in `driver/linear.rs::linear_allows`; tests below are in `tests/linear/mod.rs` unless named otherwise.
 
 | Screen/context | Capability | Keyboard | Mouse | Narrow behavior | Backing effect / test evidence |
 |---|---|---|---|---|---|

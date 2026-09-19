@@ -17,7 +17,10 @@ e2e_isolate
 FIXTURES="$REPO_ROOT/crates/board-core/tests/fixtures/linear-issue"
 PLUGIN_ROOT="$E2E_TMP/work-plugin"
 mkdir -p "$PLUGIN_ROOT/.claude-plugin" "$PLUGIN_ROOT/bin"
-printf '{"name":"work","version":"0.5.0"}\n' >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
+# The floor comes from the source of truth, not a literal: a bump would
+# otherwise leave this scenario asserting against a version the board refuses.
+printf '{"name":"work","version":"%s"}\n' "$E2E_PLUGIN_VERSION_FLOOR" \
+    >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
 
 # The snapshot script, so this scenario can prove ONE missing script does not take the rest of
 # Linear mode down with it.
@@ -122,6 +125,8 @@ ok "missing script -> code 7; the snapshot still works"
 
 step "A plugin below the version floor is still code 6, not code 7"
 write_issue_script full.json
+# Deliberately a literal, and deliberately far below any floor this board will
+# ever carry: the point of the step is a plugin the version check refuses.
 printf '{"name":"work","version":"0.1.0"}\n' >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
 set +e
 ERR="$("$BOARD_BIN" linear issue WEB-3318 --json 2>&1 >/dev/null)"; rc=$?

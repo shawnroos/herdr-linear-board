@@ -20,7 +20,7 @@ use board_herdr::AgentStatus;
 
 use crate::herdr_snapshot::snapshot_pane_statuses;
 
-pub(crate) const PLUGIN_VERSION_FLOOR: &str = "0.4.0";
+pub(crate) use board_core::PLUGIN_VERSION_FLOOR;
 pub(crate) const PLUGIN_ROOT_ENV: &str = "BOARD_WORK_PLUGIN_ROOT";
 pub(crate) const PLUGIN_ROOT_TOML_KEY: &str = "[daemon] work_plugin_root";
 pub(crate) const INSTALLED_PLUGINS_RELATIVE: &str = ".claude/plugins/installed_plugins.json";

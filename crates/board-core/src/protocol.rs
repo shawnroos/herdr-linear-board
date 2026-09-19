@@ -1509,6 +1509,10 @@ pub struct LinearGroup {
     pub key: String,
     #[serde(default)]
     pub label: String,
+    /// The Linear workflow state type this column groups, when it groups by
+    /// state at all; `None` under any other grouping or from the cache.
+    #[serde(default)]
+    pub kind: Option<String>,
     #[serde(default)]
     pub issues: Vec<String>,
 }

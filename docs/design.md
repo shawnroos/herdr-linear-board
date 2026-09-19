@@ -996,7 +996,7 @@ The plugin root is resolved on every request, in order: the caller's `BOARD_WORK
 (sent as `plugin_root`), the daemon's, `[daemon] work_plugin_root` read from the board config at
 that moment, then the `user`-scope `installPath` of `work@shrimpshack` in
 `~/.claude/plugins/installed_plugins.json`. None of them needs a daemon restart to take effect. The daemon reads `.claude-plugin/plugin.json` at that
-root and refuses a version below `0.4.0`, naming both versions. The script runs under a bounded
+root and refuses a version below `0.5.0`, naming both versions. The script runs under a bounded
 deadline with an environment built from scratch (`HOME`, `PATH`, the origin socket as
 `HERDR_SOCKET_PATH`, every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, and the retry and
 timeout knobs the daemon sets, including the bounds on the plugin's herdr and keychain reads);
@@ -1040,6 +1040,12 @@ can forge the kanban's `Board [...]` title. The daemon's `pane.set_title` strips
 characters again at the sink, for every caller. `scripts/open-board.sh` matches `Linear: .+`, so
 the launcher key toggles a Linear board the way it toggles a kanban. Outside a herdr plugin pane
 no title is sent, and a failed rename is dropped without a toast.
+
+**Column order.** The board sorts the plugin's groups itself rather than trusting a view's saved
+column order: columns that hold issues come first, and within each half the state type the plugin
+reports (`kind`) puts them in Linear's own progression — triage, backlog, unstarted, started,
+completed, canceled. A group with no type, which is every group under a grouping other than
+workflow state, keeps its place among its equals.
 
 **Layout.** Cards are five rows tall and columns are at least 36 cells wide. A title wraps to two
 lines by display width, so wide characters do not overflow the card. When the body is narrower

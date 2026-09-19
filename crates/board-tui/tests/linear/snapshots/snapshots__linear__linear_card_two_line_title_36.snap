@@ -2,10 +2,10 @@
 source: crates/board-tui/tests/linear/mod.rs
 expression: "rows.join(\"\\n\")"
 ---
- Linear  AI Canvas Tools · view: Can
+ Linear  Frame Effects · view: Canva
  Enter detail · r refresh · ? help ·
 ┌ Backlog (1) · 1/5 ───────────────┐
-│WEB-3318  P0                      │
+│WEB-3308  P0                      │
 │Example issue: the panel stays    │
 │blank while a long list of items …│
 │@Example User                     │

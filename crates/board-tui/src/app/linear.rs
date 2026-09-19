@@ -470,6 +470,27 @@ impl LinearState {
     }
 }
 
+/// Linear's own progression, so a board reads left to right from the work not
+/// started to the work finished. A column the plugin gave no state type keeps
+/// its place among its equals, because the sort is stable.
+fn state_kind_rank(kind: Option<&str>) -> u8 {
+    match kind {
+        Some("triage") => 0,
+        Some("backlog") => 1,
+        Some("unstarted") => 2,
+        Some("started") => 3,
+        Some("completed") => 4,
+        Some("canceled") => 5,
+        _ => 6,
+    }
+}
+
+fn order_groups(snapshot: &mut LinearSnapshot) {
+    snapshot
+        .groups
+        .sort_by_key(|g| (g.issues.is_empty(), state_kind_rank(g.kind.as_deref())));
+}
+
 pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
         // `board_changed` never refreshes a Linear board (R21).
@@ -628,6 +649,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
+            order_groups(&mut snapshot);
             effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
                 &snapshot,
                 &state.workspace_id,

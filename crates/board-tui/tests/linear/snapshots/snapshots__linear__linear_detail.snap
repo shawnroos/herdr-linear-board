@@ -1,9 +1,9 @@
 ---
 source: crates/board-tui/tests/linear/mod.rs
-assertion_line: 350
+assertion_line: 355
 expression: frame
 ---
-" WEB-3312                                                                                                               "
+" WEB-3302                                                                                                               "
 "                                                                                                                        "
 "Example issue: a saved item is empty after reload                                     Status    In Progress             "
 "                                                                                      Priority  P2                      "
@@ -23,7 +23,7 @@ expression: frame
 "      Same here.                                                                        WEB-3400  Ship the drawer  Todo "
 "                                                                                                                        "
 "                                                                                      Board                             "
-"                                                                                      [bound] …ANDBOX/worktrees/web-3312"
+"                                                                                      [bound] …ANDBOX/worktrees/web-3302"
 "                                                                                        tab: Plugin PM (wA:t1)          "
 "                                                                                        wA:p1  idle                     "
 "                                                                                      ▶ wA:p2  working                  "

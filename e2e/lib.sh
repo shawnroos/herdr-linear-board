@@ -62,6 +62,15 @@ E2E_FAKE_AGENT="${E2E_FAKE_AGENT:-$E2E_LIB_DIR/fake-agent.sh}"
 HRPC="$E2E_LIB_DIR/hrpc.py"
 E2E_FAKE_PI_BIN_DIR="$E2E_LIB_DIR/fake-bin"
 E2E_PROCESS_IDENTITY="$E2E_LIB_DIR/process_identity.py"
+
+# Derived, never copied: a literal here went stale the moment the floor moved to
+# 0.5.0 and left 40-linear-mode stubbing a plugin the board then refused.
+E2E_PLUGIN_VERSION_FLOOR="$(
+  sed -n 's/.*PLUGIN_VERSION_FLOOR: &str = "\([^"]*\)".*/\1/p' \
+    "$E2E_LIB_DIR/../crates/board-core/src/lib.rs"
+)"
+[ -n "$E2E_PLUGIN_VERSION_FLOOR" ] || { echo "e2e/lib.sh: could not read PLUGIN_VERSION_FLOOR" >&2; exit 1; }
+export E2E_PLUGIN_VERSION_FLOOR
 export BOARD_BIN
 
 e2e_identity_key_ensure() {

@@ -192,7 +192,7 @@ fn a_bound_linear_space_titles_the_pane_with_the_project_name() {
         titles(&recorded),
         vec![serde_json::json!({
             "pane_id": "w1:p1",
-            "title": "Linear: AI Canvas Tools",
+            "title": "Linear: Frame Effects",
             "origin_socket": "/run/herdr/sessions/work/herdr.sock",
         })],
     );
@@ -227,7 +227,7 @@ fn a_hostile_project_name_reaches_the_title_stripped() {
 fn a_failed_linear_rename_is_swallowed_and_never_toasts() {
     let (mut d, recorded) =
         linear_title_driver(linear_fixture("bound-with-view"), true, plugin_origin());
-    assert_eq!(sent_titles(&recorded), vec!["Linear: AI Canvas Tools"]);
+    assert_eq!(sent_titles(&recorded), vec!["Linear: Frame Effects"]);
     assert!(toast(&d).is_none(), "toast: {:?}", toast(&d));
     assert_eq!(d.app.screen, Screen::LinearBoard);
 

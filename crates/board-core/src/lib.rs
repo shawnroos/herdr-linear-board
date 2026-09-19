@@ -35,6 +35,11 @@ pub mod text;
 
 pub use engine::ValidationError;
 
+/// The oldest work-plugin release whose snapshot and list contracts this board
+/// reads. It lives here so the daemon that enforces it and the tests that build
+/// a fake plugin move together.
+pub const PLUGIN_VERSION_FLOOR: &str = "0.5.0";
+
 /// Crate-wide error type. `anyhow` is used at the process edges (CLI/daemon);
 /// this `thiserror` enum carries the structured cases the daemon maps onto the
 /// protocol's numeric error codes.

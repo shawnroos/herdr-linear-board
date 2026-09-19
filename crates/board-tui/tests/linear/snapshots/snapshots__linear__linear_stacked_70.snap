@@ -2,10 +2,10 @@
 source: crates/board-tui/tests/linear/mod.rs
 expression: frame
 ---
-" Linear  AI Canvas Tools · view: Canvas board · space: Plugins · fetch"
+" Linear  Frame Effects · view: Canvas board · space: Plugins · fetched"
 " Enter detail · r refresh · ? help · q quit                           "
 "┌ Backlog (1) · 1/5 ─────────────────────────────────────────────────┐"
-"│WEB-3318  P0                                                        │"
+"│WEB-3308  P0                                                        │"
 "│Example issue: a panel is blank while an item is still loading      │"
 "│                                                                    │"
 "│@Example User                                                       │"
