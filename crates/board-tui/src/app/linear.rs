@@ -1000,47 +1000,73 @@ pub(super) fn click_group(app: &mut App, group: &str) {
 }
 
 fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
-    let rows = crate::view::issue_page_rows(app);
-    let Some(state) = app.linear.as_mut() else {
+    if app.linear.is_none() {
         return vec![];
-    };
+    }
+    // The rows are asked for inside the arms that read them. Building them lays
+    // the whole page out, and `u`, `y`, `b` and Esc act on the page's own issue
+    // whatever row the cursor is on, so they have no use for it.
     if let Some(delta) = nav_delta(k.code) {
+        let rows = crate::view::issue_page_rows(app);
+        let Some(state) = app.linear.as_mut() else {
+            return vec![];
+        };
         let max = rows.len().saturating_sub(1);
         let at = LinearState::selected_row(&rows, state.detail_selection.as_ref());
         let next = step_clamped(at, delta, max);
         state.detail_selection = rows.get(next).map(|r| r.kind.clone());
         return vec![];
     }
-    let selected = LinearState::selected_kind(&rows, state.detail_selection.as_ref());
     match k.code {
-        KeyCode::Enter => match selected {
-            // An issue row opens that issue's page in place, and the page it
-            // came from goes on the stack with what it was showing.
-            Some(crate::view::IssueRowKind::Issue(identifier)) => {
-                let seed = linked_row(state, &identifier);
-                return open_linked_issue(app, &identifier, seed);
+        KeyCode::Enter => {
+            let rows = crate::view::issue_page_rows(app);
+            let Some(state) = app.linear.as_mut() else {
+                return vec![];
+            };
+            match LinearState::selected_kind(&rows, state.detail_selection.as_ref()) {
+                // An issue row opens that issue's page in place, and the page
+                // it came from goes on the stack with what it was showing.
+                Some(crate::view::IssueRowKind::Issue(identifier)) => {
+                    let seed = linked_row(state, &identifier);
+                    return open_linked_issue(app, &identifier, seed);
+                }
+                Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
+                None => {}
             }
-            Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
-            None => {}
-        },
+        }
         // `o` acts on a pane and says so on any other row, rather than
         // silently focusing whatever pane happens to be first.
-        KeyCode::Char('o') => match selected {
-            Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
-            Some(crate::view::IssueRowKind::Issue(_)) => {
-                app.set_toast("o focuses a pane; this row is an issue", true)
+        KeyCode::Char('o') => {
+            let rows = crate::view::issue_page_rows(app);
+            let Some(state) = app.linear.as_ref() else {
+                return vec![];
+            };
+            match LinearState::selected_kind(&rows, state.detail_selection.as_ref()) {
+                Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
+                Some(crate::view::IssueRowKind::Issue(_)) => {
+                    app.set_toast("o focuses a pane; this row is an issue", true)
+                }
+                None => app.set_toast("this card has no recorded pane", true),
             }
-            None => app.set_toast("this card has no recorded pane", true),
-        },
+        }
         // `u`, `y` and `b` act on the page's OWN issue whatever row the cursor
         // is on: they are about the issue being read, not the row under the
         // cursor.
-        KeyCode::Char('u') => match state.detail_issue().and_then(|i| i.url.clone()) {
+        KeyCode::Char('u') => match app
+            .linear
+            .as_ref()
+            .and_then(|state| state.detail_issue())
+            .and_then(|i| i.url.clone())
+        {
             Some(url) => return vec![Effect::OpenIssueUrl(url)],
             None => app.set_toast("this card has no Linear URL (cached issue)", true),
         },
         KeyCode::Char('y') => {
-            let binding = state.detail_binding().cloned();
+            let binding = app
+                .linear
+                .as_ref()
+                .and_then(|state| state.detail_binding())
+                .cloned();
             match binding {
                 Some(binding) => {
                     return vec![Effect::CopyWorktreePath {
