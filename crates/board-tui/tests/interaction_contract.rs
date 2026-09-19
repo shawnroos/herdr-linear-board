@@ -102,14 +102,34 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::Board, "dbl-click", "open card detail"),
     (Screen::Board, "drag", "move card/reorder column"),
     (Screen::Board, "wheel", "scroll cards"),
+    (Screen::LinearBoard, "--", "-- linear mode --"),
+    (Screen::LinearBoard, "←/→ h/l", "focus column"),
+    (Screen::LinearBoard, "↑/↓ k/j", "focus card"),
+    (Screen::LinearBoard, "Enter", "card detail"),
+    (Screen::LinearBoard, "r / R", "refresh snapshot"),
+    (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
+    (Screen::LinearDetail, "o", "focus selected pane"),
+    (Screen::LinearDetail, "u", "open issue in Linear"),
+    (Screen::LinearDetail, "y", "copy worktree path"),
+    (Screen::LinearDetail, "r / R", "refresh snapshot"),
+    (Screen::LinearDetail, "q / Esc", "back to board"),
+    (Screen::LinearNotBound, "r / R", "refresh after /work:bind"),
+    (Screen::LinearNotBound, "q / Esc", "quit"),
+    (Screen::LinearError, "r / R", "retry the snapshot"),
+    (Screen::LinearError, "Esc", "dismiss, keep last good"),
+    (Screen::LinearError, "q", "quit"),
+    (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
+    (Screen::LinearStaleDaemon, "q / Esc", "quit"),
 ];
 
 #[test]
 fn contract_freezes_the_exact_72_row_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        87,
-        "the interaction contract must stay at exactly 87 bindings"
+        107,
+        "the interaction contract must stay at exactly 107 bindings (87 upstream + 20 Linear mode)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

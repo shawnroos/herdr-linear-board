@@ -1,8 +1,9 @@
 use anyhow::{bail, Result};
 use board_core::client::BoardClient;
+use board_core::protocol::LinearSnapshotParams;
 use serde_json::json;
 
-use crate::args::{HarnessCmd, SessionCmd, SpaceCmd};
+use crate::args::{HarnessCmd, LinearCmd, SessionCmd, SpaceCmd};
 use crate::context::Ctx;
 use crate::helpers::{efforts_str, harness_capabilities, union_efforts};
 use crate::render::{emit, emit_line};
@@ -68,6 +69,31 @@ pub(crate) fn cmd_session(sub: SessionCmd, ctx: &mut Ctx) -> Result<()> {
         SessionCmd::List => {
             let sessions = ctx.client()?.session_list()?;
             emit(&sessions, json)
+        }
+    }
+}
+
+pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
+    let json = ctx.json();
+    match sub {
+        LinearCmd::Snapshot { workspace_id } => {
+            let origin_socket = std::env::var("HERDR_SOCKET_PATH")
+                .ok()
+                .filter(|socket| !socket.is_empty());
+            let plugin_root = std::env::var("BOARD_WORK_PLUGIN_ROOT")
+                .ok()
+                .filter(|root| !root.is_empty());
+            let client = ctx.client()?;
+            client.set_read_timeout(Some(board_core::protocol::LINEAR_SNAPSHOT_CLIENT_TIMEOUT))?;
+            let document = client.linear_snapshot(&LinearSnapshotParams {
+                workspace_id,
+                origin_socket,
+                plugin_root,
+            });
+            client.set_read_timeout(None)?;
+            let document = document?;
+            let text = serde_json::to_string_pretty(&document)?;
+            emit_line(&document, json, text)
         }
     }
 }

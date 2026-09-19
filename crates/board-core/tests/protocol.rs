@@ -238,13 +238,13 @@ fn nullable_update_patches_distinguish_omitted_null_and_value() {
             assert!(matches!(set.$field, Patch::Set(v) if v == $value));
         }};
     }
-    column_field!(system_prompt, "instructions", "instructions".to_string());
+    column_field!(system_prompt, "instructions", "instructions");
     column_field!(on_success_column_id, 2, 2_i64);
     column_field!(on_fail_column_id, 3, 3_i64);
-    column_field!(harness_override, "pi", "pi".to_string());
-    column_field!(model_override, "model", "model".to_string());
-    column_field!(effort_override, "high", "high".to_string());
-    column_field!(permission_override, "manual", "manual".to_string());
+    column_field!(harness_override, "pi", "pi");
+    column_field!(model_override, "model", "model");
+    column_field!(effort_override, "high", "high");
+    column_field!(permission_override, "manual", "manual");
     column_field!(timeout_minutes, 15, 15_i64);
 
     macro_rules! card_field {
@@ -266,12 +266,12 @@ fn nullable_update_patches_distinguish_omitted_null_and_value() {
             assert!(matches!(set.$field, Patch::Set(v) if v == $value));
         }};
     }
-    card_field!(model, "model", "model".to_string());
+    card_field!(model, "model", "model");
     card_field!(effort, "high", Effort::High);
-    card_field!(permission_mode, "manual", "manual".to_string());
-    card_field!(session, "session", "session".to_string());
-    card_field!(space_ref, "workspace", "workspace".to_string());
-    card_field!(space_cwd, "/repo", "/repo".to_string());
+    card_field!(permission_mode, "manual", "manual");
+    card_field!(session, "session", "session");
+    card_field!(space_ref, "workspace", "workspace");
+    card_field!(space_cwd, "/repo", "/repo");
 }
 
 #[test]

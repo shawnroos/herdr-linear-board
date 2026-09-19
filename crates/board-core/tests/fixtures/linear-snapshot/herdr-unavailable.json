@@ -1,0 +1,156 @@
+{
+  "groups": [
+    {
+      "issues": [
+        "WEB-3318"
+      ],
+      "key": "st-backlog",
+      "label": "Backlog"
+    },
+    {
+      "issues": [
+        "WEB-3317"
+      ],
+      "key": "st-todo",
+      "label": "Todo"
+    },
+    {
+      "issues": [
+        "WEB-3312"
+      ],
+      "key": "st-prog",
+      "label": "In Progress"
+    },
+    {
+      "issues": [],
+      "key": "st-devdone",
+      "label": "Dev Done"
+    },
+    {
+      "issues": [],
+      "key": "st-done",
+      "label": "Done"
+    }
+  ],
+  "herdr": {
+    "status": "unavailable",
+    "version": null
+  },
+  "issues": {
+    "WEB-3312": {
+      "assignee": {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "name": "Example User"
+      },
+      "bindings": [
+        {
+          "panes": [],
+          "state": "bound",
+          "tab": {
+            "id": "wA:t1",
+            "label": null
+          },
+          "worktree_path": "$SANDBOX/worktrees/web-3312"
+        }
+      ],
+      "id": "13131313-1313-4131-8131-131313131313",
+      "identifier": "WEB-3312",
+      "labels": [],
+      "priority": 2,
+      "stale": false,
+      "state": {
+        "id": "st-prog",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "title": "Example issue: a saved item is empty after reload",
+      "url": "https://linear.app/example/issue/web-3312/x"
+    },
+    "WEB-3317": {
+      "assignee": null,
+      "bindings": [],
+      "id": "12121212-1212-4121-8121-121212121212",
+      "identifier": "WEB-3317",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: a long task stops when its panel is closed",
+      "url": "https://linear.app/example/issue/web-3317/x"
+    },
+    "WEB-3318": {
+      "assignee": {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "name": "Example User"
+      },
+      "bindings": [],
+      "id": "11111111-1111-4111-8111-111111111111",
+      "identifier": "WEB-3318",
+      "labels": [
+        "Bug"
+      ],
+      "priority": 0,
+      "stale": false,
+      "state": {
+        "id": "st-backlog",
+        "name": "Backlog",
+        "type": "backlog"
+      },
+      "title": "Example issue: a panel is blank while an item is still loading",
+      "url": "https://linear.app/example/issue/web-3318/x"
+    }
+  },
+  "linear": {
+    "cache_age_seconds": null,
+    "status": "ok",
+    "truncated": false
+  },
+  "mapping": {
+    "pane": "session",
+    "source": "default",
+    "space": "project",
+    "status": "ok",
+    "tab": "work"
+  },
+  "project": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "name": "AI Canvas Tools",
+    "team_key": "WEB",
+    "url": "https://linear.app/example/project/ai-canvas-tools"
+  },
+  "record": {
+    "project_id": "44444444-4444-4444-8444-444444444444",
+    "state": "bound",
+    "status": "ok"
+  },
+  "schema": 1,
+  "unmapped": [],
+  "view": {
+    "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "layout": {
+      "column_order": [
+        "st-backlog",
+        "st-todo",
+        "st-prog",
+        "st-devdone",
+        "st-done",
+        "st-cancel"
+      ],
+      "grouping": "workflowState",
+      "hidden": [
+        "st-cancel"
+      ]
+    },
+    "name": "Canvas board",
+    "status": "ok"
+  },
+  "workspace": {
+    "id": "wA",
+    "label": "wA",
+    "live": null
+  }
+}

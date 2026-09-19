@@ -101,4 +101,17 @@ pub enum Effect {
     /// Reload the project and board pickers with the given visibilities.
     ReloadPickers,
     Quit,
+    /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
+    /// production, synchronous against the fake).
+    LinearSnapshot,
+    /// Linear mode: `pane.focus` on the origin session.
+    FocusPane(String),
+    /// Linear mode: open the issue URL with the platform opener.
+    OpenIssueUrl(String),
+    /// Linear mode: copy a binding's worktree path; `missing` when the
+    /// binding's state is `worktree_missing`.
+    CopyWorktreePath {
+        path: String,
+        missing: bool,
+    },
 }

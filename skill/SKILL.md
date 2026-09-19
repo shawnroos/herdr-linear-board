@@ -257,6 +257,34 @@ settings are validated as a complete merged configuration, and effective card+co
 checked again before dispatch. Pi has no permission modes; `bypassPermissions` is never a column
 override.
 
+### Linear mode (read-only view of a bound herdr space)
+
+```bash
+board linear snapshot <WORKSPACE_ID> [--json]
+```
+
+- Inside a herdr pane whose space the `work` plugin has bound to a Linear project
+  (`HERDR_WORKSPACE_ID`, or the plugin context's `workspace_id`, is set), `board tui` opens a
+  read-only Linear board for that space instead of the kanban: columns are the recorded Linear
+  view's groups (or the team's workflow states when no view is chosen), cards are the project's
+  issues, and each card lists its worktree bindings, recorded tabs and live pane status. It writes
+  nothing (no Linear, no plugin record, no SQLite row, no pane title); the only herdr call is
+  focusing an existing pane (`o`). `r` refreshes; `u` opens the issue; `y` copies the worktree
+  path. Card-owning verbs are refused with a toast. Outside herdr the kanban is unchanged.
+- `board linear snapshot <WORKSPACE_ID>` is the same read as JSON: the daemon runs the plugin's
+  `bin/work-snapshot.sh` for that space and attaches a `pane_status` map (`working`, `idle`,
+  `blocked`, `done`, `unknown`). Every section carries its own `status` (`ok`, `unavailable`,
+  `unknown`, `missing`); exit 0 means a document came back, not that every source was reachable.
+- The daemon finds the plugin through `BOARD_WORK_PLUGIN_ROOT` (yours first, sent with the request,
+  then the daemon's), then `[daemon] work_plugin_root` in the board config, then the installed
+  `work@shrimpshack` plugin; it needs plugin `0.3.0` or newer. A missing or too-old plugin is
+  protocol code 6 (`work plugin unavailable`), exit 6. All of these are read on every request, so a
+  change takes effect without restarting the daemon. The error never includes the script's stderr;
+  it names the command to run by hand to see it.
+- Focusing a pane (`o` in the Linear board) has no CLI verb on purpose: it moves the person's view
+  in herdr, which an agent has no reason to do. An agent that needs a pane's state reads
+  `pane_status` from `board linear snapshot`.
+
 ### TUI, daemon, version, skill
 
 ```bash
@@ -284,7 +312,8 @@ board skill
 Successful `--json` output goes to stdout. JSON errors go to stderr, leave stdout empty, and use the
 stable envelope `{"error":{"code":N,"kind":"...","message":"...","details":...}}`; `kind` and
 `details` are additive and may be absent. An error the **daemon** raised carries its protocol code —
-1 bad request, 2 not found, 3 invalid state, 4 Herdr unavailable, 5 internal. An error the **CLI**
+1 bad request, 2 not found, 3 invalid state, 4 Herdr unavailable, 5 internal, 6 work plugin
+unavailable. An error the **CLI**
 itself raised carries `{"code":64,"kind":"cli"}`.
 
 Bad enum values are one shape everywhere: `invalid <kind> '<value>' (expected: a, b, c)`.
@@ -296,9 +325,9 @@ Scripted agents should branch on `$?`, not on stderr text.
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1`–`5` | The daemon's protocol code, passed straight through (see above). |
+| `1`–`6` | The daemon's protocol code, passed straight through (see above). |
 | `64` | The CLI itself refused: a clap usage/parse error, a declined confirmation prompt, a bad enum value, a column name that resolves to nothing client-side, or a missing `$BOARD_CARD_ID`. `EX_USAGE`. |
-| `70` | The daemon reported a protocol code outside `1..=5`. Clamped, because an exit status is taken mod 256. `EX_SOFTWARE`. |
+| `70` | The daemon reported a protocol code outside `1..=6`. Clamped, because an exit status is taken mod 256. `EX_SOFTWARE`. |
 
 ```bash
 board done --outcome ok || case $? in

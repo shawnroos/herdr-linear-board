@@ -43,3 +43,34 @@ pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
         .map_err(|e| Error::HerdrUnavailable(format!("pane.rename {}: {e}", p.pane_id)))?;
     Ok(json!(PaneSetTitleResult { renamed: true }))
 }
+
+/// Focus `pane_id` in the caller's own session. There is no run row to check
+/// against, so `pane.get` on that socket is the whole membership test: a pane
+/// the session does not list (another session's pane included) is `gone`, and
+/// `pane.focus` is never sent for it.
+pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
+    if p.pane_id.trim().is_empty() {
+        return Err(Error::BadRequest(
+            "pane.focus requires a non-empty pane_id".into(),
+        ));
+    }
+    let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
+    let mut client = crate::herdr_conn::connect_checked(&socket)
+        .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+    let live = client
+        .pane_get(&p.pane_id)
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.get {}: {e}", p.pane_id)))?;
+    if live.is_none() {
+        return Ok(json!(PaneFocusResult {
+            focused: false,
+            gone: true,
+        }));
+    }
+    client
+        .pane_focus(&p.pane_id)
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.focus {}: {e}", p.pane_id)))?;
+    Ok(json!(PaneFocusResult {
+        focused: true,
+        gone: false,
+    }))
+}

@@ -91,6 +91,14 @@ interfaces that talk to it. The CLI also exposes `board skill`, which prints the
 dispatched agent is held to. All board state lives under `~/.local/share/herdr-board/`; Herdr's own
 state is never modified.
 
+Opened inside a herdr space that the work plugin has bound to a Linear project, `board tui` runs in
+**Linear mode**: it renders that project's issues, worktrees and live panes from the plugin's
+snapshot instead of a kanban, and writes nothing. The daemon runs the plugin's `bin/work-snapshot.sh`
+from the installed `work@shrimpshack` plugin; until a plugin release with that script is installed,
+point `BOARD_WORK_PLUGIN_ROOT` (or `[daemon] work_plugin_root` in the config) at a plugin checkout.
+`board linear snapshot <workspace-id> --json` prints the same document from the command line. See
+[`docs/design.md`](docs/design.md) section 13.
+
 ## Install
 
 ```bash
@@ -262,6 +270,7 @@ selected/current board.
 | `board column` | `list`, `create`, `show`, `edit`, `reorder`, `delete` |
 | `board harness` | `list`, `models`, `efforts`, `permissions` |
 | `board space` / `board session` | `list` |
+| `board linear` | `snapshot <WORKSPACE_ID>` (the Linear-mode read) |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -295,13 +304,13 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1`–`5` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal |
+| `1`–`6` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal, work plugin unavailable |
 | `64` | The CLI itself refused — usage/parse error, declined confirmation, bad enum value, unresolvable column, missing `$BOARD_CARD_ID` (`EX_USAGE`) |
-| `70` | Daemon reported a protocol code outside `1..=5`, clamped (`EX_SOFTWARE`) |
+| `70` | Daemon reported a protocol code outside `1..=6`, clamped (`EX_SOFTWARE`) |
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–39);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–40);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development

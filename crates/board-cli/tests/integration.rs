@@ -22,6 +22,8 @@ mod exit_codes;
 mod harness;
 #[path = "integration/lifecycle.rs"]
 mod lifecycle;
+#[path = "integration/linear.rs"]
+mod linear;
 #[path = "integration/meta.rs"]
 mod meta;
 #[path = "integration/projects.rs"]
@@ -32,3 +34,5 @@ mod runs;
 mod scope;
 #[path = "integration/stop.rs"]
 mod stop;
+#[path = "integration/tui_mode.rs"]
+mod tui_mode;

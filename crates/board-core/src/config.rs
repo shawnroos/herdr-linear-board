@@ -50,6 +50,11 @@ pub struct DaemonConfig {
     pub local_poll_ms: u64,
     #[serde(default = "default_tick_ms")]
     pub tick_ms: u64,
+    /// Root of the installed work plugin (the directory holding
+    /// `.claude-plugin/plugin.json` and `bin/work-snapshot.sh`). Second in the
+    /// resolution order after `BOARD_WORK_PLUGIN_ROOT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_plugin_root: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -59,6 +64,7 @@ impl Default for DaemonConfig {
             timeout_unit_secs: default_timeout_unit_secs(),
             local_poll_ms: default_local_poll_ms(),
             tick_ms: default_tick_ms(),
+            work_plugin_root: None,
         }
     }
 }

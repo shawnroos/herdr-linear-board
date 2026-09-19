@@ -722,6 +722,7 @@ mod cards;
 mod comments;
 mod discovery;
 mod lifecycle;
+mod linear;
 mod panes;
 mod parity;
 mod rollback;

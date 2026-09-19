@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -30,6 +31,11 @@ pub(crate) struct TestDaemon {
 
 impl TestDaemon {
     pub(crate) fn start(extra: &[(&str, &str)]) -> TestDaemon {
+        TestDaemon::start_with_config(extra, "")
+    }
+
+    /// `daemon_toml` is appended to the `[daemon]` table of the daemon's config.
+    pub(crate) fn start_with_config(extra: &[(&str, &str)], daemon_toml: &str) -> TestDaemon {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("board.db");
         let socket = dir.path().join("boardd.sock");
@@ -38,7 +44,7 @@ impl TestDaemon {
         std::fs::write(
             &cfg,
             format!(
-                "[harness.fake]\nargv = [\"bash\", \"{}\"]\n\n[daemon]\nspawner = \"local\"\n",
+                "[harness.fake]\nargv = [\"bash\", \"{}\"]\n\n[daemon]\nspawner = \"local\"\n{daemon_toml}",
                 fake.display()
             ),
         )
@@ -55,6 +61,10 @@ impl TestDaemon {
             .env("BOARD_TICK_MS", "150")
             .env("BOARD_LOCAL_POLL_MS", "150")
             .env("FAKE_AGENT_SLEEP", "0.3")
+            // The daemon resolves the work plugin root from its own
+            // environment; a root set in the shell that runs the suite would
+            // make the "no root" test pass for the wrong reason.
+            .env_remove("BOARD_WORK_PLUGIN_ROOT")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -85,6 +95,11 @@ impl TestDaemon {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Whether the daemon process has exited (and is reaped).
+    pub(crate) fn try_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     pub(crate) fn client(&self) -> UnixClient {
@@ -123,6 +138,15 @@ impl TestDaemon {
             .env("HOME", self._dir.path())
             .env_remove("BOARD_SCOPE_PATH")
             .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
+            // The CLI sends its own plugin root with a snapshot request; one
+            // set in the shell running the suite would answer for the daemon.
+            .env_remove("BOARD_WORK_PLUGIN_ROOT")
+            // The suite may itself run inside a herdr pane; `board tui`
+            // would read the ambient space id and open Linear mode.
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_PLUGIN_ID")
             // A test process should be a human context unless it opts in
             // explicitly below; do not inherit an agent's ambient identity.
             .env_remove("BOARD_RUN_ID")
@@ -208,6 +232,33 @@ impl Drop for TestDaemon {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// A work plugin root under a temp dir: `.claude-plugin/plugin.json` at
+/// `version` and `bin/work-snapshot.sh` running `fixtures/fake-work-snapshot.sh`
+/// with `knobs` exported. The daemon builds the child environment from scratch,
+/// so the knobs can only reach the fake through this wrapper.
+pub(crate) fn fake_plugin_root(version: &str, knobs: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+    std::fs::write(
+        dir.path().join(".claude-plugin/plugin.json"),
+        format!(r#"{{"name":"work","version":"{version}"}}"#),
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+    let mut wrapper = String::from("#!/usr/bin/env bash\n");
+    for (key, value) in knobs {
+        wrapper.push_str(&format!("export {key}='{value}'\n"));
+    }
+    wrapper.push_str(&format!(
+        "exec bash '{}' \"$@\"\n",
+        fixtures_dir().join("fake-work-snapshot.sh").display()
+    ));
+    let script = dir.path().join("bin/work-snapshot.sh");
+    std::fs::write(&script, wrapper).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    dir
 }
 
 // -- assertion helpers --------------------------------------------------------

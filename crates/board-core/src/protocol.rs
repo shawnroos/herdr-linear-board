@@ -1022,6 +1022,268 @@ pub struct PaneSetTitleResult {
     pub renamed: bool,
 }
 
+/// `pane.focus` params: focus one live pane in the caller's own herdr session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneFocusParams {
+    pub origin_socket: String,
+    pub pane_id: String,
+}
+
+/// `pane.focus` result. `gone` is the typed answer for a pane the origin
+/// session no longer lists (including a pane of another session); it is not
+/// an error because the snapshot that named the pane may simply be stale.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneFocusResult {
+    pub focused: bool,
+    pub gone: bool,
+}
+
+// ---------------------------------------------------------------------------
+// linear methods (the work plugin's space snapshot)
+// ---------------------------------------------------------------------------
+
+/// `linear.snapshot` params. `origin_socket` is the caller's herdr socket;
+/// absent means the script runs against the plugin's own default resolution
+/// and every pane status is `unknown`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSnapshotParams {
+    pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_socket: Option<String>,
+    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_root: Option<String>,
+}
+
+/// How long a client waits for a `linear.snapshot` answer. Longer than the
+/// daemon's script deadline plus its stop grace, so a slow run is answered by
+/// the daemon; only a daemon that never answers reaches it.
+pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
+
+/// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
+/// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
+/// defaults so a partial document still parses; statuses stay strings because
+/// the plugin may add values the board does not know.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearSnapshot {
+    #[serde(default)]
+    pub schema: u32,
+    #[serde(default)]
+    pub workspace: LinearWorkspace,
+    #[serde(default)]
+    pub mapping: LinearMapping,
+    #[serde(default)]
+    pub record: LinearRecord,
+    #[serde(default)]
+    pub project: LinearProject,
+    #[serde(default)]
+    pub view: LinearView,
+    #[serde(default)]
+    pub linear: LinearSource,
+    #[serde(default)]
+    pub herdr: LinearHerdr,
+    #[serde(default)]
+    pub groups: Vec<LinearGroup>,
+    #[serde(default)]
+    pub issues: std::collections::BTreeMap<String, LinearIssue>,
+    #[serde(default)]
+    pub unmapped: Vec<LinearUnmappedTab>,
+    /// Live agent status per pane id named in `issues[].bindings[].panes` and
+    /// `unmapped[].panes`, read by the daemon after the script ran.
+    #[serde(default)]
+    pub pane_status: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearWorkspace {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub live: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMapping {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub space: String,
+    #[serde(default)]
+    pub tab: String,
+    #[serde(default)]
+    pub pane: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearRecord {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearProject {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub team_key: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearView {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub layout: Option<LinearViewLayout>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearViewLayout {
+    #[serde(default)]
+    pub grouping: String,
+    #[serde(default)]
+    pub column_order: Vec<String>,
+    #[serde(default)]
+    pub hidden: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSource {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub cache_age_seconds: Option<i64>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearHerdr {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGroup {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearIssue {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub identifier: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub state: LinearIssueState,
+    #[serde(default)]
+    pub assignee: Option<LinearAssignee>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub stale: bool,
+    #[serde(default)]
+    pub bindings: Vec<LinearBinding>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearIssueState {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearAssignee {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearBinding {
+    #[serde(default)]
+    pub worktree_path: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub tab: Option<LinearTabRef>,
+    #[serde(default)]
+    pub panes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearTabRef {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearUnmappedTab {
+    #[serde(default)]
+    pub tab_id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub panes: Vec<String>,
+}
+
+impl LinearSnapshot {
+    /// Every pane id the document names, in document order, deduplicated.
+    pub fn pane_ids(&self) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ids = Vec::new();
+        let bound = self
+            .issues
+            .values()
+            .flat_map(|issue| issue.bindings.iter())
+            .flat_map(|binding| binding.panes.iter());
+        let unmapped = self.unmapped.iter().flat_map(|tab| tab.panes.iter());
+        for id in bound.chain(unmapped) {
+            if seen.insert(id.as_str()) {
+                ids.push(id.clone());
+            }
+        }
+        ids
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Timestamps
 // ---------------------------------------------------------------------------

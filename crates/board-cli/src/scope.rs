@@ -1,7 +1,26 @@
 use anyhow::{anyhow, Context, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::protocol::BoardSnapshot;
-use board_core::scope::{resolve_scope_path, select_scope_candidate};
+use board_core::scope::{resolve_scope_path, select_scope_candidate, space_identity};
+
+/// Which board `board tui` opens. Decided from the herdr space id alone,
+/// before any store row exists (KTD2, KTD3): a directory never selects
+/// Linear mode, and once a space id was read there is no fall-through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TuiMode {
+    Upstream,
+    Linear { workspace_id: String },
+}
+
+pub(crate) fn tui_mode(
+    herdr_workspace_id: Option<&str>,
+    plugin_context_json: Option<&str>,
+) -> TuiMode {
+    match space_identity(herdr_workspace_id, plugin_context_json) {
+        Some(workspace_id) => TuiMode::Linear { workspace_id },
+        None => TuiMode::Upstream,
+    }
+}
 
 pub(crate) fn current_scope_path() -> Result<String> {
     let cwd = std::env::current_dir().context("reading current directory")?;
@@ -66,4 +85,40 @@ pub(crate) fn context_board(
 pub(crate) fn resolve_column_in(snap: &BoardSnapshot, s: &str) -> Result<i64> {
     board_core::engine::resolve_column(&snap.columns, s)
         .ok_or_else(|| anyhow!("no column matching \"{s}\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tui_mode, TuiMode};
+
+    #[test]
+    fn no_space_id_anywhere_is_the_upstream_board() {
+        assert_eq!(tui_mode(None, None), TuiMode::Upstream);
+        assert_eq!(tui_mode(Some("  "), Some("{}")), TuiMode::Upstream);
+        assert_eq!(
+            tui_mode(
+                None,
+                Some(r#"{"workspace_id": null, "focused_pane_cwd": "/x"}"#)
+            ),
+            TuiMode::Upstream,
+            "a directory in the context never selects Linear mode"
+        );
+        assert_eq!(tui_mode(None, Some("not json")), TuiMode::Upstream);
+    }
+
+    #[test]
+    fn herdr_workspace_id_wins_over_the_plugin_context() {
+        assert_eq!(
+            tui_mode(Some("wA"), Some(r#"{"workspace_id": "wB"}"#)),
+            TuiMode::Linear {
+                workspace_id: "wA".into()
+            }
+        );
+        assert_eq!(
+            tui_mode(None, Some(r#"{"workspace_id": "wB"}"#)),
+            TuiMode::Linear {
+                workspace_id: "wB".into()
+            }
+        );
+    }
 }

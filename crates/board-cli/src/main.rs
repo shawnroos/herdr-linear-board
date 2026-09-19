@@ -19,7 +19,7 @@ use args::{Cli, Cmd, DaemonCmd};
 use commands::board::cmd_board;
 use commands::card::{cmd_card, cmd_move};
 use commands::column::cmd_column;
-use commands::discovery::{cmd_harness, cmd_session, cmd_space, cmd_status};
+use commands::discovery::{cmd_harness, cmd_linear, cmd_session, cmd_space, cmd_status};
 use commands::project::cmd_project;
 use commands::run::{cmd_card_run, cmd_comment, cmd_pane_exited};
 use commands::template::cmd_template;
@@ -29,12 +29,12 @@ use render::emit_line;
 
 /// Exit code (and `--json` envelope `code`) for an error raised by the CLI
 /// itself rather than by boardd: bad usage, a refused confirmation, a bad
-/// environment. Deliberately outside the protocol's documented `1..=5` so it
+/// environment. Deliberately outside the protocol's documented `1..=6` so it
 /// cannot be confused with "not found" (`2`), which is what this used to
 /// report. `64` is `EX_USAGE` from `sysexits.h`.
 const CLI_ERROR_CODE: i32 = 64;
 
-/// Exit code for an RPC error whose protocol code is outside `1..=5`. Protocol
+/// Exit code for an RPC error whose protocol code is outside `1..=6`. Protocol
 /// codes are not exit codes: they are unbounded, while a process exit status is
 /// taken modulo 256, so `256` would silently mean success. `70` is
 /// `EX_SOFTWARE`.
@@ -100,9 +100,31 @@ fn dispatch(cli: Cli) -> Result<()> {
             None => run_daemon(foreground),
         },
         Cmd::Tui => {
-            let board = ctx.board()?.clone();
-            let client = ctx.into_client()?;
-            board_tui::run_with_board(Box::new(client), board)
+            let herdr_workspace_id = std::env::var("HERDR_WORKSPACE_ID").ok();
+            let plugin_context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok();
+            match scope::tui_mode(herdr_workspace_id.as_deref(), plugin_context.as_deref()) {
+                scope::TuiMode::Linear { workspace_id } => {
+                    if std::env::var_os("BOARD_SCOPE_PATH").is_some() {
+                        eprintln!("board: BOARD_SCOPE_PATH is ignored in Linear mode (the herdr space id selects the board)");
+                    }
+                    let mut client = ctx.into_client()?;
+                    let daemon_version = client.daemon_status().ok().map(|status| status.version);
+                    board_tui::run_linear(
+                        Box::new(client),
+                        board_tui::LinearStart {
+                            workspace_id,
+                            origin: board_tui::OriginContext::from_environment(),
+                            board_version: env!("CARGO_PKG_VERSION").to_string(),
+                            daemon_version,
+                        },
+                    )
+                }
+                scope::TuiMode::Upstream => {
+                    let board = ctx.board()?.clone();
+                    let client = ctx.into_client()?;
+                    board_tui::run_with_board(Box::new(client), board)
+                }
+            }
         }
         Cmd::Version => cmd_version(cli.json),
         Cmd::Skill => print_skill(),
@@ -114,6 +136,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Harness { sub } => cmd_harness(sub, &mut ctx),
         Cmd::Space { sub } => cmd_space(sub, &mut ctx),
         Cmd::Session { sub } => cmd_session(sub, &mut ctx),
+        Cmd::Linear { sub } => cmd_linear(sub, &mut ctx),
         // Legacy top-level spellings. They only reshape their arguments and
         // then re-enter the canonical nested handler, so there is one
         // implementation per operation.
@@ -190,13 +213,14 @@ fn json_flag_in_options() -> bool {
 /// The process exit code for a failed command.
 ///
 /// An RPC error reports the daemon's protocol code (`1` bad request, `2` not
-/// found, `3` invalid state, `4` herdr unavailable, `5` internal) so scripts can
-/// branch on `$?`; any other protocol code is clamped rather than passed
-/// through. Errors raised by the CLI itself use [`CLI_ERROR_CODE`].
+/// found, `3` invalid state, `4` herdr unavailable, `5` internal, `6` work
+/// plugin unavailable) so scripts can branch on `$?`; any other protocol code
+/// is clamped rather than passed through. Errors raised by the CLI itself use
+/// [`CLI_ERROR_CODE`].
 fn exit_code(error: &anyhow::Error) -> i32 {
     match rpc_error(error) {
         Some(rpc) => match rpc.code {
-            code @ 1..=5 => code,
+            code @ 1..=6 => code,
             _ => UNMAPPED_RPC_CODE,
         },
         None => CLI_ERROR_CODE,

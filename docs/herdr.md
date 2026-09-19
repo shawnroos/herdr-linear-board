@@ -335,6 +335,32 @@ later add-subscription failures each emit exactly one error completion. Records 
 parameters, response results, or event payload bodies. Polling successful events does not emit per-poll
 diagnostics.
 
+## Linear mode: space identity and session selection
+
+Observed on Herdr 0.9.0 / protocol 22 (2026-09-14), read-only, from a herdr-owned pane.
+
+**How a pane learns its space.** herdr exports `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`,
+`HERDR_PANE_ID`, `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH` and `HERDR_ENV=1` into every
+pane it owns. `HERDR_PLUGIN_CONTEXT_JSON` (`PluginInvocationContext` in
+`herdr api schema --json`) is set only for a pane opened by `plugin pane open`, and
+every field in it is nullable, `workspace_id` included. The board therefore reads
+`HERDR_WORKSPACE_ID` first and the context's `workspace_id` second; a directory is
+never used as a space identity.
+
+**How the CLI selects a session.** Three mechanisms, in the order the CLI applies them:
+
+| Mechanism | Effect |
+|---|---|
+| `herdr --session <name> …` | uses `~/.config/herdr/sessions/<name>/herdr.sock` |
+| `HERDR_SOCKET_PATH` in the environment | uses that socket path (a bogus path fails with `server_not_running` naming it) |
+| neither | uses the default `~/.config/herdr/herdr.sock` |
+
+`--session` is a top-level flag only (`herdr --session x api snapshot`, never
+`herdr api --session x`). Because the CLI honours `HERDR_SOCKET_PATH`, the board
+daemon selects the origin session for the plugin's snapshot script by forwarding the
+origin socket path as `HERDR_SOCKET_PATH` in the child environment; the plugin needs
+no session setting of its own.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:

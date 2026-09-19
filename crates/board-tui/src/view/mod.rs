@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::Frame;
 
-use crate::app::{App, CardFilter, Screen};
+use crate::app::{App, CardFilter, Mode, Screen};
 
 const MIN_COL_W: u16 = 26;
 const CARD_H: u16 = 5;
@@ -295,9 +295,52 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::Board, "dbl-click", "open card detail"),
     (Screen::Board, "drag", "move card/reorder column"),
     (Screen::Board, "wheel", "scroll cards"),
+    (Screen::LinearBoard, "--", "-- linear mode --"),
+    (Screen::LinearBoard, "←/→ h/l", "focus column"),
+    (Screen::LinearBoard, "↑/↓ k/j", "focus card"),
+    (Screen::LinearBoard, "Enter", "card detail"),
+    (Screen::LinearBoard, "r / R", "refresh snapshot"),
+    (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
+    (Screen::LinearDetail, "o", "focus selected pane"),
+    (Screen::LinearDetail, "u", "open issue in Linear"),
+    (Screen::LinearDetail, "y", "copy worktree path"),
+    (Screen::LinearDetail, "r / R", "refresh snapshot"),
+    (Screen::LinearDetail, "q / Esc", "back to board"),
+    (Screen::LinearNotBound, "r / R", "refresh after /work:bind"),
+    (Screen::LinearNotBound, "q / Esc", "quit"),
+    (Screen::LinearError, "r / R", "retry the snapshot"),
+    (Screen::LinearError, "Esc", "dismiss, keep last good"),
+    (Screen::LinearError, "q", "quit"),
+    (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
+    (Screen::LinearStaleDaemon, "q / Esc", "quit"),
 ];
 
+/// The upstream `?` sheet renders only the rows before this sentinel, so its
+/// snapshots stay byte-identical.
+pub const LINEAR_HELP_SENTINEL: &str = "-- linear mode --";
+
+/// The first Linear-mode section marker: a `"--"` row on a Linear screen. Found
+/// by the marker convention every section uses, not by its description, so
+/// copy-editing the section title cannot fold the Linear rows into `?`.
+pub fn upstream_help_rows() -> usize {
+    HELP_KEYS
+        .iter()
+        .position(|(screen, key, _)| *key == "--" && screen.is_linear())
+        .unwrap_or(HELP_KEYS.len())
+}
+
+pub fn upstream_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
+    &HELP_KEYS[..upstream_help_rows()]
+}
+
+pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
+    &HELP_KEYS[upstream_help_rows()..]
+}
+
 mod layout;
+mod linear;
 mod overlays;
 
 pub use detail::{
@@ -342,6 +385,10 @@ fn status_label(card: &Card) -> String {
 // -- entry point -------------------------------------------------------------
 
 pub fn view(app: &App, f: &mut Frame) {
+    if app.mode == Mode::Linear {
+        linear::draw(app, f);
+        return;
+    }
     app.hit_map.borrow_mut().clear();
     let area = f.area();
     board::draw_board(app, f, area);
@@ -363,6 +410,11 @@ pub fn view(app: &App, f: &mut Frame) {
         Screen::Help => overlays::draw_help(app, f, area),
         Screen::Switcher => board::draw_switcher(app, f, area),
         Screen::CommentHistory => overlays::draw_comment_history(app, f, area),
+        Screen::LinearBoard
+        | Screen::LinearDetail
+        | Screen::LinearNotBound
+        | Screen::LinearError
+        | Screen::LinearStaleDaemon => {}
     }
 
     overlays::draw_footer(app, f, area);

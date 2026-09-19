@@ -1,0 +1,44 @@
+{
+  "groups": [],
+  "herdr": {
+    "status": "ok",
+    "version": "0.9.0"
+  },
+  "issues": {},
+  "linear": {
+    "cache_age_seconds": null,
+    "status": "unknown",
+    "truncated": false
+  },
+  "mapping": {
+    "pane": "session",
+    "source": "default",
+    "space": "project",
+    "status": "ok",
+    "tab": "work"
+  },
+  "project": {
+    "id": null,
+    "name": null,
+    "team_key": null,
+    "url": null
+  },
+  "record": {
+    "project_id": null,
+    "state": "unbound",
+    "status": "missing"
+  },
+  "schema": 1,
+  "unmapped": [],
+  "view": {
+    "id": null,
+    "layout": null,
+    "name": null,
+    "status": "none"
+  },
+  "workspace": {
+    "id": "wA",
+    "label": "Plugins",
+    "live": true
+  }
+}

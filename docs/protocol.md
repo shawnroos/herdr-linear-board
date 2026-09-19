@@ -17,7 +17,10 @@ protocol version.
 - Response: `{"id":"<same>","result":<any>}` or `{"id":"<same>","error":{"code":<int>,"message":"..."}}`.
   Error objects may add `kind` and `details`; old clients may ignore those members.
 - Error codes: `1` bad request / unknown method, `2` not found, `3` invalid state
-  (e.g. delete column with running card), `4` herdr unavailable, `5` internal. The CLI preserves
+  (e.g. delete column with running card), `4` herdr unavailable, `5` internal, `6` work plugin
+  unavailable (`linear.snapshot` only: no resolvable plugin root, a plugin below the floor version,
+  or a script run that produced no document). The CLI passes `1..=6` through as its exit status
+  (`board linear snapshot` is the one command that raises `6`). The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
@@ -62,8 +65,8 @@ at each operation boundary rather than treated as a one-time startup check:
   preflight are checked the same way. The `herdr session list --json` registry enumeration is a
   separate CLI discovery step, not a socket call; once it selects a socket, socket operations are
   gated.
-- New pane operations are checked before `pane.get`/`pane.focus` for `run.focus`, `pane.rename` for
-  `pane.set_title`, and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
+- New pane operations are checked before `pane.get`/`pane.focus` for `run.focus` and `pane.focus`,
+  `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
   configured runner used by placement and rescue.
 
 There is one deliberate exception: cleanup and liveness for panes already owned by a daemon run.
@@ -94,7 +97,8 @@ with lightweight recording/fake clients. Production clients perform no SQLite I/
 and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
-`space.list`, `session.list`, `run.cancel`, `run.retry`, and `pane.set_title`, in addition to the
+`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`, and
+`linear.snapshot`, in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
 as `{}` while a named session serializes as `{ "session": "..." }`, preserving the v1 wire contract.
 
@@ -492,6 +496,47 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   plugin pane border in sync with the board it shows and drops the result: a cosmetic title must
   never surface an error over the board, and outside a Herdr plugin pane (standalone TUI, tests) it
   never sends the request at all.
+- `pane.focus {origin_socket, pane_id}` → `{focused: bool, gone: bool}` — focus one pane in the
+  **caller's own** herdr session, named by `origin_socket` exactly as for `pane.set_title`. There is
+  no run row: `pane.get` on that socket is the whole membership check. A pane the session lists is
+  focused (`{focused:true, gone:false}`, exactly one herdr `pane.focus`); a pane it does not list,
+  including a pane of another session, answers `{focused:false, gone:true}` and herdr `pane.focus` is
+  never sent. The Linear-mode board uses it for the panes a snapshot names, which may be stale, so
+  `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
+  socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
+
+### linear
+
+- `linear.snapshot {workspace_id, origin_socket?, plugin_root?}` → the work plugin's space snapshot document
+  (`plugins/work/docs/snapshot.md` in the plugin repo; board types `LinearSnapshot` in
+  `board-core::protocol`) plus a daemon-attached `pane_status: {pane_id: status}` for every pane id
+  the document names in `issues[].bindings[].panes` and `unmapped[].panes`. The daemon resolves the
+  plugin root on every request (`plugin_root`, which the CLI and TUI fill from their own
+  `BOARD_WORK_PLUGIN_ROOT`; then the daemon's `BOARD_WORK_PLUGIN_ROOT`; then `[daemon]
+  work_plugin_root` read from the board config now; then the `user`-scope `installPath` of
+  `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
+  `.claude-plugin/plugin.json` version below `0.3.0` naming both versions, and runs
+  `bin/work-snapshot.sh <workspace_id>` with a bounded deadline and an environment built from
+  scratch: `HOME`, `PATH`, `HERDR_SOCKET_PATH` (the canonicalized `origin_socket`, when given),
+  every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, `HERDR_BIN` only when
+  `HERDR_BIN_PATH` names an existing file, and the knobs the daemon sets
+  (`HERDR_LINEAR_TIMEOUT_SECONDS=8`, `HERDR_LINEAR_RETRY_MAX=1`, `HERDR_LINEAR_VIEW_PAGE_MAX=10`,
+  `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS=5`, `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS=5`). A variable
+  whose name or value is not UTF-8 is left out. The child's argv and environment are never logged,
+  and its stderr is not captured or shown: a plugin tracing its own run would print the credential
+  it resolves. The script is stopped (SIGTERM to its process group, SIGKILL two seconds later) at
+  the deadline, when the daemon is stopping, or when the client that asked closes its connection;
+  a process it leaves in its group after exiting is killed. Clients wait at most
+  `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s), longer than the daemon can take to answer. Exit 0 with a document is the only success;
+  the daemon never reads exit 0 as "every source reachable" — each section carries its own status
+  and a partial document is returned as partial. Pane status is a best-effort second read: one
+  `session.snapshot` on `origin_socket`, whether or not the daemon has a herdr handle of its own;
+  with no `origin_socket` or any failure every status is `"unknown"`. Error 1 for an empty
+  `workspace_id`; error 6 for no resolvable root (the message names all three sources), a plugin
+  below the floor, a missing script, a timeout or a stop (the child is stopped and reaped), a
+  non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
+  to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
+  unparseable document, or a `schema` other than `1`.
 
 ## Card statuses & signals
 

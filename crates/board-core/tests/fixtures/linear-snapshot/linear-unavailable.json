@@ -1,0 +1,91 @@
+{
+  "groups": [
+    {
+      "issues": [
+        "WEB-3312"
+      ],
+      "key": "In Progress",
+      "label": "In Progress"
+    }
+  ],
+  "herdr": {
+    "status": "ok",
+    "version": "0.9.0"
+  },
+  "issues": {
+    "WEB-3312": {
+      "assignee": null,
+      "bindings": [
+        {
+          "panes": [
+            "wA:p1",
+            "wA:p2"
+          ],
+          "state": "bound",
+          "tab": {
+            "id": "wA:t1",
+            "label": "Plugin PM"
+          },
+          "worktree_path": "$SANDBOX/worktrees/web-3312"
+        }
+      ],
+      "id": null,
+      "identifier": "WEB-3312",
+      "labels": [],
+      "priority": null,
+      "stale": true,
+      "state": {
+        "id": null,
+        "name": "In Progress",
+        "type": null
+      },
+      "title": "Example issue: a saved item is empty after reload",
+      "url": null
+    }
+  },
+  "linear": {
+    "cache_age_seconds": 0,
+    "status": "unavailable",
+    "truncated": false
+  },
+  "mapping": {
+    "pane": "session",
+    "source": "default",
+    "space": "project",
+    "status": "ok",
+    "tab": "work"
+  },
+  "project": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "name": "AI Canvas Tools",
+    "team_key": null,
+    "url": null
+  },
+  "record": {
+    "project_id": "44444444-4444-4444-8444-444444444444",
+    "state": "bound",
+    "status": "ok"
+  },
+  "schema": 1,
+  "unmapped": [
+    {
+      "label": "Elsewhere",
+      "panes": [
+        "wA:p9"
+      ],
+      "reason": "no_binding",
+      "tab_id": "wA:t2"
+    }
+  ],
+  "view": {
+    "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "layout": null,
+    "name": "Canvas board",
+    "status": "unreadable"
+  },
+  "workspace": {
+    "id": "wA",
+    "label": "Plugins",
+    "live": true
+  }
+}
