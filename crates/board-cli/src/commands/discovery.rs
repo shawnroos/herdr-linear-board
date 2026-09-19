@@ -2,8 +2,7 @@ use anyhow::{anyhow, bail, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::protocol::{
     LinearIssueParams, LinearListKind, LinearListParams, LinearSnapshotParams,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT,
-    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use serde_json::json;
 

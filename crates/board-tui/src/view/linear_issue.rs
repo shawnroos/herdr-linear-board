@@ -203,15 +203,14 @@ fn plain_lines(text: &str, width: usize) -> Vec<Line<'static>> {
 /// The main column: what Linear puts on the left of its issue page.
 fn main_column(
     now: i64,
-    state: &LinearState,
-    issue: &LinearIssue,
+    issue: &Subject<'_>,
     detail: Option<&LinearIssueDetail>,
     loading: bool,
     width: usize,
     rows: &mut Vec<Row>,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line> = vec![];
-    for line_of_title in plain_lines(&issue.title, width) {
+    for line_of_title in plain_lines(issue.title(), width) {
         out.push(Line::from(Span::styled(
             line_of_title.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
@@ -265,7 +264,11 @@ fn main_column(
             continue;
         }
         out.push(Line::from(fit(
-            &join_time(now, &format!("  {} {}", line(actor), what), event.created_at.as_deref()),
+            &join_time(
+                now,
+                &format!("  {} {}", line(actor), what),
+                event.created_at.as_deref(),
+            ),
             width,
         )));
     }
@@ -291,7 +294,10 @@ fn main_column(
             out.push(Line::from(fit(
                 &join_time(
                     now,
-                    &format!("    ↳ {}", line(reply.author.as_deref().unwrap_or("someone"))),
+                    &format!(
+                        "    ↳ {}",
+                        line(reply.author.as_deref().unwrap_or("someone"))
+                    ),
                     reply.created_at.as_deref(),
                 ),
                 width,
@@ -301,7 +307,6 @@ fn main_column(
             }
         }
     }
-    let _ = state;
     out
 }
 
@@ -346,31 +351,29 @@ fn history_text(event: &board_core::protocol::LinearHistoryEvent) -> String {
 /// The sidebar: Linear's properties, then the board's own block last (R10).
 fn sidebar_column(
     state: &LinearState,
-    issue: &LinearIssue,
+    issue: &Subject<'_>,
     detail: Option<&LinearIssueDetail>,
     width: usize,
     rows: &mut Vec<Row>,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line> = vec![];
-    out.push(property(
-        "Status",
-        issue.state.name.as_deref().map(line),
-        width,
-    ));
+    out.push(property("Status", issue.state_name().map(line), width));
     out.push(property(
         "Priority",
-        issue.priority.map(|p| format!("P{p}")),
+        issue.priority().map(|p| format!("P{p}")),
         width,
     ));
-    out.push(property(
-        "Assignee",
-        issue.assignee.as_ref().and_then(|a| a.name.as_deref()).map(line),
-        width,
-    ));
+    out.push(property("Assignee", issue.assignee().map(line), width));
     out.push(property(
         "Labels",
-        (!issue.labels.is_empty())
-            .then(|| issue.labels.iter().map(|l| line(l)).collect::<Vec<_>>().join(", ")),
+        (!issue.labels().is_empty()).then(|| {
+            issue
+                .labels()
+                .iter()
+                .map(|l| line(l))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }),
         width,
     ));
     out.push(property(
@@ -391,9 +394,12 @@ fn sidebar_column(
     ));
     out.push(property(
         "Cycle",
-        detail
-            .and_then(|d| d.cycle.as_ref())
-            .and_then(|c| c.name.as_deref().map(line).or(c.number.map(|n| n.to_string()))),
+        detail.and_then(|d| d.cycle.as_ref()).and_then(|c| {
+            c.name
+                .as_deref()
+                .map(line)
+                .or(c.number.map(|n| n.to_string()))
+        }),
         width,
     ));
     out.push(property(
@@ -439,7 +445,7 @@ fn sidebar_column(
 
     out.push(Line::from(""));
     out.push(heading("Board", width));
-    out.extend(board_block(state, issue, width, rows, out.len()));
+    out.extend(board_block(state, issue.bindings(), width, rows, out.len()));
     out
 }
 
@@ -457,26 +463,28 @@ fn relation_label(relation: &board_core::protocol::LinearRelation) -> String {
 /// The board's own section: the worktrees, tabs and panes bound to this issue.
 fn board_block(
     state: &LinearState,
-    issue: &LinearIssue,
+    issue: Option<&LinearIssue>,
     width: usize,
     rows: &mut Vec<Row>,
     offset: usize,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line> = vec![];
-    if issue.bindings.is_empty() {
+    // No row on the board at all: a linked issue the reader opened from this
+    // page is not on it, which is a different thing from one that is on it with
+    // no binding -- but reads the same to someone looking for a worktree.
+    let Some(issue) = issue.filter(|i| !i.bindings.is_empty()) else {
         out.push(Line::from(Span::styled(
             fit("not on this board", width),
             dim(),
         )));
         return out;
-    }
+    };
     let pane_rows = state.pane_rows(issue);
     let mut pane_index = 0usize;
     for (b, binding) in issue.bindings.iter().enumerate() {
         let state_label = format!("[{}] ", line(&binding.state));
-        let path_w = width.saturating_sub(unicode_width::UnicodeWidthStr::width(
-            state_label.as_str(),
-        ));
+        let path_w =
+            width.saturating_sub(unicode_width::UnicodeWidthStr::width(state_label.as_str()));
         out.push(Line::from(Span::styled(
             format!("{state_label}{}", fit_path(&binding.worktree_path, path_w)),
             Style::default().add_modifier(Modifier::BOLD),
@@ -511,9 +519,77 @@ fn board_block(
     out
 }
 
+/// What the page draws its header and board block from. The board's snapshot
+/// only holds the issues on the board, so a linked issue opened with Enter has
+/// no row there; it comes from the row the reader opened instead.
+enum Subject<'a> {
+    OnBoard(&'a LinearIssue),
+    Linked(&'a board_core::protocol::LinearLinkedIssue),
+}
+
+impl Subject<'_> {
+    fn identifier(&self) -> &str {
+        match self {
+            Subject::OnBoard(issue) => &issue.identifier,
+            Subject::Linked(row) => &row.identifier,
+        }
+    }
+
+    fn title(&self) -> &str {
+        match self {
+            Subject::OnBoard(issue) => &issue.title,
+            Subject::Linked(row) => &row.title,
+        }
+    }
+
+    fn state_name(&self) -> Option<&str> {
+        match self {
+            Subject::OnBoard(issue) => issue.state.name.as_deref(),
+            Subject::Linked(row) => row.state.name.as_deref(),
+        }
+    }
+
+    fn priority(&self) -> Option<i64> {
+        match self {
+            Subject::OnBoard(issue) => issue.priority,
+            Subject::Linked(_) => None,
+        }
+    }
+
+    fn assignee(&self) -> Option<&str> {
+        match self {
+            Subject::OnBoard(issue) => issue.assignee.as_ref().and_then(|a| a.name.as_deref()),
+            Subject::Linked(_) => None,
+        }
+    }
+
+    fn labels(&self) -> &[String] {
+        match self {
+            Subject::OnBoard(issue) => &issue.labels,
+            Subject::Linked(_) => &[],
+        }
+    }
+
+    /// Only an issue on the board has bindings; a linked one says so.
+    fn bindings(&self) -> Option<&LinearIssue> {
+        match self {
+            Subject::OnBoard(issue) => Some(issue),
+            Subject::Linked(_) => None,
+        }
+    }
+}
+
+/// The issue the page is for, whether the board knows it or not.
+fn subject<'a>(state: &'a LinearState) -> Option<Subject<'a>> {
+    if let Some(issue) = state.detail_issue() {
+        return Some(Subject::OnBoard(issue));
+    }
+    state.detail_seed.as_ref().map(Subject::Linked)
+}
+
 /// Build both columns and the rows the cursor can reach.
 pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> {
-    let issue = state.detail_issue()?;
+    let issue = subject(state)?;
     let body = page_body(app, area);
     let stacked = body.width < 2 * MIN_COL_W;
     let (main_w, side_w) = if stacked {
@@ -532,17 +608,21 @@ pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> 
     let loading = state.detail_in_flight.is_some() && state.detail_error.is_none();
 
     let mut rows = vec![];
-    let main = main_column(app.now, state, issue, detail, loading, main_w, &mut rows);
+    let main = main_column(app.now, &issue, detail, loading, main_w, &mut rows);
     // The sidebar's rows follow the main column's, which is the order they are
     // read in at both widths: the narrow layout is this list flattened.
     let mut sidebar_rows = vec![];
-    let sidebar = sidebar_column(state, issue, detail, side_w, &mut sidebar_rows);
+    let sidebar = sidebar_column(state, &issue, detail, side_w, &mut sidebar_rows);
     let main_len = main.len();
     for row in sidebar_rows {
         rows.push(Row {
             // In the stacked layout the sidebar follows the main column, so a
             // row's index is its own plus everything above it.
-            line: if stacked { main_len + row.line } else { row.line },
+            line: if stacked {
+                main_len + row.line
+            } else {
+                row.line
+            },
             kind: row.kind,
             column: row.column,
         });
@@ -624,7 +704,7 @@ fn header_rows(app: &App) -> u16 {
 }
 
 pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
-    let Some(issue) = state.detail_issue() else {
+    let Some(issue) = subject(state) else {
         return;
     };
     let content = page_area(app, area);
@@ -646,7 +726,7 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let width = content.width as usize;
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            fit(&format!(" {}", line(&issue.identifier)), width),
+            fit(&format!(" {}", line(issue.identifier())), width),
             Style::default().add_modifier(Modifier::BOLD),
         ))),
         Rect::new(content.x, content.y, content.width, 1),
@@ -666,10 +746,7 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     if page.stacked {
         let mut all = page.main.clone();
         all.extend(page.sidebar.clone());
-        f.render_widget(
-            Paragraph::new(all).scroll((scroll as u16, 0)),
-            body,
-        );
+        f.render_widget(Paragraph::new(all).scroll((scroll as u16, 0)), body);
     } else {
         let main_w = body.width.saturating_sub(SIDEBAR_W + 1);
         f.render_widget(

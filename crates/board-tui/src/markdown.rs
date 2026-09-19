@@ -293,7 +293,10 @@ fn wrap(
                         break;
                     }
                 }
-                let room = width.saturating_sub(used);
+                // A prefix at least as wide as the column leaves no room on a
+                // fresh line either, so without a floor of one column the split
+                // below takes nothing and the word is dropped silently.
+                let room = width.saturating_sub(used).max(1);
                 if word.width() <= room {
                     current.push(Span::styled(word.clone(), span.style));
                     used += word.width();
@@ -438,8 +441,14 @@ mod tests {
 
     #[test]
     fn an_unclosed_marker_is_left_as_text() {
-        assert_eq!(text(&render("a *dangling star", 40)), vec!["a *dangling star"]);
-        assert_eq!(text(&render("an `unclosed tick", 40)), vec!["an `unclosed tick"]);
+        assert_eq!(
+            text(&render("a *dangling star", 40)),
+            vec!["a *dangling star"]
+        );
+        assert_eq!(
+            text(&render("an `unclosed tick", 40)),
+            vec!["an `unclosed tick"]
+        );
     }
 
     #[test]
@@ -574,6 +583,27 @@ mod tests {
     fn a_blank_line_survives_as_a_paragraph_break() {
         let out = render("one\n\ntwo", 40);
         assert_eq!(text(&out), vec!["one", "", "two"]);
+    }
+
+    /// A prefix as wide as the column leaves no room on a fresh line either, so
+    /// the wrap could take nothing and drop the text entirely. Found in review.
+    #[test]
+    fn a_prefix_as_wide_as_the_column_still_renders_its_text() {
+        // A bullet in a 2-cell column: the marker alone fills it.
+        let out = render("- alpha", 2);
+        let rendered = text(&out);
+        assert!(
+            rendered.join("").contains('a'),
+            "the text was dropped: {rendered:?}"
+        );
+
+        // And a quote, whose prefix is two cells wide as well.
+        let out = render("> beta", 2);
+        let rendered = text(&out);
+        assert!(
+            rendered.join("").contains('b'),
+            "the text was dropped: {rendered:?}"
+        );
     }
 
     #[test]

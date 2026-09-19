@@ -78,9 +78,8 @@ pub(crate) const LIST_SCRIPT_DEADLINE: Duration =
 // plus the keychain read, not a per-page count -- which is what keeps a busy
 // issue's page as fast to open as an empty one.
 const ISSUE_CALLS_MAX: u64 = 1;
-pub(crate) const ISSUE_SCRIPT_WORST_CASE: Duration = Duration::from_secs(
-    ISSUE_CALLS_MAX * LINEAR_TIMEOUT_SECONDS + KEYCHAIN_BUDGET_SECONDS,
-);
+pub(crate) const ISSUE_SCRIPT_WORST_CASE: Duration =
+    Duration::from_secs(ISSUE_CALLS_MAX * LINEAR_TIMEOUT_SECONDS + KEYCHAIN_BUDGET_SECONDS);
 pub(crate) const ISSUE_SCRIPT_DEADLINE: Duration =
     Duration::from_secs(ISSUE_SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
 /// SIGTERM first so the script's EXIT trap removes its temp directory; SIGKILL
@@ -204,8 +203,8 @@ pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<Linea
             by_hand(&script, &run)
         ))
     })?;
-    let document: LinearIssueDocument = serde_json::from_value(board_core::text::sanitise_json(value))
-        .map_err(|e| {
+    let document: LinearIssueDocument =
+        serde_json::from_value(board_core::text::sanitise_json(value)).map_err(|e| {
             Error::PluginUnavailable(format!(
                 "{who} printed a document the board cannot read: {e}; {}",
                 by_hand(&script, &run)

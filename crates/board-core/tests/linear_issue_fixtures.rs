@@ -77,7 +77,10 @@ fn every_fixture_in_the_directory_is_pinned() {
         if name == "VERSION" {
             continue;
         }
-        assert!(hashes.contains_key(&name), "{name} is not pinned in VERSION");
+        assert!(
+            hashes.contains_key(&name),
+            "{name} is not pinned in VERSION"
+        );
     }
 }
 
@@ -90,7 +93,9 @@ fn the_full_fixture_carries_every_section_the_page_draws() {
     assert_eq!(doc.status, "ok");
     assert!(doc.truncated.is_empty());
 
-    let issue = doc.issue.expect("a document with status ok carries an issue");
+    let issue = doc
+        .issue
+        .expect("a document with status ok carries an issue");
     assert_eq!(issue.identifier, "WEB-3318");
     assert!(issue.description.unwrap().contains("What happens"));
     assert_eq!(issue.estimate, Some(3.0));
@@ -156,7 +161,10 @@ fn the_truncated_fixture_is_partial_and_names_what_was_cut() {
         );
     }
     assert!(doc.message.unwrap().contains("Linear"));
-    assert!(doc.issue.is_some(), "a partial read still carries the issue");
+    assert!(
+        doc.issue.is_some(),
+        "a partial read still carries the issue"
+    );
 }
 
 /// A reachability failure arrives as a document, not an error code, so the page

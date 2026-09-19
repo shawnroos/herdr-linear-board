@@ -23,11 +23,11 @@
 //! so `board_tui::{Driver, OriginContext, run, run_with_board}` stay valid paths.
 
 pub mod app;
-pub mod markdown;
 pub mod driver;
 pub mod editor;
 pub mod forms;
 pub mod herdr_keys;
+pub mod markdown;
 pub mod origin;
 pub mod runtime;
 #[cfg(feature = "fake-client")]

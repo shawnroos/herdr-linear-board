@@ -13,14 +13,13 @@ use crate::protocol::{
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DaemonStatus, DeletedResult, Event, HarnessCapabilitiesParams,
     HarnessListResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearIssueDocument,
-    LinearIssueParams, LinearListParams,
-    LinearListResult, LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult,
-    PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
-    ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
-    ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
-    RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams,
-    SessionListResult, SpaceListParams, SpaceListResult, StopResult, TemplateApplyParams,
-    Visibility,
+    LinearIssueParams, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
+    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
+    RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
+    RunPaneExitedParams, SessionListResult, SpaceListParams, SpaceListResult, StopResult,
+    TemplateApplyParams, Visibility,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.

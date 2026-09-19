@@ -7,8 +7,8 @@
 
 use board_core::protocol::{
     LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearIssueDocument,
-    LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
-    LinearSpacesList,
+    LinearLinkedIssue, LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot,
+    LinearSpaceRow, LinearSpacesList,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -132,6 +132,11 @@ pub struct LinearState {
     pub detail_doc: Option<(String, LinearIssueDocument)>,
     /// The issue a `linear.issue` read is in flight for.
     pub detail_in_flight: Option<String>,
+    /// What the row the reader opened already knew about a linked issue. The
+    /// board's snapshot holds only the issues on the board, and a sub-issue or
+    /// relation is deliberately off it, so without this the page would have
+    /// nothing to draw until the read landed - and nothing at all if it failed.
+    pub detail_seed: Option<LinearLinkedIssue>,
     /// How the last read for the open issue failed, and whether `r` can retry
     /// it. A plugin that ships no issue script is not retryable.
     pub detail_error: Option<DetailError>,
@@ -151,6 +156,7 @@ pub struct LinearState {
 pub struct DetailStep {
     pub issue: String,
     pub doc: Option<LinearIssueDocument>,
+    pub seed: Option<LinearLinkedIssue>,
     pub selection: Option<crate::view::IssueRowKind>,
 }
 
@@ -196,6 +202,7 @@ impl LinearState {
             bind_note: None,
             detail_doc: None,
             detail_in_flight: None,
+            detail_seed: None,
             detail_error: None,
             detail_selection: None,
             detail_stack: vec![],
@@ -433,10 +440,14 @@ impl LinearState {
         if self.sel_card >= cards {
             self.sel_card = cards.saturating_sub(1);
         }
-        if self
-            .detail
-            .as_deref()
-            .is_some_and(|id| self.issue(id).is_none())
+        // Only close the page for an issue the reader reached FROM the board:
+        // a linked issue is deliberately off-board, and closing it on the next
+        // refresh would drop the reader back mid-read.
+        if self.detail_seed.is_none()
+            && self
+                .detail
+                .as_deref()
+                .is_some_and(|id| self.issue(id).is_none())
         {
             self.detail = None;
         }
@@ -520,6 +531,23 @@ fn issue_arrived(app: &mut App, issue: &str, result: Result<LinearIssueDocument,
     }
     state.detail_in_flight = None;
     match result {
+        // The plugin carries a reachability failure IN the document -
+        // `status: "unavailable"` with no issue - because the read ran and
+        // answered. The page still has to say so: without this it renders an
+        // issue with no description and no activity, which reads as an empty
+        // issue rather than as Linear being unreachable.
+        Ok(document) if document.issue.is_none() => {
+            let message = document
+                .message
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| "this issue could not be read".to_string());
+            state.detail_error = Some(DetailError {
+                issue: issue.to_string(),
+                message: sanitise(&message),
+                retryable: true,
+            });
+        }
         Ok(document) => {
             state.detail_error = None;
             state.detail_doc = Some((issue.to_string(), document));
@@ -782,6 +810,7 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             if let Some(id) = state.selected_identifier().map(str::to_string) {
                 state.detail = Some(id.clone());
                 state.detail_stack.clear();
+                state.detail_seed = None;
                 // The working pane, as the overlay opened on: getting to the
                 // pane working on an issue is why a card gets opened.
                 state.detail_selection = state
@@ -922,7 +951,8 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             // An issue row opens that issue's page in place, and the page it
             // came from goes on the stack with what it was showing.
             Some(crate::view::IssueRowKind::Issue(identifier)) => {
-                return open_linked_issue(app, &identifier)
+                let seed = linked_row(state, &identifier);
+                return open_linked_issue(app, &identifier, seed);
             }
             Some(crate::view::IssueRowKind::Pane(_)) => return focus_selected_pane(app, &rows),
             None => {}
@@ -985,7 +1015,26 @@ fn focus_selected_pane(app: &mut App, rows: &[crate::view::IssueRow]) -> Vec<Eff
 
 /// Enter on a sub-issue, the parent or a relation. The page being left goes on
 /// the stack with what it was showing, so Esc can put it straight back.
-fn open_linked_issue(app: &mut App, identifier: &str) -> Vec<Effect> {
+/// The row the reader is opening, as the page already had it. Looked up in the
+/// open document rather than the snapshot, because that is where a linked issue
+/// the board has never seen comes from.
+fn linked_row(state: &LinearState, identifier: &str) -> Option<LinearLinkedIssue> {
+    let (_, doc) = state.detail_doc.as_ref()?;
+    let issue = doc.issue.as_ref()?;
+    issue
+        .children
+        .iter()
+        .chain(issue.parent.iter())
+        .chain(issue.relations.iter().map(|r| &r.issue))
+        .find(|row| row.identifier == identifier)
+        .cloned()
+}
+
+fn open_linked_issue(
+    app: &mut App,
+    identifier: &str,
+    seed: Option<LinearLinkedIssue>,
+) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -1003,12 +1052,14 @@ fn open_linked_issue(app: &mut App, identifier: &str) -> Vec<Effect> {
     state.detail_stack.push(DetailStep {
         issue: from,
         doc,
+        seed: state.detail_seed.clone(),
         selection: state.detail_selection.clone(),
     });
     state.detail = Some(identifier.to_string());
     state.detail_selection = None;
     state.detail_doc = None;
     state.detail_error = None;
+    state.detail_seed = seed;
     request_issue(app, identifier)
 }
 
@@ -1024,6 +1075,7 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
         state.detail_error = None;
         state.detail_in_flight = None;
         state.detail_selection = None;
+        state.detail_seed = None;
         app.screen = Screen::LinearBoard;
         return vec![];
     };
@@ -1032,6 +1084,7 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
     state.detail = Some(step.issue.clone());
     state.detail_selection = step.selection;
     state.detail_error = None;
+    state.detail_seed = step.seed;
     state.detail_doc = step.doc.map(|doc| (step.issue.clone(), doc));
     request_issue(app, &step.issue)
 }

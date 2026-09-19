@@ -1143,7 +1143,9 @@ fn an_issue_read_returns_every_section_the_page_shows() {
 
     assert_eq!(doc.status, "ok");
     assert!(doc.truncated.is_empty());
-    let issue = doc.issue.expect("a document with status ok carries an issue");
+    let issue = doc
+        .issue
+        .expect("a document with status ok carries an issue");
     assert_eq!(issue.identifier, "WEB-3318");
     assert_eq!(issue.estimate, Some(3.0));
     assert_eq!(issue.due_date.as_deref(), Some("2026-09-30"));
@@ -1196,7 +1198,10 @@ fn an_explicit_null_in_every_nullable_field_parses() {
     );
     let runner = runner(Some(plugin.path()), home.path(), &[]);
 
-    let issue = issue(&runner, issue_params("WEB-1")).unwrap().issue.unwrap();
+    let issue = issue(&runner, issue_params("WEB-1"))
+        .unwrap()
+        .issue
+        .unwrap();
 
     assert_eq!(issue.identifier, "WEB-1");
     assert!(issue.description.is_none());
@@ -1276,8 +1281,10 @@ fn an_id_of_the_wrong_shape_is_refused_before_any_process_starts() {
 #[test]
 fn an_unparseable_document_names_the_script_and_how_to_run_it_by_hand() {
     let home = tempfile::tempdir().unwrap();
-    let plugin =
-        fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-issue.sh", "printf 'not json'")]);
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[("work-issue.sh", "printf 'not json'")],
+    );
     let runner = runner(Some(plugin.path()), home.path(), &[]);
 
     let error = issue(&runner, issue_params("WEB-1")).unwrap_err();
@@ -1336,7 +1343,10 @@ fn display_controls_are_stripped_from_the_document() {
     let plugin = issue_plugin(doc);
     let runner = runner(Some(plugin.path()), home.path(), &[]);
 
-    let issue = issue(&runner, issue_params("WEB-1")).unwrap().issue.unwrap();
+    let issue = issue(&runner, issue_params("WEB-1"))
+        .unwrap()
+        .issue
+        .unwrap();
 
     assert_eq!(issue.title, "[31mredtitle");
     assert_eq!(issue.comments[0].body, "body");
@@ -1357,4 +1367,22 @@ fn the_issue_deadline_is_sized_for_one_call_and_fits_its_client_timeout() {
         board_core::protocol::LINEAR_ISSUE_CLIENT_TIMEOUT,
         daemon_longest
     );
+}
+
+/// The missing-script code is board-wide, not the issue op's alone: `plugin_script`
+/// is shared, so a plugin that ships no `work-snapshot.sh` is also "update the
+/// plugin" rather than "try again". This pins that reclassification, which
+/// arrived with the issue read and previously had coverage only for the list
+/// scripts.
+#[test]
+fn a_plugin_without_the_snapshot_script_is_the_unsupported_code_too() {
+    let home = tempfile::tempdir().unwrap();
+    // A plugin at the floor that ships only the issue script.
+    let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-issue.sh", "printf '{}'")]);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = snapshot(&runner, params(None)).unwrap_err();
+
+    assert_eq!(error.code(), 7, "{error}");
+    assert!(error.to_string().contains("work-snapshot.sh"), "{error}");
 }

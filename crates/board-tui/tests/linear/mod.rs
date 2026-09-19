@@ -282,7 +282,12 @@ fn page_document() -> board_core::protocol::LinearIssueDocument {
                 number: Some(14),
                 name: Some("Cycle 14".into()),
             }),
-            parent: Some(linked("WEB-2870", "Tool: Detach Foreground", "Dev Done", "started")),
+            parent: Some(linked(
+                "WEB-2870",
+                "Tool: Detach Foreground",
+                "Dev Done",
+                "started",
+            )),
             children: vec![
                 linked("WEB-3319", "Per-issue fetch", "Done", "completed"),
                 linked("WEB-3320", "Markdown renderer", "Todo", "unstarted"),
@@ -3220,7 +3225,10 @@ fn enter_opens_a_linked_issue_and_esc_walks_back() {
     for _ in 0..5 {
         press(&mut d, KeyCode::Char('k'));
     }
-    assert_eq!(page_selection(&d), Some(IssueRowKind::Issue("WEB-3319".into())));
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3319".into()))
+    );
     press(&mut d, KeyCode::Enter);
 
     assert_eq!(
@@ -3291,7 +3299,10 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
     for _ in 0..5 {
         press(&mut d, KeyCode::Char('k'));
     }
-    assert_eq!(page_selection(&d), Some(IssueRowKind::Issue("WEB-3319".into())));
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3319".into()))
+    );
     press(&mut d, KeyCode::Char('o'));
     assert!(toast(&d).contains("o focuses a pane"), "{}", toast(&d));
 
@@ -3300,7 +3311,12 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
     assert!(!toast(&d).contains("no worktree binding"), "{}", toast(&d));
 
     let called = methods(&log);
-    assert!(called.iter().all(|m| m.starts_with("linear.") || m == "pane.focus"), "{called:?}");
+    assert!(
+        called
+            .iter()
+            .all(|m| m.starts_with("linear.") || m == "pane.focus"),
+        "{called:?}"
+    );
 }
 
 /// Covers AE5. The description's Markdown reaches the page as structure, not
@@ -3335,5 +3351,109 @@ fn the_description_renders_its_markdown_on_the_page() {
     // A fenced block keeps its contents verbatim, markup and all.
     assert!(frame.contains("let **x** = 1;"), "{frame}");
     // The image is named with its link rather than silently dropped.
-    assert!(frame.contains("[a shot] https://example.com/shot.png"), "{frame}");
+    assert!(
+        frame.contains("[a shot] https://example.com/shot.png"),
+        "{frame}"
+    );
+}
+
+// -- findings from code review ---------------------------------------------
+
+/// R14, and the defect that made it a P0: a linked issue is deliberately NOT on
+/// the board, so resolving the page's subject out of the snapshot rendered it
+/// blank. The earlier back-stack test passed over this because it asserted the
+/// state and never that anything was drawn.
+#[test]
+fn a_linked_issue_that_is_not_on_the_board_still_draws_a_page() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // WEB-3400 is a relation, and the board's snapshot has never heard of it.
+    assert!(
+        d.app.linear.as_ref().unwrap().issue("WEB-3400").is_none(),
+        "fixture no longer off-board; pick another identifier"
+    );
+    for _ in 0..2 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3400".into()))
+    );
+    press(&mut d, KeyCode::Enter);
+
+    // Before its read lands, the page draws from the row the reader opened.
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("WEB-3400"), "{frame}");
+    assert!(frame.contains("Ship the drawer"), "{frame}");
+    assert!(frame.contains("Todo"), "{frame}");
+    assert!(frame.contains("not on this board"), "{frame}");
+}
+
+/// The same defect from the other side: a refresh while reading a linked issue
+/// must not close the page, because `clamp` cannot find that issue on the board.
+#[test]
+fn a_refresh_does_not_close_the_page_on_a_linked_issue() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+    for _ in 0..2 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3400")
+    );
+
+    press(&mut d, KeyCode::Char('r'));
+    d.deliver_pending_linear_snapshot();
+
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "the refresh closed the page"
+    );
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3400")
+    );
+}
+
+/// A reachability failure is carried IN the document by contract, so a page that
+/// only checks for an RPC error renders an issue with nothing in it and calls
+/// that success.
+#[test]
+fn an_unavailable_document_is_a_failure_not_an_empty_issue() {
+    let unavailable = board_core::protocol::LinearIssueDocument {
+        schema: 1,
+        status: "unavailable".into(),
+        message: Some("Linear could not be reached".into()),
+        truncated: vec![],
+        issue: None,
+    };
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", unavailable);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d)
+        .detail_error
+        .clone()
+        .expect("an unavailable document has to reach the page as a failure");
+    assert!(error.retryable, "Linear may come back; `r` should retry");
+    assert!(error.message.contains("could not be reached"), "{error:?}");
+
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("could not be reached"), "{frame}");
+    // And the snapshot fields are still there to read.
+    assert!(frame.contains("WEB-3312"), "{frame}");
 }

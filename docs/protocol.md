@@ -21,7 +21,7 @@ protocol version.
   unavailable (the `linear.*` plugin ops only: no resolvable plugin root, a plugin below
   the floor version, or a script run that produced no usable document), `7` the installed plugin
   ships no script for this op. `6` and `7` are separate because their remedies are opposite: `6` is
-  worth retrying, `7` is fixed only by updating the work plugin. The CLI passes `1..=6`
+  worth retrying, `7` is fixed only by updating the work plugin. The CLI passes `1..=7`
   through as its exit status (`board linear snapshot`, `board linear space list`,
   `board linear project list` and `board linear view list` are the commands that raise `6`). The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task

@@ -12,11 +12,12 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DeletedResult, Event, LinearBindHandoffParams, LinearBindHandoffResult,
-    LinearIssueDocument, LinearIssueParams, LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
-    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
-    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
-    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
-    RunFocusResult, TemplateApplyParams, Trigger,
+    LinearIssueDocument, LinearIssueParams, LinearListKind, LinearListParams, LinearListResult,
+    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
+    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
+    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
+    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
+    TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
