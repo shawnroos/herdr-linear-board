@@ -107,7 +107,7 @@ fn every_pinned_fixture_deserialises_into_linear_snapshot() {
 fn bound_with_view_carries_bindings_panes_and_unmapped_tabs() {
     let text = std::fs::read_to_string(fixture_dir().join("bound-with-view.json")).unwrap();
     let snapshot: LinearSnapshot = serde_json::from_str(&text).unwrap();
-    let issue = &snapshot.issues["WEB-3312"];
+    let issue = &snapshot.issues["WEB-3302"];
     assert_eq!(issue.state.kind.as_deref(), Some("started"));
     assert_eq!(issue.bindings[0].tab.as_ref().unwrap().id, "wA:t1");
     assert_eq!(issue.bindings[0].panes, vec!["wA:p1", "wA:p2"]);

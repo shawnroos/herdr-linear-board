@@ -63,7 +63,7 @@ fn toast(d: &Driver) -> String {
         .unwrap_or_default()
 }
 
-/// Open WEB-3312 (third column, first card) from the board.
+/// Open WEB-3302 (third column, first card) from the board.
 fn open_web_3312(d: &mut Driver) {
     press(d, KeyCode::Char('l'));
     press(d, KeyCode::Char('l'));
@@ -71,7 +71,7 @@ fn open_web_3312(d: &mut Driver) {
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(
         d.app.linear.as_ref().unwrap().detail.as_deref(),
-        Some("WEB-3312")
+        Some("WEB-3302")
     );
 }
 
@@ -96,7 +96,7 @@ fn bound_with_view_renders_the_views_columns_in_order() {
     );
     assert!(frame.contains("view: Canvas board"), "{frame}");
     assert!(
-        frame.contains("WEB-3312") && frame.contains("⧉2"),
+        frame.contains("WEB-3302") && frame.contains("⧉2"),
         "{frame}"
     );
     assert!(frame.contains("Beta notes (wB)"), "{frame}");
@@ -206,7 +206,7 @@ fn herdr_unavailable_still_renders_cards_with_unknown_pane_status() {
         frame.contains("space: wA"),
         "label falls back to the id:\n{frame}"
     );
-    assert!(frame.contains("WEB-3312"), "{frame}");
+    assert!(frame.contains("WEB-3302"), "{frame}");
     open_web_3312(&mut d);
     let detail = draw(&d.app, W, H);
     assert!(detail.contains("(label unknown)"), "{detail}");
@@ -249,7 +249,7 @@ fn detail_lists_bindings_tabs_and_panes_with_live_status() {
     open_web_3312(&mut d);
     let frame = draw(&d.app, W, H);
     assert!(
-        frame.contains("[bound] $SANDBOX/worktrees/web-3312"),
+        frame.contains("[bound] $SANDBOX/worktrees/web-3302"),
         "{frame}"
     );
     assert!(frame.contains("tab: Plugin PM (wA:t1)"), "{frame}");
@@ -258,7 +258,7 @@ fn detail_lists_bindings_tabs_and_panes_with_live_status() {
         "{frame}"
     );
     assert!(
-        frame.contains("url: https://linear.app/example/issue/web-3312/x"),
+        frame.contains("url: https://linear.app/example/issue/web-3302/x"),
         "{frame}"
     );
     insta::assert_snapshot!("linear_detail", frame);
@@ -391,13 +391,13 @@ fn herdr_keys_never_join_the_board_key_table() {
 #[test]
 fn control_characters_never_reach_the_frame() {
     let mut snapshot = bound_with_view();
-    let issue = snapshot.issues.get_mut("WEB-3318").unwrap();
+    let issue = snapshot.issues.get_mut("WEB-3308").unwrap();
     issue.title = "Example\u{202E} panel\u{1b}[2J is blank".into();
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     press(&mut d, KeyCode::Enter);
     let frame = draw(&d.app, W, H);
     assert!(
-        frame.contains("WEB-3318 — Example panel[2J is blank"),
+        frame.contains("WEB-3308 — Example panel[2J is blank"),
         "{frame}"
     );
     assert!(
@@ -468,7 +468,7 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
         .collect();
     let expected = serde_json::json!({
         "pane_id": "hostile-pane-sentinel",
-        "title": "Linear: AI Canvas Tools",
+        "title": "Linear: Frame Effects",
         "origin_socket": "/hostile/socket",
     });
     assert_eq!(titles, vec![expected.clone(), expected]);
@@ -682,7 +682,7 @@ fn u_opens_the_issue_url_with_the_platform_opener() {
     press(&mut d, KeyCode::Char('u'));
     assert_eq!(
         *opened.lock().unwrap(),
-        vec!["https://linear.app/example/issue/web-3312/x".to_string()]
+        vec!["https://linear.app/example/issue/web-3302/x".to_string()]
     );
     assert_eq!(toast(&d), "opening the issue in Linear");
 }
@@ -690,7 +690,7 @@ fn u_opens_the_issue_url_with_the_platform_opener() {
 #[test]
 fn u_refuses_a_url_that_is_not_http_before_the_opener_sees_it() {
     let mut doc = bound_with_view();
-    doc.issues.get_mut("WEB-3312").unwrap().url = Some("-aTerminal".to_string());
+    doc.issues.get_mut("WEB-3302").unwrap().url = Some("-aTerminal".to_string());
     let (mut d, opened, _) = linear_driver(fake_with(doc), linear_start());
     open_web_3312(&mut d);
     press(&mut d, KeyCode::Char('u'));
@@ -702,7 +702,7 @@ fn u_refuses_a_url_that_is_not_http_before_the_opener_sees_it() {
     assert!(toast(&d).contains("not http(s)"), "{}", toast(&d));
 
     let mut doc = bound_with_view();
-    doc.issues.get_mut("WEB-3312").unwrap().url = Some("file:///tmp/x".to_string());
+    doc.issues.get_mut("WEB-3302").unwrap().url = Some("file:///tmp/x".to_string());
     let (mut d, opened, _) = linear_driver(fake_with(doc), linear_start());
     open_web_3312(&mut d);
     press(&mut d, KeyCode::Char('u'));
@@ -742,7 +742,7 @@ fn y_copies_the_worktree_path_and_says_when_the_directory_is_gone() {
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(
         *copied.lock().unwrap(),
-        vec!["$SANDBOX/worktrees/web-3312".to_string()]
+        vec!["$SANDBOX/worktrees/web-3302".to_string()]
     );
     assert_eq!(toast(&d), "copied; directory is gone");
 
@@ -760,7 +760,7 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     press(&mut d, KeyCode::Enter);
     assert_eq!(
         d.app.linear.as_ref().unwrap().detail.as_deref(),
-        Some("WEB-3318")
+        Some("WEB-3308")
     );
     press(&mut d, KeyCode::Char('o'));
     assert_eq!(toast(&d), "this card has no recorded pane");
@@ -923,7 +923,7 @@ fn the_board_sends_its_plugin_root_with_every_snapshot_request() {
 /// backend wraps each row in.
 fn narrow_rows(title: &str, assignee: Option<&str>) -> Vec<String> {
     let mut snapshot = bound_with_view();
-    let issue = snapshot.issues.get_mut("WEB-3318").unwrap();
+    let issue = snapshot.issues.get_mut("WEB-3308").unwrap();
     issue.title = title.into();
     issue.assignee = assignee.map(|name| board_core::protocol::LinearAssignee {
         id: None,
@@ -962,7 +962,7 @@ const NINETY: &str =
 fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellipsis() {
     assert_eq!(NINETY.chars().count(), 90);
     let rows = narrow_rows(NINETY, Some("Example User"));
-    assert!(cell(&rows, 3).starts_with("WEB-3318"), "{rows:#?}");
+    assert!(cell(&rows, 3).starts_with("WEB-3308"), "{rows:#?}");
     let first = cell(&rows, 4);
     let second = cell(&rows, 5);
     assert!(
@@ -1013,11 +1013,11 @@ fn an_empty_title_and_a_missing_assignee_render_placeholders() {
 #[test]
 fn cards_in_a_column_are_separated_by_a_blank_row() {
     let mut snapshot = bound_with_view();
-    snapshot.groups[0].issues = vec!["WEB-3318".into(), "WEB-3317".into()];
+    snapshot.groups[0].issues = vec!["WEB-3308".into(), "WEB-3307".into()];
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
     assert_eq!(cell(&rows, 7), "", "{rows:#?}");
-    assert!(cell(&rows, 8).starts_with("WEB-3317"), "{rows:#?}");
+    assert!(cell(&rows, 8).starts_with("WEB-3307"), "{rows:#?}");
 }
 
 #[test]
@@ -1136,7 +1136,7 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
         "{frame}"
     );
     assert!(
-        frame.contains("WEB-3312"),
+        frame.contains("WEB-3302"),
         "scrolled past the only card:\n{frame}"
     );
 }
@@ -1706,7 +1706,7 @@ fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
 /// sits at frame rows 8..=11 of the third column at `W`×`H`.
 fn four_in_progress() -> LinearSnapshot {
     let mut snapshot = bound_with_view();
-    let template = snapshot.issues["WEB-3312"].clone();
+    let template = snapshot.issues["WEB-3302"].clone();
     let group = snapshot
         .groups
         .iter_mut()
@@ -1747,7 +1747,7 @@ fn assert_in_progress_geometry(frame: &str) {
     let title: String = frame_row(frame, 2).chars().skip(80).collect();
     assert!(title.contains("In Progress (4)"), "{frame}");
     let first: String = frame_row(frame, 3).chars().skip(80).collect();
-    assert!(first.contains("WEB-3312"), "{frame}");
+    assert!(first.contains("WEB-3302"), "{frame}");
     let gap: String = frame_row(frame, 7).chars().skip(81).take(38).collect();
     assert!(gap.trim().is_empty(), "{frame}");
     let second: String = frame_row(frame, 8).chars().skip(80).collect();
@@ -1790,10 +1790,10 @@ fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
 fn a_card_click_in_the_stacked_layout_opens_that_card() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 70, 20);
-    assert!(frame_row(&frame, 3).contains("WEB-3318"), "{frame}");
+    assert!(frame_row(&frame, 3).contains("WEB-3308"), "{frame}");
     d.handle(left_down(10, 4));
     assert_eq!(d.app.screen, Screen::LinearDetail);
-    assert_eq!(selection(&d), (0, 0, Some("WEB-3318".into())));
+    assert_eq!(selection(&d), (0, 0, Some("WEB-3308".into())));
 }
 
 #[test]
@@ -1807,7 +1807,7 @@ fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
         .iter_mut()
         .find(|g| g.key == "st-prog")
         .unwrap();
-    group.issues.retain(|id| id != "WEB-3312");
+    group.issues.retain(|id| id != "WEB-3302");
     d.handle(left_down(90, 9));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 0, Some("WEB-9001".into())));
@@ -1879,7 +1879,7 @@ fn a_click_while_the_detail_overlay_is_open_does_not_reach_the_board() {
     for (x, y) in [(1, 4), (90, 9), (95, 2)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearDetail, "click at {x},{y}");
-        assert_eq!(selection(&d), (2, 0, Some("WEB-3312".into())));
+        assert_eq!(selection(&d), (2, 0, Some("WEB-3302".into())));
     }
     wheel(&mut d, MouseEventKind::ScrollDown);
     assert_eq!(d.app.linear.as_ref().unwrap().sel_card, 0);
@@ -2226,7 +2226,7 @@ fn the_project_picker_lists_only_the_rows_the_membership_read_returned() {
         .filter(|l| l.contains('›') || l.contains("OPS"))
         .collect();
     assert!(
-        !picker.iter().any(|l| l.contains("AI Canvas Tools")),
+        !picker.iter().any(|l| l.contains("Frame Effects")),
         "the bound project is not a member row:\n{frame}"
     );
     let lists: Vec<Value> = log
@@ -2640,10 +2640,10 @@ fn binding(state: &str, path: &str, pane: &str) -> LinearBinding {
     }
 }
 
-/// `bound_with_view` with WEB-3312's bindings replaced.
+/// `bound_with_view` with WEB-3302's bindings replaced.
 fn card_client(bindings: Vec<LinearBinding>) -> FakeBoardClient {
     let mut snapshot = bound_with_view();
-    snapshot.issues.get_mut("WEB-3312").unwrap().bindings = bindings;
+    snapshot.issues.get_mut("WEB-3302").unwrap().bindings = bindings;
     fake_with(snapshot).with_linear_bind_handoff(handoff_result())
 }
 
@@ -2651,7 +2651,7 @@ fn card_client(bindings: Vec<LinearBinding>) -> FakeBoardClient {
 fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
     let client = card_client(vec![binding(
         "proposed",
-        "$SANDBOX/worktrees/web-3312",
+        "$SANDBOX/worktrees/web-3302",
         "wA:p2",
     )]);
     let (client, log) = RecordingClient::new(client);
@@ -2663,8 +2663,8 @@ fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
         vec![serde_json::json!({
             "space": "wA",
             "project": BOUND_PROJECT,
-            "issue": "WEB-3312",
-            "working_directory": "$SANDBOX/worktrees/web-3312",
+            "issue": "WEB-3302",
+            "working_directory": "$SANDBOX/worktrees/web-3302",
             "origin_socket": "/tmp/herdr-test.sock",
         })]
     );
@@ -2673,7 +2673,7 @@ fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
 #[test]
 fn b_acts_on_stale_and_misplaced_bindings_too() {
     for state in ["stale", "misplaced"] {
-        let client = card_client(vec![binding(state, "$SANDBOX/worktrees/web-3312", "wA:p2")]);
+        let client = card_client(vec![binding(state, "$SANDBOX/worktrees/web-3302", "wA:p2")]);
         let (client, log) = RecordingClient::new(client);
         let (mut d, _, _) = linear_driver(client, start_with_socket());
         open_web_3312(&mut d);
@@ -2685,8 +2685,8 @@ fn b_acts_on_stale_and_misplaced_bindings_too() {
 #[test]
 fn b_on_a_card_with_two_bindings_uses_the_selected_one_and_refuses_a_bound_one() {
     let client = card_client(vec![
-        binding("bound", "$SANDBOX/worktrees/web-3312", "wA:p1"),
-        binding("proposed", "$SANDBOX/worktrees/web-3312-retry", "wA:p2"),
+        binding("bound", "$SANDBOX/worktrees/web-3302", "wA:p1"),
+        binding("proposed", "$SANDBOX/worktrees/web-3302-retry", "wA:p2"),
     ]);
     let (client, log) = RecordingClient::new(client);
     let (mut d, _, _) = linear_driver(client, start_with_socket());
@@ -2701,9 +2701,9 @@ fn b_on_a_card_with_two_bindings_uses_the_selected_one_and_refuses_a_bound_one()
     assert_eq!(sent.len(), 1);
     assert_eq!(
         sent[0]["working_directory"],
-        "$SANDBOX/worktrees/web-3312-retry"
+        "$SANDBOX/worktrees/web-3302-retry"
     );
-    assert_eq!(sent[0]["issue"], "WEB-3312");
+    assert_eq!(sent[0]["issue"], "WEB-3302");
 }
 
 #[test]
@@ -2729,7 +2729,7 @@ fn b_on_a_card_with_no_binding_toasts_and_sends_nothing() {
     press(&mut d, KeyCode::Enter);
     assert_eq!(
         d.app.linear.as_ref().unwrap().detail.as_deref(),
-        Some("WEB-3318")
+        Some("WEB-3308")
     );
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("no worktree binding"), "{}", toast(&d));
@@ -2831,7 +2831,7 @@ fn columns_sort_by_workflow_state_type_not_the_views_order() {
         (4, "unstarted"),
     ] {
         snapshot.groups[index].kind = Some(kind.into());
-        snapshot.groups[index].issues = vec!["WEB-3318".into()];
+        snapshot.groups[index].issues = vec!["WEB-3308".into()];
     }
     let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let keys: Vec<&str> = d
@@ -2855,7 +2855,7 @@ fn columns_with_no_state_type_keep_the_views_order() {
     let mut snapshot = bound_with_view();
     for group in &mut snapshot.groups {
         group.kind = None;
-        group.issues = vec!["WEB-3318".into()];
+        group.issues = vec!["WEB-3308".into()];
     }
     let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let keys: Vec<&str> = d

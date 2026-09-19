@@ -2,7 +2,7 @@
   "groups": [
     {
       "issues": [
-        "WEB-3312"
+        "WEB-3302"
       ],
       "key": "In Progress",
       "kind": null,
@@ -14,7 +14,7 @@
     "version": "0.9.0"
   },
   "issues": {
-    "WEB-3312": {
+    "WEB-3302": {
       "assignee": null,
       "bindings": [
         {
@@ -27,11 +27,11 @@
             "id": "wA:t1",
             "label": "Plugin PM"
           },
-          "worktree_path": "$SANDBOX/worktrees/web-3312"
+          "worktree_path": "$SANDBOX/worktrees/web-3302"
         }
       ],
       "id": null,
-      "identifier": "WEB-3312",
+      "identifier": "WEB-3302",
       "labels": [],
       "priority": null,
       "stale": true,
@@ -58,7 +58,7 @@
   },
   "project": {
     "id": "44444444-4444-4444-8444-444444444444",
-    "name": "AI Canvas Tools",
+    "name": "Frame Effects",
     "team_key": null,
     "url": null
   },

@@ -2,10 +2,10 @@
 source: crates/board-tui/tests/linear/mod.rs
 expression: frame
 ---
-" Linear  AI Can┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐               "
+" Linear  Frame ┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐               "
 " Enter detail ·│not bound                                                                              ▲│               "
 "┌ Backlog (1) ─│  s            focus the spaces strip                                                  ││──────────────┐"
-"│WEB-3318  P0  │  ↑/↓ Enter    strip: pick a project                                                   ││              │"
+"│WEB-3308  P0  │  ↑/↓ Enter    strip: pick a project                                                   ││              │"
 "│Example issue:│  click strip  choose a project for it                                                 ││tem is empty  │"
 "│an item is sti│  t            strip: spaces / tabs                                                    ││              │"
 "│@Example User │  r / R        refresh after a bind                                                    ││              │"

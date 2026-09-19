@@ -2,10 +2,10 @@
 source: crates/board-tui/tests/linear/mod.rs
 expression: frame
 ---
-" Linear  AI Can┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐               "
+" Linear  Frame ┌ Help — Linear mode ────────────────────────────────────────────────────────────────────┐               "
 " Enter detail ·│board                                                                                  ▲│               "
 "┌ Backlog (1) ─│  ←/→ h/l      focus column                                                            █│──────────────┐"
-"│WEB-3318  P0  │  ↑/↓ k/j      focus card                                                              █│              │"
+"│WEB-3308  P0  │  ↑/↓ k/j      focus card                                                              █│              │"
 "│Example issue:│  Enter        card detail                                                             █│tem is empty  │"
 "│an item is sti│  r / R        refresh snapshot                                                        █│              │"
 "│@Example User │  ?            this help (any screen)                                                  █│              │"
