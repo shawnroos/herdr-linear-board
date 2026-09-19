@@ -6,7 +6,9 @@ other refusing the build it was told to accept.**
 `crates/board-herdr/src/client.rs` gates the runtime connection on the pinned
 Herdr release, and `e2e/lib.sh` gates every e2e scenario on the same release —
 twice, once on `herdr --version` and once on what the socket's `ping` reports.
-Three comparisons, one rule.
+The four opt-in real-provider smokes (`real-pi`, `real-claude-haiku`,
+`real-codex`, `real-opencode`) each compare twice more, the same two ways.
+Eleven comparisons, one rule.
 
 Commit `6acb8b1` fixed the runtime one: a preview build (`0.9.0-preview.<date>-<sha>`)
 ships the same socket protocol as the release it previews, so it passes. The two
@@ -34,9 +36,17 @@ rg -n 'SUPPORTED_HERDR_VERSION'        # and the constant
 ```
 
 A rule that reads "accept the release or a preview of it" belongs in one place
-both sites call. It is not worth a shared crate for a shell script and a Rust
-client, so the next best thing is what this file is for: the two sites know
-about each other now.
+every site calls. It is not worth a shared crate for a shell script and a Rust
+client, so the next best thing is what this file is for: the sites know about
+each other now.
+
+Two of them are fixed: the runtime client and `e2e/lib.sh`, whose rule
+`scripts/tests/test_e2e_ci.py` now asserts as "release or preview" rather than
+as an exact string — the pinned string was how the gap survived here in the
+first place. The eight comparisons in the four real-provider smokes still match
+exactly. They are opt-in, outside CI, and refuse loudly rather than passing
+wrongly, so they were left alone deliberately; the fix is the same one-line
+`case` when someone runs one on a preview build.
 
 ## The general shape
 
