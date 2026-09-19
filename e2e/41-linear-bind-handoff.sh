@@ -2,7 +2,7 @@
 # 41-linear-bind-handoff.sh — `linear.bind_handoff` opens exactly one unfocused `bind` tab in the
 # caller's space and starts a REAL interactive Claude there whose startup argv is the plugin's bind
 # line; a refused id or working directory creates no tab. When the installed work plugin is at least
-# 0.4.0 the skill's confirmation question is declined and the plugin store must be unchanged.
+# the version floor the skill's confirmation question is declined and the plugin store must be unchanged.
 #
 # Not provider-free: this scenario starts the person's own `claude` with their real HOME, because
 # the bind skill, its trust dialog and its credentials live there. It skips (exit 3) on a machine
@@ -11,7 +11,7 @@ set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib.sh"
 
 BIND_PROJECT=e2e-project
-BIND_FLOOR=0.4.0
+BIND_FLOOR="$E2E_PLUGIN_VERSION_FLOOR"
 
 # lib.sh points HOME at the scenario root, and run-all starts children without HOME at all, so the
 # person's real home comes from the password database.
