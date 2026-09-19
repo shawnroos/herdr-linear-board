@@ -18,6 +18,9 @@ use crossterm::event::{KeyCode, MouseEventKind};
 use serde_json::Value;
 
 const W: u16 = 120;
+/// How deep the back-stack test walks, and the cap it must hit.
+const HOPS: usize = 80;
+const CAP: usize = 32;
 const H: u16 = 32;
 
 /// `bound-with-view` with the daemon-attached pane statuses: the first pane
@@ -3293,6 +3296,31 @@ fn a_back_step_shows_the_previous_page_immediately() {
     assert!(frame.contains("Sub-issues"), "{frame}");
 }
 
+/// The generation the reducer issues must be the generation the driver hands
+/// back. Only the shipping read path carries it -- the overlapping-read tests
+/// build their arrivals by hand -- and a read answering with a generation the
+/// page never issued is dropped forever: the document never lands, the page
+/// stays on "loading" because the in-flight marker is never cleared, and `r`
+/// cannot rescue it because no error was recorded either.
+#[test]
+fn the_shipping_read_path_answers_with_the_generation_it_was_given() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    open_web_3302(&mut d);
+
+    let (issue, doc) = detail_state(&d)
+        .detail_doc
+        .as_ref()
+        .expect("the read answered but its document was dropped");
+    assert_eq!(issue, "WEB-3302");
+    assert_eq!(doc.issue.as_ref().unwrap().identifier, "WEB-3302");
+    assert!(
+        detail_state(&d).detail_in_flight.is_none(),
+        "the page is still marked loading after its read answered"
+    );
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
 /// Two reads for the SAME issue, told apart by their generation. A page that
 /// compared only the identifier applied both, in whatever order they landed.
 fn feed_issue(d: &mut Driver, issue: &str, generation: u64, title: &str) {
@@ -3396,9 +3424,10 @@ fn an_older_read_dropped_first_leaves_the_newer_one_in_flight() {
     assert!(detail_state(&d).detail_in_flight.is_none());
 }
 
-/// A document whose only sub-issue is `child`, so Enter on it walks to a page
-/// that walks straight back here. Two of these facing each other are the cycle
-/// that grows the back stack without bound.
+/// A document whose only sub-issue is `child`. A chain of these is a walk that
+/// pushes a back step on every Enter and never pops one, and because every
+/// issue in it is distinct, which end of a capped stack was dropped is visible
+/// in what the stack holds.
 fn doc_linking_to(identifier: &str, child: &str) -> board_core::protocol::LinearIssueDocument {
     use board_core::protocol::*;
     let mut doc = issue_doc(identifier);
@@ -3422,18 +3451,27 @@ fn doc_linking_to(identifier: &str, child: &str) -> board_core::protocol::Linear
 /// so the recent ones - the only ones anyone walks back through - are kept.
 #[test]
 fn the_back_stack_stops_growing_at_its_cap() {
-    let client = fake_with(bound_with_view())
-        .with_linear_issue("WEB-3302", doc_linking_to("WEB-3302", "WEB-3319"))
-        .with_linear_issue("WEB-3319", doc_linking_to("WEB-3319", "WEB-3302"));
+    // A chain: WEB-3302 -> WEB-4001 -> WEB-4002 -> ... Every hop opens an issue
+    // nothing has opened before, so the steps the cap keeps are identifiable.
+    let mut client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", doc_linking_to("WEB-3302", "WEB-4001"));
+    for n in 1..=HOPS {
+        client = client.with_linear_issue(
+            &format!("WEB-{:04}", 4000 + n),
+            doc_linking_to(
+                &format!("WEB-{:04}", 4000 + n),
+                &format!("WEB-{:04}", 4001 + n),
+            ),
+        );
+    }
     let mut d = linear_driver_deferred(client, linear_start());
     d.deliver_pending_linear_snapshot();
     open_web_3302(&mut d);
     assert!(d.deliver_pending_linear_issue());
     d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
 
-    // 80 hops back and forth, each one Enter on the other issue's row. Well
-    // past any depth a person reaches.
-    for _ in 0..80 {
+    // Well past any depth a person reaches.
+    for _ in 0..HOPS {
         let rows = board_tui::view::issue_page_rows(&d.app);
         let row = rows
             .iter()
@@ -3447,10 +3485,20 @@ fn the_back_stack_stops_growing_at_its_cap() {
     }
 
     let stack = &detail_state(&d).detail_stack;
-    assert_eq!(stack.len(), 32, "the back stack is not capped at 32 steps");
-    // The steps kept are the most recent ones: the last one pushed is the page
-    // the next Esc goes back to.
-    assert_eq!(stack.last().unwrap().issue, "WEB-3319");
+    assert_eq!(stack.len(), CAP, "the back stack is not capped");
+    // Which end was dropped, not just how many. The steps kept are the MOST
+    // RECENT ones: the last pushed is the page the next Esc goes back to, and
+    // the first is the oldest step still reachable. Keeping the other end would
+    // walk the reader back to where they were dozens of pages ago.
+    let pushed = |n: usize| {
+        if n == 1 {
+            "WEB-3302".to_string()
+        } else {
+            format!("WEB-{:04}", 4000 + n - 1)
+        }
+    };
+    assert_eq!(stack.last().unwrap().issue, pushed(HOPS));
+    assert_eq!(stack.first().unwrap().issue, pushed(HOPS - CAP + 1));
 }
 
 /// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the

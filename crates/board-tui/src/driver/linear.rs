@@ -352,21 +352,9 @@ impl Driver {
     /// Returns whether one was pending. A test drives overlapping reads by
     /// holding two and delivering them in the order it wants.
     pub fn deliver_pending_linear_issue(&mut self) -> bool {
-        self.deliver_held_issue(|p| matches!(p, Pending::Issue { .. }))
-    }
-
-    /// Run the held issue read numbered `generation`, wherever it sits in the
-    /// queue. Two reads for the SAME issue landing in the order they were NOT
-    /// asked in is the case the generation exists for, and the oldest-first
-    /// helper above cannot produce it.
-    pub fn deliver_pending_linear_issue_generation(&mut self, generation: u64) -> bool {
-        self.deliver_held_issue(
-            move |p| matches!(p, Pending::Issue { generation: g, .. } if *g == generation),
-        )
-    }
-
-    fn deliver_held_issue(&mut self, want: impl Fn(&Pending) -> bool) -> bool {
-        let Some(Pending::Issue { issue, generation }) = self.take_pending(want) else {
+        let Some(Pending::Issue { issue, generation }) =
+            self.take_pending(|p| matches!(p, Pending::Issue { .. }))
+        else {
             return false;
         };
         let params = LinearIssueParams {
