@@ -20,7 +20,10 @@ use crate::Driver;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pending {
     Snapshot,
-    Issue(String),
+    Issue {
+        issue: String,
+        generation: u64,
+    },
     List {
         kind: LinearListKind,
         id: Option<String>,
@@ -196,9 +199,9 @@ impl Driver {
         );
     }
 
-    pub(super) fn fetch_linear_issue(&mut self, issue: String) {
+    pub(super) fn fetch_linear_issue(&mut self, issue: String, generation: u64) {
         if let Some(pending) = self.deferred_linear.as_mut() {
-            pending.push_back(Pending::Issue(issue));
+            pending.push_back(Pending::Issue { issue, generation });
             return;
         }
         let params = LinearIssueParams {
@@ -211,6 +214,7 @@ impl Driver {
             move |client| client.linear_issue(&params),
             move |result| LinearArrival::Issue {
                 issue,
+                generation,
                 result: Box::new(result),
             },
         );
@@ -348,8 +352,21 @@ impl Driver {
     /// Returns whether one was pending. A test drives overlapping reads by
     /// holding two and delivering them in the order it wants.
     pub fn deliver_pending_linear_issue(&mut self) -> bool {
-        let Some(Pending::Issue(issue)) = self.take_pending(|p| matches!(p, Pending::Issue(_)))
-        else {
+        self.deliver_held_issue(|p| matches!(p, Pending::Issue { .. }))
+    }
+
+    /// Run the held issue read numbered `generation`, wherever it sits in the
+    /// queue. Two reads for the SAME issue landing in the order they were NOT
+    /// asked in is the case the generation exists for, and the oldest-first
+    /// helper above cannot produce it.
+    pub fn deliver_pending_linear_issue_generation(&mut self, generation: u64) -> bool {
+        self.deliver_held_issue(
+            move |p| matches!(p, Pending::Issue { generation: g, .. } if *g == generation),
+        )
+    }
+
+    fn deliver_held_issue(&mut self, want: impl Fn(&Pending) -> bool) -> bool {
+        let Some(Pending::Issue { issue, generation }) = self.take_pending(want) else {
             return false;
         };
         let params = LinearIssueParams {
@@ -360,6 +377,7 @@ impl Driver {
         let result = self.client.linear_issue(&params);
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::Issue {
             issue,
+            generation,
             result: Box::new(classify(result, LINEAR_ISSUE_CLIENT_TIMEOUT)),
         })));
         true
@@ -545,7 +563,10 @@ mod tests {
                 kind: LinearListKind::Spaces,
                 id: None,
             },
-            Effect::LinearIssue { issue: s() },
+            Effect::LinearIssue {
+                issue: s(),
+                generation: 1,
+            },
             Effect::BindHandoff {
                 space: s(),
                 project: s(),

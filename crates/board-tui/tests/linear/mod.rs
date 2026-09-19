@@ -2945,6 +2945,15 @@ fn detail_state(d: &Driver) -> &board_tui::app::LinearState {
     d.app.linear.as_ref().unwrap()
 }
 
+/// The issue a read is in flight for, without its generation. A test that
+/// cares which of two reads is running asserts on the generation itself.
+fn in_flight_issue(d: &Driver) -> Option<&str> {
+    detail_state(d)
+        .detail_in_flight
+        .as_ref()
+        .map(|(issue, _)| issue.as_str())
+}
+
 /// R14 -- the page opens on what the snapshot already holds and asks for the
 /// rest; it never waits on a blank screen.
 #[test]
@@ -2955,10 +2964,7 @@ fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
 
     open_web_3302(&mut d);
 
-    assert_eq!(
-        detail_state(&d).detail_in_flight.as_deref(),
-        Some("WEB-3302")
-    );
+    assert_eq!(in_flight_issue(&d), Some("WEB-3302"));
     assert!(detail_state(&d).detail_doc.is_none(), "not landed yet");
 
     assert!(d.deliver_pending_linear_issue());
@@ -3028,7 +3034,7 @@ fn a_failed_read_is_retryable_with_r() {
 
     press(&mut d, KeyCode::Char('r'));
     assert_eq!(
-        detail_state(&d).detail_in_flight.as_deref(),
+        in_flight_issue(&d),
         Some("WEB-3302"),
         "r did not re-send the issue read"
     );
@@ -3075,7 +3081,7 @@ fn opening_the_same_issue_again_reads_it_again() {
     assert_eq!(d.app.screen, Screen::LinearDetail);
 
     assert_eq!(
-        detail_state(&d).detail_in_flight.as_deref(),
+        in_flight_issue(&d),
         Some("WEB-3302"),
         "the second open did not read again"
     );
@@ -3279,9 +3285,115 @@ fn a_back_step_shows_the_previous_page_immediately() {
     let (issue, doc) = state.detail_doc.as_ref().expect("previous page restored");
     assert_eq!(issue, "WEB-3302");
     assert_eq!(doc.issue.as_ref().unwrap().children.len(), 2);
-    assert_eq!(state.detail_in_flight.as_deref(), Some("WEB-3302"));
+    assert_eq!(
+        state.detail_in_flight.as_ref().map(|(i, _)| i.as_str()),
+        Some("WEB-3302")
+    );
     let frame = draw(&d.app, W, H);
     assert!(frame.contains("Sub-issues"), "{frame}");
+}
+
+/// Two reads for the SAME issue, told apart by their generation. A page that
+/// compared only the identifier applied both, in whatever order they landed.
+fn feed_issue(d: &mut Driver, issue: &str, generation: u64, title: &str) {
+    let mut doc = issue_doc(issue);
+    doc.issue.as_mut().unwrap().title = title.into();
+    d.handle(Msg::LinearArrived(Box::new(
+        board_tui::app::LinearArrival::Issue {
+            issue: issue.into(),
+            generation,
+            result: Box::new(Ok(doc)),
+        },
+    )));
+}
+
+/// The generation of the read in flight, which is what a second read for the
+/// same issue increments.
+fn in_flight_generation(d: &Driver) -> u64 {
+    detail_state(d)
+        .detail_in_flight
+        .as_ref()
+        .expect("a read is in flight")
+        .1
+}
+
+/// Walk into the first sub-issue and straight back, leaving that page's read
+/// outstanding. Repeating it is what puts two reads for one issue in flight.
+fn hop_into_a_sub_issue_and_back(d: &mut Driver) {
+    for _ in 0..5 {
+        press(d, KeyCode::Char('k'));
+    }
+    press(d, KeyCode::Enter);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3319"),
+        "Enter did not open the sub-issue"
+    );
+    press(d, KeyCode::Esc);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3302"),
+        "Esc did not come back"
+    );
+}
+
+/// Two reads for the same issue can be outstanding at once -- a second hop out
+/// and back starts one while the first is still running -- and the older can
+/// answer last. It must not paint over the newer one.
+#[test]
+fn an_older_read_for_the_open_issue_does_not_overwrite_a_newer_one() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    hop_into_a_sub_issue_and_back(&mut d);
+    let older = in_flight_generation(&d);
+    hop_into_a_sub_issue_and_back(&mut d);
+    let newer = in_flight_generation(&d);
+    assert!(newer > older, "the second hop reused the first read");
+
+    feed_issue(&mut d, "WEB-3302", newer, "the newer read");
+    feed_issue(&mut d, "WEB-3302", older, "the older read");
+
+    let (_, doc) = detail_state(&d).detail_doc.as_ref().expect("a document");
+    assert_eq!(
+        doc.issue.as_ref().unwrap().title,
+        "the newer read",
+        "the older read painted over the newer one"
+    );
+}
+
+/// The same pair the other way round: the older read answers first, while the
+/// newer one is still running. Dropping it must leave the page loading, because
+/// the read the in-flight marker names has not answered yet.
+#[test]
+fn an_older_read_dropped_first_leaves_the_newer_one_in_flight() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    hop_into_a_sub_issue_and_back(&mut d);
+    let older = in_flight_generation(&d);
+    hop_into_a_sub_issue_and_back(&mut d);
+    let newer = in_flight_generation(&d);
+
+    feed_issue(&mut d, "WEB-3302", older, "the older read");
+    assert_eq!(
+        detail_state(&d).detail_in_flight.as_ref().map(|(_, g)| *g),
+        Some(newer),
+        "dropping the older read cleared the newer read's in-flight marker"
+    );
+
+    feed_issue(&mut d, "WEB-3302", newer, "the newer read");
+    let (_, doc) = detail_state(&d).detail_doc.as_ref().expect("a document");
+    assert_eq!(doc.issue.as_ref().unwrap().title, "the newer read");
+    assert!(detail_state(&d).detail_in_flight.is_none());
 }
 
 /// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the

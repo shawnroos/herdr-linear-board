@@ -46,6 +46,10 @@ pub enum LinearArrival {
         /// The issue this read was asked for. Compared against the open page
         /// before anything is applied.
         issue: String,
+        /// The read this answers, as `request_issue` numbered it. Compared
+        /// against the read still in flight, because the identifier alone
+        /// cannot tell two reads for the same issue apart.
+        generation: u64,
         result: Box<Result<LinearIssueDocument, LinearFailure>>,
     },
     List {
@@ -130,8 +134,14 @@ pub struct LinearState {
     /// fetched for. Keyed so a read that lands after the reader has moved on is
     /// dropped rather than painted over the page they are looking at.
     pub detail_doc: Option<(String, LinearIssueDocument)>,
-    /// The issue a `linear.issue` read is in flight for.
-    pub detail_in_flight: Option<String>,
+    /// The issue a `linear.issue` read is in flight for, and which read it is.
+    /// Esc back to an issue whose first read has not landed starts a SECOND
+    /// read for that same issue, so the identifier alone cannot say which
+    /// answer is the current one.
+    pub detail_in_flight: Option<(String, u64)>,
+    /// How many issue reads this page has started. Only ever increments; it
+    /// numbers reads, it does not count them down.
+    pub detail_reads: u64,
     /// What the row the reader opened already knew about a linked issue. The
     /// board's snapshot holds only the issues on the board, and a sub-issue or
     /// relation is deliberately off it, so without this the page would have
@@ -202,6 +212,7 @@ impl LinearState {
             bind_note: None,
             detail_doc: None,
             detail_in_flight: None,
+            detail_reads: 0,
             detail_seed: None,
             detail_error: None,
             detail_selection: None,
@@ -503,8 +514,12 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
                 super::linear_picker::list_arrived(app, kind, id, result);
                 vec![]
             }
-            LinearArrival::Issue { issue, result } => {
-                issue_arrived(app, &issue, *result);
+            LinearArrival::Issue {
+                issue,
+                generation,
+                result,
+            } => {
+                issue_arrived(app, &issue, generation, *result);
                 vec![]
             }
             LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
@@ -520,10 +535,16 @@ pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
-    if state.detail_in_flight.as_deref() == Some(issue) {
+    if state
+        .detail_in_flight
+        .as_ref()
+        .is_some_and(|(open, _)| open == issue)
+    {
         return vec![];
     }
-    state.detail_in_flight = Some(issue.to_string());
+    state.detail_reads += 1;
+    let generation = state.detail_reads;
+    state.detail_in_flight = Some((issue.to_string(), generation));
     state.detail_error = None;
     // The document for a DIFFERENT issue is dropped here rather than left on
     // screen under the new issue's title.
@@ -532,22 +553,40 @@ pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
     }
     vec![Effect::LinearIssue {
         issue: issue.to_string(),
+        generation,
     }]
 }
 
 /// R18 -- a read that lands after the reader has opened another issue is
 /// dropped. Overlapping reads are the normal case once Enter opens a linked
 /// issue in place, so this is the rule, not an edge case.
-fn issue_arrived(app: &mut App, issue: &str, result: Result<LinearIssueDocument, LinearFailure>) {
+fn issue_arrived(
+    app: &mut App,
+    issue: &str,
+    generation: u64,
+    result: Result<LinearIssueDocument, LinearFailure>,
+) {
     let Some(state) = app.linear.as_mut() else {
         return;
     };
+    let current = state
+        .detail_in_flight
+        .as_ref()
+        .is_some_and(|(_, open)| *open == generation);
     if state.detail.as_deref() != Some(issue) {
         // Not the page on screen. Clear the in-flight marker only when it is
         // this read's, so a newer read for the open issue keeps its own.
-        if state.detail_in_flight.as_deref() == Some(issue) {
+        if current {
             state.detail_in_flight = None;
         }
+        return;
+    }
+    if !current {
+        // The open issue, but a read it has already superseded: Esc back to an
+        // issue whose first read was still running starts a second read for it,
+        // and the first can land after. Applying it would paint an older copy
+        // over a newer one. The in-flight marker stays, because the read it
+        // names is still running.
         return;
     }
     state.detail_in_flight = None;
