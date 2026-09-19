@@ -161,6 +161,11 @@ pub struct LinearState {
     pub detail_stack: Vec<DetailStep>,
 }
 
+/// How many issues back Esc can walk. Each step holds a whole fetched
+/// document, so the stack is bounded by count rather than left to grow with
+/// the session. Deep enough that a real browse never reaches it.
+const DETAIL_STACK_MAX: usize = 32;
+
 /// One step of the issue page's history.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailStep {
@@ -1116,6 +1121,14 @@ fn open_linked_issue(
         seed: state.detail_seed.clone(),
         selection: state.detail_selection.clone(),
     });
+    // Each step holds a whole document - description, comments, history - and
+    // nothing else bounds the walk, so a long browse would keep every issue it
+    // passed through. Past the cap the oldest step is dropped, which costs the
+    // far end of a walk-back nobody takes and never the recent steps.
+    if state.detail_stack.len() > DETAIL_STACK_MAX {
+        let over = state.detail_stack.len() - DETAIL_STACK_MAX;
+        state.detail_stack.drain(..over);
+    }
     state.detail = Some(identifier.to_string());
     state.detail_selection = None;
     state.detail_doc = None;

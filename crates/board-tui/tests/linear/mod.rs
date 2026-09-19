@@ -3396,6 +3396,63 @@ fn an_older_read_dropped_first_leaves_the_newer_one_in_flight() {
     assert!(detail_state(&d).detail_in_flight.is_none());
 }
 
+/// A document whose only sub-issue is `child`, so Enter on it walks to a page
+/// that walks straight back here. Two of these facing each other are the cycle
+/// that grows the back stack without bound.
+fn doc_linking_to(identifier: &str, child: &str) -> board_core::protocol::LinearIssueDocument {
+    use board_core::protocol::*;
+    let mut doc = issue_doc(identifier);
+    doc.issue.as_mut().unwrap().children = vec![LinearLinkedIssue {
+        id: Some(child.to_lowercase()),
+        identifier: child.into(),
+        title: format!("{child} title"),
+        state: LinearIssueState {
+            id: Some("todo".into()),
+            name: Some("Todo".into()),
+            kind: Some("unstarted".into()),
+        },
+    }];
+    doc
+}
+
+/// Each back step holds a whole document, so the walk-back is bounded by count
+/// rather than left to grow with the session. Two issues that link to each
+/// other push a step on every Enter and never pop one, which is the walk that
+/// used to keep every document it passed through. The oldest step goes first,
+/// so the recent ones - the only ones anyone walks back through - are kept.
+#[test]
+fn the_back_stack_stops_growing_at_its_cap() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", doc_linking_to("WEB-3302", "WEB-3319"))
+        .with_linear_issue("WEB-3319", doc_linking_to("WEB-3319", "WEB-3302"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // 80 hops back and forth, each one Enter on the other issue's row. Well
+    // past any depth a person reaches.
+    for _ in 0..80 {
+        let rows = board_tui::view::issue_page_rows(&d.app);
+        let row = rows
+            .iter()
+            .find(|r| matches!(r.kind, board_tui::view::IssueRowKind::Issue(_)))
+            .expect("a linked-issue row")
+            .kind
+            .clone();
+        d.app.linear.as_mut().unwrap().detail_selection = Some(row);
+        press(&mut d, KeyCode::Enter);
+        assert!(d.deliver_pending_linear_issue());
+    }
+
+    let stack = &detail_state(&d).detail_stack;
+    assert_eq!(stack.len(), 32, "the back stack is not capped at 32 steps");
+    // The steps kept are the most recent ones: the last one pushed is the page
+    // the next Esc goes back to.
+    assert_eq!(stack.last().unwrap().issue, "WEB-3319");
+}
+
 /// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
 /// page's own issue whatever row is selected.
 #[test]
