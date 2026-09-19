@@ -293,10 +293,7 @@ fn wrap(
                         break;
                     }
                 }
-                // A prefix at least as wide as the column leaves no room on a
-                // fresh line either, so without a floor of one column the split
-                // below takes nothing and the word is dropped silently.
-                let room = width.saturating_sub(used).max(1);
+                let room = width.saturating_sub(used);
                 if word.width() <= room {
                     current.push(Span::styled(word.clone(), span.style));
                     used += word.width();
@@ -304,9 +301,22 @@ fn wrap(
                 }
                 // Wider than a whole line even at the margin: break it rather
                 // than let it run past the column.
-                let (head, tail) = split_at_width(&word, room);
+                let (mut head, mut tail) = split_at_width(&word, room);
+                // Nothing fit at all -- a prefix as wide as the column, or a
+                // character wider than what is left. Take ONE character anyway:
+                // a glyph that overflows by a cell is a visible imperfection,
+                // and dropping it is silent data loss. Flooring `room` instead
+                // would only move the same bug to the first double-width
+                // character.
                 if head.is_empty() {
-                    break;
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            head = first.to_string();
+                            tail = chars.collect();
+                        }
+                        None => break,
+                    }
                 }
                 current.push(Span::styled(head, span.style));
                 used = width;
@@ -587,6 +597,9 @@ mod tests {
 
     /// A prefix as wide as the column leaves no room on a fresh line either, so
     /// the wrap could take nothing and drop the text entirely. Found in review.
+    /// The first fix floored the room at one CELL, which still dropped a
+    /// double-width character -- the same bug one glyph along -- so the wide
+    /// case is asserted here beside the ASCII one.
     #[test]
     fn a_prefix_as_wide_as_the_column_still_renders_its_text() {
         // A bullet in a 2-cell column: the marker alone fills it.
@@ -603,6 +616,14 @@ mod tests {
         assert!(
             rendered.join("").contains('b'),
             "the text was dropped: {rendered:?}"
+        );
+
+        // A character WIDER than the room left is the same bug one glyph along.
+        let out = render("- 漢字", 2);
+        let rendered = text(&out);
+        assert!(
+            rendered.join("").contains('漢'),
+            "a wide character was dropped: {rendered:?}"
         );
     }
 

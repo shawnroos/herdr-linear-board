@@ -3457,3 +3457,43 @@ fn an_unavailable_document_is_a_failure_not_an_empty_issue() {
     // And the snapshot fields are still there to read.
     assert!(frame.contains("WEB-3312"), "{frame}");
 }
+
+/// R8a's page half. A read that stopped at its cap has to say so where the
+/// reader is looking: without this the page presents what came back as the
+/// whole thread, and the sub-issue count is a WRONG number rather than an
+/// incomplete one.
+#[test]
+fn a_truncated_document_says_so_and_does_not_print_a_false_count() {
+    let mut doc = page_document();
+    doc.status = "partial".into();
+    doc.truncated = vec!["children".into(), "comments".into()];
+    doc.message = Some("read the first 50 of children and comments".into());
+
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", doc);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    // The count says the total is at least this, not exactly this.
+    assert!(frame.contains("Sub-issues  1/2+"), "{frame}");
+    assert!(!frame.contains("Sub-issues  1/2 "), "{frame}");
+    // And Activity says where the rest is.
+    assert!(frame.contains("the rest is in Linear"), "{frame}");
+}
+
+/// The same page with nothing truncated makes neither claim.
+#[test]
+fn an_untruncated_document_prints_a_plain_count_and_no_note() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3312", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3312(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("Sub-issues  1/2"), "{frame}");
+    assert!(!frame.contains("1/2+"), "{frame}");
+    assert!(!frame.contains("the rest is in Linear"), "{frame}");
+}

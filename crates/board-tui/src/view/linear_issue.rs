@@ -205,6 +205,7 @@ fn main_column(
     now: i64,
     issue: &Subject<'_>,
     detail: Option<&LinearIssueDetail>,
+    truncated: &[String],
     loading: bool,
     width: usize,
     rows: &mut Vec<Row>,
@@ -233,10 +234,12 @@ fn main_column(
             .iter()
             .filter(|c| c.state.kind.as_deref() == Some("completed"))
             .count();
-        out.push(heading(
-            &format!("Sub-issues  {done}/{}", children.len()),
-            width,
-        ));
+        // `3/50` would be a WRONG number when the read stopped at its cap, not
+        // merely an incomplete one: the total is however many rows came back,
+        // which is not how many the issue has. The `+` says so.
+        let more = truncated.iter().any(|s| s == "children");
+        let total = format!("{}{}", children.len(), if more { "+" } else { "" });
+        out.push(heading(&format!("Sub-issues  {done}/{total}"), width));
         for child in children {
             rows.push(Row {
                 line: out.len(),
@@ -270,6 +273,14 @@ fn main_column(
                 event.created_at.as_deref(),
             ),
             width,
+        )));
+    }
+    // R8a -- a read that stopped at its cap says so where the reader is looking,
+    // rather than presenting what came back as the whole thread.
+    if truncated.iter().any(|s| s == "comments" || s == "history") {
+        out.push(Line::from(Span::styled(
+            fit("  the rest is in Linear — u opens it", width),
+            dim(),
         )));
     }
     for comment in comments.iter().filter(|c| c.parent_id.is_none()) {
@@ -606,9 +617,17 @@ pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> 
         .filter(|(id, _)| Some(id.as_str()) == state.detail.as_deref())
         .and_then(|(_, doc): &(String, LinearIssueDocument)| doc.issue.as_ref());
     let loading = state.detail_in_flight.is_some() && state.detail_error.is_none();
+    let truncated: &[String] = state
+        .detail_doc
+        .as_ref()
+        .filter(|(id, _)| Some(id.as_str()) == state.detail.as_deref())
+        .map(|(_, doc)| doc.truncated.as_slice())
+        .unwrap_or(&[]);
 
     let mut rows = vec![];
-    let main = main_column(app.now, &issue, detail, loading, main_w, &mut rows);
+    let main = main_column(
+        app.now, &issue, detail, truncated, loading, main_w, &mut rows,
+    );
     // The sidebar's rows follow the main column's, which is the order they are
     // read in at both widths: the narrow layout is this list flattened.
     let mut sidebar_rows = vec![];
