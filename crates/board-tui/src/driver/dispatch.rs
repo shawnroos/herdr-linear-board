@@ -275,6 +275,7 @@ impl Driver {
             Effect::Quit => self.app.should_quit = true,
             Effect::LinearSnapshot => self.fetch_linear_snapshot(),
             Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
+            Effect::LinearIssue { issue, generation } => self.fetch_linear_issue(issue, generation),
             Effect::BindHandoff {
                 space,
                 project,

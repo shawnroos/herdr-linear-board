@@ -12,11 +12,12 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DeletedResult, Event, LinearBindHandoffParams, LinearBindHandoffResult,
-    LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
-    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
-    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
-    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
-    RunFocusResult, TemplateApplyParams, Trigger,
+    LinearIssueDocument, LinearIssueParams, LinearListKind, LinearListParams, LinearListResult,
+    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
+    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
+    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
+    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
+    TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -65,6 +66,12 @@ pub struct FakeLinear {
     pub focus: Result<PaneFocusResult, String>,
     pub lists: std::collections::BTreeMap<LinearListKind, Result<LinearListResult, String>>,
     pub bind_handoff: Result<LinearBindHandoffResult, String>,
+    /// Keyed by the issue asked for, so a test can seed several pages and prove
+    /// a result is applied only to the issue still open.
+    pub issues: std::collections::BTreeMap<String, Result<LinearIssueDocument, String>>,
+    /// An issue with no seeded document: `None` answers "this plugin ships no
+    /// such script" (code 7), which is a different remedy from a failed read.
+    pub issue_unsupported: bool,
 }
 
 impl Default for FakeLinear {
@@ -77,6 +84,8 @@ impl Default for FakeLinear {
             }),
             lists: std::collections::BTreeMap::new(),
             bind_handoff: Err("no linear bind handoff fixture configured".into()),
+            issues: std::collections::BTreeMap::new(),
+            issue_unsupported: false,
         }
     }
 }
@@ -175,6 +184,32 @@ impl FakeBoardClient {
         message: &str,
     ) -> FakeBoardClient {
         self.linear.lists.insert(kind, Err(message.to_string()));
+        self
+    }
+
+    /// Seed the document `linear.issue` answers for `issue`.
+    pub fn with_linear_issue(
+        mut self,
+        issue: &str,
+        document: LinearIssueDocument,
+    ) -> FakeBoardClient {
+        self.linear.issues.insert(issue.to_string(), Ok(document));
+        self
+    }
+
+    /// Make `linear.issue` for `issue` fail with `message` (a code-6 plugin
+    /// failure: the read ran and did not answer).
+    pub fn with_linear_issue_error(mut self, issue: &str, message: &str) -> FakeBoardClient {
+        self.linear
+            .issues
+            .insert(issue.to_string(), Err(message.to_string()));
+        self
+    }
+
+    /// Answer every `linear.issue` with code 7: the plugin is installed and
+    /// current but ships no `bin/work-issue.sh`.
+    pub fn with_linear_issue_unsupported(mut self) -> FakeBoardClient {
+        self.linear.issue_unsupported = true;
         self
     }
 
@@ -804,6 +839,33 @@ fake_methods!(db, config, linear, params, {
                 return Err(crate::Error::PluginUnavailable(format!(
                     "no linear list fixture configured for {}",
                     serde_json::to_value(p.kind)?.as_str().unwrap_or_default()
+                ))
+                .into())
+            }
+        }
+    },
+    "linear.issue" => {
+        let p: LinearIssueParams = serde_json::from_value(params)?;
+        if p.issue.trim().is_empty() {
+            return Err(
+                crate::Error::BadRequest("linear.issue requires an issue".into()).into(),
+            );
+        }
+        if linear.issue_unsupported {
+            return Err(crate::Error::PluginOpUnsupported(
+                "work plugin has no bin/work-issue.sh".into(),
+            )
+            .into());
+        }
+        match linear.issues.get(p.issue.trim()) {
+            Some(Ok(document)) => serde_json::to_value(document)?,
+            Some(Err(message)) => {
+                return Err(crate::Error::PluginUnavailable(message.clone()).into())
+            }
+            None => {
+                return Err(crate::Error::PluginUnavailable(format!(
+                    "no linear issue fixture configured for {}",
+                    p.issue
                 ))
                 .into())
             }

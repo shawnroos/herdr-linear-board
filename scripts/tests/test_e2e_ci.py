@@ -115,8 +115,15 @@ class LiveE2ECIContractTests(unittest.TestCase):
         self.assertIn("--provider-free", self.wrapper)
 
     def test_e2e_preflights_and_real_claude_pin_the_same_exact_contract(self) -> None:
-        self.assertIn(f'[ "$version" = "herdr {HERDR_VERSION}" ]', self.lib)
-        self.assertIn(f'[ "$reported_version" = "{HERDR_VERSION}" ]', self.lib)
+        # The preflight accepts the pinned release OR a preview of it, because a
+        # preview ships that release's socket protocol. Both of lib.sh's
+        # comparisons must say so; pinning the exact string here is what let the
+        # `-preview` gap survive in this file after the runtime client was fixed
+        # (docs/solutions/integration-issues/a-pinned-version-check-has-a-twin.md).
+        self.assertIn(
+            f'"herdr {HERDR_VERSION}"|"herdr {HERDR_VERSION}-preview."*)', self.lib
+        )
+        self.assertIn(f'"{HERDR_VERSION}"|"{HERDR_VERSION}-preview."*)', self.lib)
         self.assertIn(f'[ "$protocol" = "{HERDR_PROTOCOL}" ]', self.lib)
         self.assertIn(
             f'[ "$HERDR_VERSION" = "herdr {HERDR_VERSION}" ]', self.real_claude

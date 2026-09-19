@@ -30,6 +30,7 @@ const SNAPSHOT_SCRIPT_RELATIVE: &str = "bin/work-snapshot.sh";
 const SPACES_SCRIPT_RELATIVE: &str = "bin/work-spaces.sh";
 const PROJECTS_SCRIPT_RELATIVE: &str = "bin/work-projects.sh";
 const VIEWS_SCRIPT_RELATIVE: &str = "bin/work-views.sh";
+const ISSUE_SCRIPT_RELATIVE: &str = "bin/work-issue.sh";
 
 // The knobs the daemon sets in the child. `HERDR_LINEAR_RETRY_MAX=1` is one
 // attempt: `lib/linear.sh` returns rate-limited once `attempt >= RETRY_MAX`,
@@ -70,6 +71,17 @@ pub(crate) const LIST_SCRIPT_WORST_CASE: Duration = Duration::from_secs(
 );
 pub(crate) const LIST_SCRIPT_DEADLINE: Duration =
     Duration::from_secs(LIST_SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
+
+// The issue read is ONE Linear call by contract: `bin/work-issue.sh` asks each
+// paged connection for one page and reports what it truncated rather than
+// draining it (`plugins/work/docs/issue.md`). So its budget is that one call
+// plus the keychain read, not a per-page count -- which is what keeps a busy
+// issue's page as fast to open as an empty one.
+const ISSUE_CALLS_MAX: u64 = 1;
+pub(crate) const ISSUE_SCRIPT_WORST_CASE: Duration =
+    Duration::from_secs(ISSUE_CALLS_MAX * LINEAR_TIMEOUT_SECONDS + KEYCHAIN_BUDGET_SECONDS);
+pub(crate) const ISSUE_SCRIPT_DEADLINE: Duration =
+    Duration::from_secs(ISSUE_SCRIPT_WORST_CASE.as_secs() + DEADLINE_MARGIN_SECONDS);
 /// SIGTERM first so the script's EXIT trap removes its temp directory; SIGKILL
 /// after this long.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
@@ -158,6 +170,53 @@ pub(super) fn linear_snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Resul
 pub(super) fn linear_list(d: &Arc<Daemon>, p: LinearListParams) -> Result<Value> {
     let runner = ScriptRunner::from_daemon(d, LIST_SCRIPT_DEADLINE);
     Ok(json!(list(&runner, p)?))
+}
+
+pub(super) fn linear_issue(d: &Arc<Daemon>, p: LinearIssueParams) -> Result<Value> {
+    let runner = ScriptRunner::from_daemon(d, ISSUE_SCRIPT_DEADLINE);
+    Ok(json!(issue(&runner, p)?))
+}
+
+/// One issue, read whole. The identifier is checked before any process starts,
+/// so a value that could read as an option to the script never reaches it.
+pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<LinearIssueDocument> {
+    let id = p.issue.trim();
+    if !is_list_identifier(id) {
+        return Err(Error::BadRequest(
+            "linear.issue requires an issue id of 1 to 64 ASCII letters, digits, `_` or `-`, \
+             starting with a letter or digit"
+                .into(),
+        ));
+    }
+    let origin_socket = normalized_origin(p.origin_socket.as_deref());
+    let run = ScriptRun {
+        relative: ISSUE_SCRIPT_RELATIVE,
+        arg: Some(id),
+        exits: LIST_EXITS,
+    };
+    let script = plugin_script(runner, p.plugin_root.as_deref(), run.relative)?;
+    let stdout = run_script(&script, &run, origin_socket.as_deref(), runner)?;
+    let who = run_label(&script, &run);
+    let value: Value = serde_json::from_slice(&stdout).map_err(|e| {
+        Error::PluginUnavailable(format!(
+            "{who} printed a document the board cannot parse: {e}; {}",
+            by_hand(&script, &run)
+        ))
+    })?;
+    let document: LinearIssueDocument =
+        serde_json::from_value(board_core::text::sanitise_json(value)).map_err(|e| {
+            Error::PluginUnavailable(format!(
+                "{who} printed a document the board cannot read: {e}; {}",
+                by_hand(&script, &run)
+            ))
+        })?;
+    if document.schema != 1 {
+        return Err(Error::PluginUnavailable(format!(
+            "{who} printed schema {} and this board reads schema 1",
+            document.schema
+        )));
+    }
+    Ok(document)
 }
 
 pub(crate) fn snapshot(runner: &ScriptRunner, p: LinearSnapshotParams) -> Result<LinearSnapshot> {
@@ -283,7 +342,11 @@ fn plugin_script(
     }
     let script = root.join(relative);
     if !script.is_file() {
-        return Err(Error::PluginUnavailable(format!(
+        // Its own variant, not PluginUnavailable: a plugin that is installed and
+        // current but predates this script is fixed by updating the plugin,
+        // while everything PluginUnavailable covers is worth retrying. A reader
+        // that cannot tell them apart offers a retry that can never succeed.
+        return Err(Error::PluginOpUnsupported(format!(
             "work plugin {version} at {} has no {relative}",
             root.display()
         )));

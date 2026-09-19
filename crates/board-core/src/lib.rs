@@ -78,6 +78,13 @@ pub enum Error {
     #[error("plugin unavailable: {0}")]
     PluginUnavailable(String),
 
+    /// The installed work plugin does not ship the script an op needs
+    /// (protocol code 7). Separate from `PluginUnavailable` because the two
+    /// have opposite remedies: this one is "update the plugin", and a reader
+    /// that offers a retry for it retries forever.
+    #[error("plugin op unsupported: {0}")]
+    PluginOpUnsupported(String),
+
     #[error(transparent)]
     Validation(#[from] ValidationError),
 }
@@ -92,6 +99,7 @@ impl Error {
             Error::Validation(v) => v.code(),
             Error::HerdrUnavailable(_) => 4,
             Error::PluginUnavailable(_) => 6,
+            Error::PluginOpUnsupported(_) => 7,
             Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => 5,
         }
     }

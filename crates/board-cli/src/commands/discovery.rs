@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::protocol::{
-    LinearListKind, LinearListParams, LinearSnapshotParams, LINEAR_LIST_CLIENT_TIMEOUT,
-    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearIssueParams, LinearListKind, LinearListParams, LinearSnapshotParams,
+    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use serde_json::json;
 
@@ -91,6 +91,17 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             let document = with_read_timeout(ctx, LINEAR_SNAPSHOT_CLIENT_TIMEOUT, |client| {
                 client.linear_snapshot(&LinearSnapshotParams {
                     workspace_id,
+                    origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
+                    plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+                })
+            })?;
+            let text = serde_json::to_string_pretty(&document)?;
+            emit_line(&document, json, text)
+        }
+        LinearCmd::Issue { issue } => {
+            let document = with_read_timeout(ctx, LINEAR_ISSUE_CLIENT_TIMEOUT, |client| {
+                client.linear_issue(&LinearIssueParams {
+                    issue,
                     origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
                     plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
                 })

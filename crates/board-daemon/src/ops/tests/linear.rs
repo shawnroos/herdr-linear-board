@@ -4,8 +4,9 @@
 
 use super::*;
 use crate::ops::linear::{
-    child_env, list, snapshot, utf8_env, ScriptRunner, HERDR_CALLS_MAX, HERDR_CALL_BUDGET_SECONDS,
-    INSTALLED_PLUGINS_RELATIVE, KEYCHAIN_BUDGET_SECONDS, LINEAR_RETRY_MAX, LINEAR_TIMEOUT_SECONDS,
+    child_env, issue, list, snapshot, utf8_env, ScriptRunner, HERDR_CALLS_MAX,
+    HERDR_CALL_BUDGET_SECONDS, INSTALLED_PLUGINS_RELATIVE, ISSUE_SCRIPT_DEADLINE,
+    ISSUE_SCRIPT_WORST_CASE, KEYCHAIN_BUDGET_SECONDS, LINEAR_RETRY_MAX, LINEAR_TIMEOUT_SECONDS,
     LINEAR_VIEW_PAGE_MAX, LIST_SCRIPT_DEADLINE, LIST_SCRIPT_WORST_CASE, PLUGIN_ROOT_ENV,
     PLUGIN_ROOT_TOML_KEY, PLUGIN_VERSION_FLOOR, SCRIPT_DEADLINE, SCRIPT_WORST_CASE,
     STDOUT_CAP_BYTES, TERM_GRACE,
@@ -894,6 +895,9 @@ fn a_list_from_a_plugin_below_the_floor_is_refused_naming_both_versions() {
     assert!(msg.contains(PLUGIN_VERSION_FLOOR), "message: {msg}");
 }
 
+/// A plugin that is installed and current but ships no script for this op is
+/// its own code, not the retryable one: the remedy is to update the plugin, and
+/// a reader that offers a retry for it retries forever.
 #[test]
 fn a_plugin_without_the_list_script_names_the_missing_script() {
     let home = tempfile::tempdir().unwrap();
@@ -905,7 +909,7 @@ fn a_plugin_without_the_list_script_names_the_missing_script() {
     )
     .unwrap_err();
 
-    assert_eq!(err.code(), 6);
+    assert_eq!(err.code(), 7);
     assert!(
         err.to_string().contains("bin/work-views.sh"),
         "message: {err}"
@@ -1062,4 +1066,321 @@ fn a_list_client_waits_longer_than_the_daemon_can_take_to_answer() {
         board_core::protocol::LINEAR_LIST_CLIENT_TIMEOUT,
         daemon_longest
     );
+}
+
+// ---------------------------------------------------------------------------
+// linear.issue — one issue read whole for the board's issue page
+// ---------------------------------------------------------------------------
+
+/// The shape `bin/work-issue.sh` prints, trimmed to what a test needs. The
+/// contract it follows is `plugins/work/docs/issue.md` in the work plugin.
+fn issue_document_json() -> &'static str {
+    r###"{
+  "schema": 1,
+  "status": "ok",
+  "message": null,
+  "truncated": [],
+  "issue": {
+    "id": "i1", "identifier": "WEB-3318", "title": "Drawer is blank",
+    "url": "https://linear.app/example/issue/WEB-3318/x",
+    "description": "## What\n\nbody",
+    "updated_at": "2026-09-04T15:55:10.206Z",
+    "due_date": "2026-09-30", "estimate": 3, "priority": 2,
+    "state": {"id": "s1", "name": "In Progress", "type": "started"},
+    "assignee": {"id": "u1", "name": "Example User"},
+    "labels": ["Bug"],
+    "project": {"id": "p1", "name": "AI Canvas Tools"},
+    "milestone": {"id": "m1", "name": "M2"},
+    "cycle": {"id": "c1", "number": 14, "name": "Cycle 14"},
+    "parent": {"id": "x1", "identifier": "WEB-2870", "title": "Parent",
+               "state": {"id": "s2", "name": "Dev Done", "type": "started"}},
+    "children": [{"id": "x2", "identifier": "WEB-3319", "title": "Child",
+                  "state": {"id": "s3", "name": "Done", "type": "completed"}}],
+    "relations": [{"type": "blocks", "direction": "outward",
+                   "issue": {"id": "x3", "identifier": "WEB-3400", "title": "Other",
+                             "state": {"id": "s4", "name": "Todo", "type": "unstarted"}}}],
+    "comments": [{"id": "cm1", "body": "Repro", "created_at": "2026-09-05T09:00:00.000Z",
+                  "author": "Example User", "parent_id": null},
+                 {"id": "cm2", "body": "Same", "created_at": "2026-09-05T10:00:00.000Z",
+                  "author": "Other", "parent_id": "cm1"}],
+    "history": [{"id": "h1", "created_at": "2026-09-05T08:00:00.000Z", "actor": "Example User",
+                 "from_state": "Backlog", "to_state": "In Progress",
+                 "from_assignee": null, "to_assignee": null,
+                 "from_priority": null, "to_priority": null,
+                 "added_labels": [], "removed_labels": []}]
+  }
+}"###
+}
+
+fn issue_params(id: &str) -> LinearIssueParams {
+    LinearIssueParams {
+        issue: id.to_string(),
+        origin_socket: None,
+        plugin_root: None,
+    }
+}
+
+/// A plugin root whose issue script prints `body` verbatim.
+fn issue_plugin(body: &str) -> tempfile::TempDir {
+    fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[(
+            "work-issue.sh",
+            &format!("cat <<'JSON_EOF'\n{body}\nJSON_EOF"),
+        )],
+    )
+}
+
+#[test]
+fn an_issue_read_returns_every_section_the_page_shows() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(issue_document_json());
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let doc = issue(&runner, issue_params("WEB-3318")).unwrap();
+
+    assert_eq!(doc.status, "ok");
+    assert!(doc.truncated.is_empty());
+    let issue = doc
+        .issue
+        .expect("a document with status ok carries an issue");
+    assert_eq!(issue.identifier, "WEB-3318");
+    assert_eq!(issue.estimate, Some(3.0));
+    assert_eq!(issue.due_date.as_deref(), Some("2026-09-30"));
+    assert_eq!(issue.milestone.unwrap().name.as_deref(), Some("M2"));
+    assert_eq!(issue.cycle.unwrap().number, Some(14));
+    assert_eq!(issue.children.len(), 1);
+    assert_eq!(issue.comments.len(), 2);
+    assert_eq!(issue.history.len(), 1);
+    assert!(issue.description.unwrap().contains("## What"));
+}
+
+/// R9 — every linked row has to carry enough to open its own page, so the
+/// board never needs a second read just to draw the row it came from.
+#[test]
+fn every_linked_row_carries_identifier_title_and_state() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(issue_document_json());
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let issue = issue(&runner, issue_params("WEB-3318"))
+        .unwrap()
+        .issue
+        .unwrap();
+
+    let rows = [
+        issue.parent.clone().unwrap(),
+        issue.children[0].clone(),
+        issue.relations[0].issue.clone(),
+    ];
+    for row in rows {
+        assert!(!row.identifier.is_empty(), "{row:?}");
+        assert!(!row.title.is_empty(), "{row:?}");
+        assert!(row.state.name.is_some(), "{row:?}");
+    }
+    assert_eq!(issue.relations[0].direction, "outward");
+}
+
+/// R4 — the page draws an empty marker for a property Linear has no value for,
+/// so an explicit null has to parse as absent rather than fail the document.
+#[test]
+fn an_explicit_null_in_every_nullable_field_parses() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(
+        r#"{"schema":1,"status":"ok","message":null,"truncated":[],
+            "issue":{"id":null,"identifier":"WEB-1","title":"t","url":null,
+                     "description":null,"updated_at":null,"due_date":null,"estimate":null,
+                     "priority":null,"state":{"id":null,"name":null,"type":null},
+                     "assignee":null,"labels":[],"project":null,"milestone":null,"cycle":null,
+                     "parent":null,"children":[],"relations":[],"comments":[],"history":[]}}"#,
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let issue = issue(&runner, issue_params("WEB-1"))
+        .unwrap()
+        .issue
+        .unwrap();
+
+    assert_eq!(issue.identifier, "WEB-1");
+    assert!(issue.description.is_none());
+    assert!(issue.milestone.is_none());
+    assert!(issue.parent.is_none());
+    assert!(issue.children.is_empty());
+}
+
+/// R8a — the read stops at its page cap and says so rather than draining, which
+/// is what keeps it one Linear call.
+#[test]
+fn a_truncated_read_is_partial_and_names_what_was_cut() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(
+        r#"{"schema":1,"status":"partial","message":"read the first 50 of comments",
+            "truncated":["comments","history"],
+            "issue":{"identifier":"WEB-1","title":"t","state":{},"labels":[],
+                     "children":[],"relations":[],"comments":[],"history":[]}}"#,
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let doc = issue(&runner, issue_params("WEB-1")).unwrap();
+
+    assert_eq!(doc.status, "partial");
+    assert_eq!(doc.truncated, vec!["comments", "history"]);
+    assert!(doc.message.unwrap().contains("first 50"));
+}
+
+/// R16 — "this plugin cannot do the read" and "the read ran and failed" have
+/// opposite remedies, so they cannot arrive as the same code. A reader that
+/// offers a retry for a missing script retries forever.
+#[test]
+fn a_plugin_without_the_issue_script_is_its_own_error_code() {
+    let home = tempfile::tempdir().unwrap();
+    // A current plugin that ships the snapshot script but not the issue one.
+    let plugin = fake_plugin(PLUGIN_VERSION_FLOOR, &cat_fixture());
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = issue(&runner, issue_params("WEB-1")).unwrap_err();
+
+    assert_eq!(error.code(), 7, "{error}");
+    assert!(error.to_string().contains("work-issue.sh"), "{error}");
+
+    // The snapshot on the same root still works: one missing script does not
+    // take the rest of Linear mode down with it.
+    assert!(snapshot(&runner, params(None)).is_ok());
+}
+
+#[test]
+fn a_script_that_exits_non_zero_is_a_retryable_failure_not_an_unsupported_op() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-issue.sh", "exit 4")]);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = issue(&runner, issue_params("WEB-1")).unwrap_err();
+
+    assert_eq!(error.code(), 6, "{error}");
+}
+
+#[test]
+fn an_id_of_the_wrong_shape_is_refused_before_any_process_starts() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("ran");
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[("work-issue.sh", &format!("touch {}", marker.display()))],
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    for bad in ["", "   ", "-oProxyCommand=x", "../etc/passwd", "a b"] {
+        let error = issue(&runner, issue_params(bad)).unwrap_err();
+        assert_eq!(error.code(), 1, "{bad:?} gave {error}");
+    }
+    assert!(!marker.exists(), "a refused id still ran the script");
+}
+
+#[test]
+fn an_unparseable_document_names_the_script_and_how_to_run_it_by_hand() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = fake_plugin_scripts(
+        PLUGIN_VERSION_FLOOR,
+        &[("work-issue.sh", "printf 'not json'")],
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = issue(&runner, issue_params("WEB-1")).unwrap_err();
+
+    assert_eq!(error.code(), 6, "{error}");
+    let text = error.to_string();
+    assert!(text.contains("work-issue.sh"), "{text}");
+    assert!(text.contains("WEB-1"), "{text}");
+}
+
+#[test]
+fn a_document_of_another_schema_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(r#"{"schema":2,"status":"ok","truncated":[],"issue":null}"#);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = issue(&runner, issue_params("WEB-1")).unwrap_err();
+
+    assert_eq!(error.code(), 6, "{error}");
+    assert!(error.to_string().contains("schema 2"), "{error}");
+}
+
+/// A reachability failure is carried in the document, not as an error, so the
+/// page can keep what it already shows and offer a retry.
+#[test]
+fn an_unreachable_linear_is_a_document_not_an_error() {
+    let home = tempfile::tempdir().unwrap();
+    let plugin = issue_plugin(
+        r#"{"schema":1,"status":"unavailable","message":"Linear could not be reached",
+            "truncated":[],"issue":null}"#,
+    );
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let doc = issue(&runner, issue_params("WEB-1")).unwrap();
+
+    assert_eq!(doc.status, "unavailable");
+    assert!(doc.issue.is_none());
+    assert!(doc.message.unwrap().contains("could not be reached"));
+}
+
+/// Display controls are stripped from every string, as they are for the
+/// snapshot and the lists: this document reaches a terminal.
+#[test]
+fn display_controls_are_stripped_from_the_document() {
+    let home = tempfile::tempdir().unwrap();
+    // Written with escapes rather than the characters themselves: a raw ESC in
+    // source is invisible in a diff, and rustc refuses a bidi codepoint in a
+    // literal outright.
+    let doc = concat!(
+        r#"{"schema":1,"status":"ok","truncated":[],"#,
+        r#""issue":{"identifier":"WEB-1","title":"\u001b[31mred\u202etitle","state":{},"#,
+        r#""labels":[],"children":[],"relations":[],"#,
+        r#""comments":[{"id":"c","body":"\u001bbody","parent_id":null}],"#,
+        r#""history":[]}}"#,
+    );
+    let plugin = issue_plugin(doc);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let issue = issue(&runner, issue_params("WEB-1"))
+        .unwrap()
+        .issue
+        .unwrap();
+
+    assert_eq!(issue.title, "[31mredtitle");
+    assert_eq!(issue.comments[0].body, "body");
+}
+
+#[test]
+fn the_issue_deadline_is_sized_for_one_call_and_fits_its_client_timeout() {
+    // One Linear call by contract, not one per page: that is the whole reason a
+    // busy issue's page opens as fast as an empty one.
+    assert!(ISSUE_SCRIPT_WORST_CASE >= Duration::from_secs(LINEAR_TIMEOUT_SECONDS));
+    assert!(ISSUE_SCRIPT_WORST_CASE < LIST_SCRIPT_WORST_CASE);
+    assert!(ISSUE_SCRIPT_DEADLINE > ISSUE_SCRIPT_WORST_CASE);
+
+    let daemon_longest = ISSUE_SCRIPT_DEADLINE + TERM_GRACE + Duration::from_secs(2);
+    assert!(
+        board_core::protocol::LINEAR_ISSUE_CLIENT_TIMEOUT > daemon_longest,
+        "client {:?} vs daemon {:?}",
+        board_core::protocol::LINEAR_ISSUE_CLIENT_TIMEOUT,
+        daemon_longest
+    );
+}
+
+/// The missing-script code is board-wide, not the issue op's alone: `plugin_script`
+/// is shared, so a plugin that ships no `work-snapshot.sh` is also "update the
+/// plugin" rather than "try again". This pins that reclassification, which
+/// arrived with the issue read and previously had coverage only for the list
+/// scripts.
+#[test]
+fn a_plugin_without_the_snapshot_script_is_the_unsupported_code_too() {
+    let home = tempfile::tempdir().unwrap();
+    // A plugin at the floor that ships only the issue script.
+    let plugin = fake_plugin_scripts(PLUGIN_VERSION_FLOOR, &[("work-issue.sh", "printf '{}'")]);
+    let runner = runner(Some(plugin.path()), home.path(), &[]);
+
+    let error = snapshot(&runner, params(None)).unwrap_err();
+
+    assert_eq!(error.code(), 7, "{error}");
+    assert!(error.to_string().contains("work-snapshot.sh"), "{error}");
 }

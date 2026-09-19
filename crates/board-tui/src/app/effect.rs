@@ -112,6 +112,15 @@ pub enum Effect {
         kind: board_core::protocol::LinearListKind,
         id: Option<String>,
     },
+    /// Linear mode: fetch `linear.issue` for the issue page that just opened.
+    /// The reducer marks the read in flight against that issue before emitting
+    /// it, and a result for any other issue is dropped when it lands.
+    LinearIssue {
+        issue: String,
+        /// Which read this is. Two reads for the SAME issue are otherwise
+        /// indistinguishable on arrival, and the older one can land last.
+        generation: u64,
+    },
     /// Linear mode: `linear.bind_handoff` on the origin session. Ids and a
     /// directory only: a name never reaches the bind line. The reducer marks
     /// the handoff in flight before emitting it.

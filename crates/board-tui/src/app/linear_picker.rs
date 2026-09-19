@@ -141,6 +141,9 @@ fn failure_text(failure: &LinearFailure) -> String {
         LinearFailure::MethodNotFound => {
             "the daemon is older than the board and has no linear.list".to_string()
         }
+        LinearFailure::OpUnsupported(_) => {
+            "this list needs a newer work plugin; update it".to_string()
+        }
         LinearFailure::TimedOut(limit) => super::linear::read_timeout_text(*limit),
         LinearFailure::Failed(text) => super::sanitise(text),
     }
@@ -296,6 +299,9 @@ pub(super) fn handoff_arrived(
             let text = match failure {
                 LinearFailure::MethodNotFound => {
                     "the daemon is older than the board and has no linear.bind_handoff".to_string()
+                }
+                LinearFailure::OpUnsupported(_) => {
+                    "binding needs a newer work plugin; update it".to_string()
                 }
                 // `r` refreshes the snapshot, not the bind, and the tab may
                 // have opened after the limit, so a retry could open a second.

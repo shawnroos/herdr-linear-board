@@ -18,6 +18,9 @@ use crossterm::event::{KeyCode, MouseEventKind};
 use serde_json::Value;
 
 const W: u16 = 120;
+/// How deep the back-stack test walks, and the cap it must hit.
+const HOPS: usize = 80;
+const CAP: usize = 32;
 const H: u16 = 32;
 
 /// `bound-with-view` with the daemon-attached pane statuses: the first pane
@@ -64,7 +67,7 @@ fn toast(d: &Driver) -> String {
 }
 
 /// Open WEB-3302 (third column, first card) from the board.
-fn open_web_3312(d: &mut Driver) {
+fn open_web_3302(d: &mut Driver) {
     press(d, KeyCode::Char('l'));
     press(d, KeyCode::Char('l'));
     press(d, KeyCode::Enter);
@@ -207,7 +210,7 @@ fn herdr_unavailable_still_renders_cards_with_unknown_pane_status() {
         "label falls back to the id:\n{frame}"
     );
     assert!(frame.contains("WEB-3302"), "{frame}");
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     let detail = draw(&d.app, W, H);
     assert!(detail.contains("(label unknown)"), "{detail}");
     assert!(detail.contains("(no panes listed)"), "{detail}");
@@ -243,24 +246,115 @@ fn unsupported_grouping_is_named_in_the_header() {
     assert!(frame.contains("Backlog (1)"), "fallback columns:\n{frame}");
 }
 
+/// A document with one of everything the page draws, so a snapshot of it is a
+/// regression test for the whole layout rather than for one section.
+fn page_document() -> board_core::protocol::LinearIssueDocument {
+    use board_core::protocol::*;
+    let linked = |ident: &str, title: &str, state: &str, kind: &str| LinearLinkedIssue {
+        id: Some(ident.to_lowercase()),
+        identifier: ident.into(),
+        title: title.into(),
+        state: LinearIssueState {
+            id: Some(state.to_lowercase()),
+            name: Some(state.into()),
+            kind: Some(kind.into()),
+        },
+    };
+    LinearIssueDocument {
+        schema: 1,
+        status: "ok".into(),
+        message: None,
+        truncated: vec![],
+        issue: Some(LinearIssueDetail {
+            id: Some("i1".into()),
+            identifier: "WEB-3302".into(),
+            title: "Example issue: a saved item is empty after reload".into(),
+            description: Some("The saved item comes back empty.\n\nOnly after a reload.".into()),
+            due_date: Some("2026-09-30".into()),
+            estimate: Some(3.0),
+            project: Some(LinearNamed {
+                id: Some("p1".into()),
+                name: Some("AI Canvas Tools".into()),
+            }),
+            milestone: Some(LinearNamed {
+                id: Some("m1".into()),
+                name: Some("M2".into()),
+            }),
+            cycle: Some(LinearCycle {
+                id: Some("c1".into()),
+                number: Some(14),
+                name: Some("Cycle 14".into()),
+            }),
+            parent: Some(linked(
+                "WEB-2870",
+                "Tool: Detach Foreground",
+                "Dev Done",
+                "started",
+            )),
+            children: vec![
+                linked("WEB-3319", "Per-issue fetch", "Done", "completed"),
+                linked("WEB-3320", "Markdown renderer", "Todo", "unstarted"),
+            ],
+            relations: vec![LinearRelation {
+                r#type: "blocks".into(),
+                direction: "outward".into(),
+                issue: linked("WEB-3400", "Ship the drawer", "Todo", "unstarted"),
+            }],
+            comments: vec![
+                LinearComment {
+                    id: Some("cm1".into()),
+                    body: "Reproduced on staging.".into(),
+                    created_at: Some("2026-09-05T09:00:00.000Z".into()),
+                    author: Some("Example User".into()),
+                    parent_id: None,
+                },
+                LinearComment {
+                    id: Some("cm2".into()),
+                    body: "Same here.".into(),
+                    created_at: Some("2026-09-05T10:00:00.000Z".into()),
+                    author: Some("Other User".into()),
+                    parent_id: Some("cm1".into()),
+                },
+            ],
+            history: vec![LinearHistoryEvent {
+                id: Some("h1".into()),
+                created_at: Some("2026-09-05T08:00:00.000Z".into()),
+                actor: Some("Example User".into()),
+                to_state: Some("In Progress".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    }
+}
+
 #[test]
 fn detail_lists_bindings_tabs_and_panes_with_live_status() {
-    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    open_web_3312(&mut d);
+    // A real document, so the snapshot captures the page a reader sees rather
+    // than the failure a missing fixture produces.
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    // A fixed clock, a day after the document's events: the page's relative
+    // times are then part of what the snapshot pins rather than something that
+    // changes with the day it runs.
+    d.app.now = 1_788_600_000;
     let frame = draw(&d.app, W, H);
-    assert!(
-        frame.contains("[bound] $SANDBOX/worktrees/web-3302"),
-        "{frame}"
-    );
+    // The sidebar is narrow, so the path keeps its TAIL: the worktree name is
+    // what tells two bindings apart, and the head is the same for every one.
+    assert!(frame.contains("worktrees/web-3302"), "{frame}");
+    assert!(frame.contains("[bound] "), "{frame}");
     assert!(frame.contains("tab: Plugin PM (wA:t1)"), "{frame}");
     assert!(
         frame.contains("wA:p1  idle") && frame.contains("▶ wA:p2  working"),
         "{frame}"
     );
-    assert!(
-        frame.contains("url: https://linear.app/example/issue/web-3302/x"),
-        "{frame}"
-    );
+    // No raw URL row: Linear's own issue page has no URL property, and `u`
+    // opens the issue, which the hint line offers.
+    assert!(!frame.contains("https://linear.app"), "{frame}");
+    assert!(frame.contains("u Linear"), "{frame}");
     insta::assert_snapshot!("linear_detail", frame);
 }
 
@@ -396,10 +490,11 @@ fn control_characters_never_reach_the_frame() {
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     press(&mut d, KeyCode::Enter);
     let frame = draw(&d.app, W, H);
-    assert!(
-        frame.contains("WEB-3308 — Example panel[2J is blank"),
-        "{frame}"
-    );
+    // The page draws the identifier and the title on their own rows, so the
+    // joined form the overlay used is gone; the guard is that the stripped
+    // title reaches the frame and no control character does.
+    assert!(frame.contains("Example panel[2J is blank"), "{frame}");
+    assert!(frame.contains("WEB-3308"), "{frame}");
     assert!(
         !frame.contains('\u{202E}') && !frame.contains('\u{1b}'),
         "{frame}"
@@ -438,7 +533,7 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
         ..linear_start()
     };
     let (mut d, _, _) = linear_driver(client, start);
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('j'));
     press(&mut d, KeyCode::Esc);
     press(&mut d, KeyCode::Char('r'));
@@ -454,6 +549,9 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
             "linear.snapshot",
             "pane.set_title",
             "linear.list",
+            // Opening WEB-3302's page reads it; the point of this test is that
+            // no `board.get` ever appears, not that the page reads nothing.
+            "linear.issue",
             "linear.snapshot",
             "pane.set_title",
             "linear.list"
@@ -632,11 +730,11 @@ fn a_first_fetch_failure_has_no_last_good_and_no_dismiss() {
 fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     assert_eq!(
-        d.app.linear.as_ref().unwrap().pane_cursor,
-        1,
-        "wA:p2 is working"
+        d.app.linear.as_ref().unwrap().detail_selection,
+        Some(board_tui::view::IssueRowKind::Pane(1)),
+        "the page opens on the working pane, wA:p2"
     );
     press(&mut d, KeyCode::Char('o'));
     let requests = log.lock().unwrap();
@@ -658,7 +756,7 @@ fn a_gone_pane_toasts_and_changes_nothing_else() {
         gone: true,
     });
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('o'));
     assert_eq!(toast(&d), "pane is closed; refresh");
     assert_eq!(d.app.screen, Screen::LinearDetail);
@@ -669,16 +767,21 @@ fn a_gone_pane_toasts_and_changes_nothing_else() {
 fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('o'));
     assert!(toast(&d).contains("HERDR_SOCKET_PATH"), "{}", toast(&d));
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    // `linear.issue` since the issue page: opening a card reads it. What this
+    // test pins is that `o` with no socket sends nothing MORE than that.
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list", "linear.issue"]
+    );
 }
 
 #[test]
 fn u_opens_the_issue_url_with_the_platform_opener() {
     let (mut d, opened, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('u'));
     assert_eq!(
         *opened.lock().unwrap(),
@@ -692,7 +795,7 @@ fn u_refuses_a_url_that_is_not_http_before_the_opener_sees_it() {
     let mut doc = bound_with_view();
     doc.issues.get_mut("WEB-3302").unwrap().url = Some("-aTerminal".to_string());
     let (mut d, opened, _) = linear_driver(fake_with(doc), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('u'));
     assert!(
         opened.lock().unwrap().is_empty(),
@@ -704,7 +807,7 @@ fn u_refuses_a_url_that_is_not_http_before_the_opener_sees_it() {
     let mut doc = bound_with_view();
     doc.issues.get_mut("WEB-3302").unwrap().url = Some("file:///tmp/x".to_string());
     let (mut d, opened, _) = linear_driver(fake_with(doc), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('u'));
     assert!(opened.lock().unwrap().is_empty());
 }
@@ -720,7 +823,7 @@ fn a_tiny_frame_with_unmapped_tabs_draws_without_panicking() {
 #[test]
 fn a_chorded_key_on_the_detail_screen_is_ignored() {
     let (mut d, opened, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     d.handle(Msg::Key(crossterm::event::KeyEvent::new(
         KeyCode::Char('u'),
         crossterm::event::KeyModifiers::ALT,
@@ -738,7 +841,7 @@ fn y_copies_the_worktree_path_and_says_when_the_directory_is_gone() {
         fake_with(linear_fixture("worktree-missing")),
         linear_start(),
     );
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(
         *copied.lock().unwrap(),
@@ -747,7 +850,7 @@ fn y_copies_the_worktree_path_and_says_when_the_directory_is_gone() {
     assert_eq!(toast(&d), "copied; directory is gone");
 
     let (mut d, _, copied) = linear_driver(fake_with(bound_with_view()), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(copied.lock().unwrap().len(), 1);
     assert_eq!(toast(&d), "copied");
@@ -767,13 +870,16 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list", "linear.issue"]
+    );
 }
 
 #[test]
 fn an_opener_or_clipboard_failure_is_toasted() {
     let mut d = linear_driver_failing_platform(fake_with(bound_with_view()), linear_start());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('u'));
     assert!(toast(&d).starts_with("open failed:"), "{}", toast(&d));
     press(&mut d, KeyCode::Char('y'));
@@ -784,7 +890,7 @@ fn an_opener_or_clipboard_failure_is_toasted() {
 fn a_focus_the_daemon_cannot_carry_out_is_toasted_with_its_reason() {
     let client = fake_with(bound_with_view()).with_pane_focus_error("herdr is not running");
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('o'));
     let text = toast(&d);
     assert!(text.starts_with("pane wA:p2:"), "{text}");
@@ -1870,12 +1976,13 @@ fn scrolling_moves_the_card_selection_and_stops_at_the_ends() {
 }
 
 #[test]
-fn a_click_while_the_detail_overlay_is_open_does_not_reach_the_board() {
+fn a_click_on_the_issue_page_does_not_reach_the_board() {
     let mut d = mouse_driver();
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     let frame = render_at(&mut d, W, H);
-    // Column 1 is outside the overlay, so the first column's card shows there.
-    assert!(frame_row(&frame, 3).starts_with("│W"), "{frame}");
+    // The page replaces the board rather than covering it, so no card is drawn
+    // anywhere on screen to click through to.
+    assert!(!frame_row(&frame, 3).starts_with("│W"), "{frame}");
     for (x, y) in [(1, 4), (90, 9), (95, 2)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearDetail, "click at {x},{y}");
@@ -2656,7 +2763,7 @@ fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
     )]);
     let (client, log) = RecordingClient::new(client);
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('b'));
     assert_eq!(
         handoffs(&log),
@@ -2676,7 +2783,7 @@ fn b_acts_on_stale_and_misplaced_bindings_too() {
         let client = card_client(vec![binding(state, "$SANDBOX/worktrees/web-3302", "wA:p2")]);
         let (client, log) = RecordingClient::new(client);
         let (mut d, _, _) = linear_driver(client, start_with_socket());
-        open_web_3312(&mut d);
+        open_web_3302(&mut d);
         press(&mut d, KeyCode::Char('b'));
         assert_eq!(handoffs(&log).len(), 1, "{state}");
     }
@@ -2690,7 +2797,7 @@ fn b_on_a_card_with_two_bindings_uses_the_selected_one_and_refuses_a_bound_one()
     ]);
     let (client, log) = RecordingClient::new(client);
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('k'));
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("already bound"), "{}", toast(&d));
@@ -2712,7 +2819,7 @@ fn b_on_a_bound_binding_toasts_that_it_is_already_bound_and_sends_nothing() {
         fake_with(bound_with_view()).with_linear_bind_handoff(handoff_result()),
     );
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("already bound"), "{}", toast(&d));
     assert!(d.app.toast.as_ref().unwrap().is_error);
@@ -2742,7 +2849,7 @@ fn b_on_a_worktree_missing_binding_toasts_and_sends_nothing() {
         fake_with(linear_fixture("worktree-missing")).with_linear_bind_handoff(handoff_result()),
     );
     let (mut d, _, _) = linear_driver(client, start_with_socket());
-    open_web_3312(&mut d);
+    open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("worktree is missing"), "{}", toast(&d));
     assert!(handoffs(&log).is_empty());
@@ -2820,6 +2927,797 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
     );
 }
 
+// -- the issue-page read (R14, R15, R17, R18, R19) --------------------------
+
+fn issue_doc(identifier: &str) -> board_core::protocol::LinearIssueDocument {
+    board_core::protocol::LinearIssueDocument {
+        schema: 1,
+        status: "ok".into(),
+        message: None,
+        truncated: vec![],
+        issue: Some(board_core::protocol::LinearIssueDetail {
+            identifier: identifier.into(),
+            title: format!("{identifier} title"),
+            description: Some(format!("body of {identifier}")),
+            ..Default::default()
+        }),
+    }
+}
+
+fn detail_state(d: &Driver) -> &board_tui::app::LinearState {
+    d.app.linear.as_ref().unwrap()
+}
+
+/// The issue a read is in flight for, without its generation. A test that
+/// cares which of two reads is running asserts on the generation itself.
+fn in_flight_issue(d: &Driver) -> Option<&str> {
+    detail_state(d)
+        .detail_in_flight
+        .as_ref()
+        .map(|(issue, _)| issue.as_str())
+}
+
+/// R14 -- the page opens on what the snapshot already holds and asks for the
+/// rest; it never waits on a blank screen.
+#[test]
+fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3302(&mut d);
+
+    assert_eq!(in_flight_issue(&d), Some("WEB-3302"));
+    assert!(detail_state(&d).detail_doc.is_none(), "not landed yet");
+
+    assert!(d.deliver_pending_linear_issue());
+    let (issue, doc) = detail_state(&d).detail_doc.as_ref().unwrap();
+    assert_eq!(issue, "WEB-3302");
+    assert_eq!(doc.issue.as_ref().unwrap().identifier, "WEB-3302");
+    assert!(detail_state(&d).detail_in_flight.is_none());
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
+/// R18 -- overlapping reads are the normal case once Enter opens a linked issue
+/// in place, so a result for an issue the reader has left must be dropped
+/// rather than painted under the open issue's title.
+#[test]
+fn a_result_for_an_issue_the_reader_has_left_is_dropped() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", issue_doc("WEB-3302"))
+        .with_linear_issue("WEB-3307", issue_doc("WEB-3307"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3302(&mut d);
+    // The reader moves to another issue before the first read lands.
+    d.app.linear.as_mut().unwrap().detail = Some("WEB-3307".into());
+
+    assert!(d.deliver_pending_linear_issue());
+
+    assert!(
+        detail_state(&d).detail_doc.is_none(),
+        "WEB-3302's document was applied to WEB-3307's page"
+    );
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
+/// The same rule for a failure: a failed read for an issue the reader has left
+/// must not put a failure line on a page that loaded fine.
+#[test]
+fn a_failure_for_an_issue_the_reader_has_left_is_dropped() {
+    let client = fake_with(bound_with_view()).with_linear_issue_error("WEB-3302", "Linear is down");
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+
+    open_web_3302(&mut d);
+    d.app.linear.as_mut().unwrap().detail = Some("WEB-3307".into());
+
+    assert!(d.deliver_pending_linear_issue());
+
+    assert!(detail_state(&d).detail_error.is_none(), "failure leaked");
+}
+
+/// R15 -- a failed read keeps what the page already shows, says what happened,
+/// and `r` sends the read again.
+#[test]
+fn a_failed_read_is_retryable_with_r() {
+    let client = fake_with(bound_with_view()).with_linear_issue_error("WEB-3302", "Linear is down");
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d).detail_error.clone().unwrap();
+    assert_eq!(error.issue, "WEB-3302");
+    assert!(error.retryable);
+    assert!(error.message.contains("Linear is down"), "{error:?}");
+    // The snapshot fields are untouched: the card is still on the board.
+    assert!(detail_state(&d).detail_issue().is_some());
+
+    press(&mut d, KeyCode::Char('r'));
+    assert_eq!(
+        in_flight_issue(&d),
+        Some("WEB-3302"),
+        "r did not re-send the issue read"
+    );
+}
+
+/// R16 -- a plugin that ships no issue script is fixed by updating it, so the
+/// page must not offer a retry that can never succeed.
+#[test]
+fn a_plugin_without_the_issue_script_is_not_retryable() {
+    let client = fake_with(bound_with_view()).with_linear_issue_unsupported();
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d).detail_error.clone().unwrap();
+    assert!(!error.retryable, "{error:?}");
+    assert!(error.message.contains("work plugin"), "{error:?}");
+
+    // `r` falls through to the snapshot refresh rather than retrying the read.
+    press(&mut d, KeyCode::Char('r'));
+    assert!(
+        detail_state(&d).detail_in_flight.is_none(),
+        "r retried an unsupported op"
+    );
+
+    // The rest of Linear mode is unaffected: the board still has its snapshot.
+    assert!(detail_state(&d).last_good.is_some());
+}
+
+/// R17 -- each open fetches fresh; nothing is cached between opens.
+#[test]
+fn opening_the_same_issue_again_reads_it_again() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+    // Enter alone: the selection is already on WEB-3302, and the helper's `l`
+    // presses would move it on.
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+
+    assert_eq!(
+        in_flight_issue(&d),
+        Some("WEB-3302"),
+        "the second open did not read again"
+    );
+}
+
+/// R19 -- the page is read-only. The effect gate is the guard (its exhaustive
+/// classification is proven in `driver::linear`); what this adds is that
+/// reading a page sends no write to the daemon at all.
+#[test]
+fn opening_and_reading_a_page_sends_no_write() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
+    let (client, log) = RecordingClient::new(client);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let called = methods(&log);
+    assert!(
+        called.iter().all(|m| m.starts_with("linear.")),
+        "the issue page called something other than a linear read: {called:?}"
+    );
+    assert!(called.iter().any(|m| m == "linear.issue"), "{called:?}");
+}
+
+// -- one cursor, Enter, and the back stack (R11, R12, R13, R17) -------------
+
+use board_tui::view::IssueRowKind;
+
+/// Open WEB-3302 with its document loaded, so the page has issue rows as well
+/// as pane rows.
+fn open_page_with_document(d: &mut Driver) {
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(d);
+    assert!(d.deliver_pending_linear_issue());
+}
+
+fn rows(d: &Driver) -> Vec<board_tui::view::IssueRow> {
+    board_tui::view::issue_page_rows(&d.app)
+}
+
+fn page_selection(d: &Driver) -> Option<IssueRowKind> {
+    d.app.linear.as_ref().unwrap().detail_selection.clone()
+}
+
+/// R11 -- one cursor over every selectable row, in the order the page draws
+/// them: the main column's rows before the sidebar's, at both widths.
+#[test]
+fn the_cursor_moves_through_every_selectable_row_in_reading_order() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    let kinds: Vec<IssueRowKind> = rows(&d).into_iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            // Sub-issues, in the main column.
+            IssueRowKind::Issue("WEB-3319".into()),
+            IssueRowKind::Issue("WEB-3320".into()),
+            // Then the sidebar: parent, relations, panes.
+            IssueRowKind::Issue("WEB-2870".into()),
+            IssueRowKind::Issue("WEB-3400".into()),
+            IssueRowKind::Pane(0),
+            IssueRowKind::Pane(1),
+        ],
+        "reading order"
+    );
+
+    // From the working pane, `k` walks back up through every row.
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+    for expected in kinds.iter().rev().skip(1) {
+        press(&mut d, KeyCode::Char('k'));
+        assert_eq!(page_selection(&d).as_ref(), Some(expected));
+    }
+    // And stops at the first rather than wrapping.
+    press(&mut d, KeyCode::Char('k'));
+    assert_eq!(page_selection(&d), Some(kinds[0].clone()));
+}
+
+/// An issue with no sub-issues and no relations has only its panes to move
+/// through: a section with no rows contributes no row to stop on.
+#[test]
+fn a_section_with_no_rows_is_not_a_stop() {
+    let mut empty = page_document();
+    if let Some(issue) = empty.issue.as_mut() {
+        issue.children.clear();
+        issue.relations.clear();
+        issue.parent = None;
+    }
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", empty);
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    let kinds: Vec<IssueRowKind> = rows(&d).into_iter().map(|r| r.kind).collect();
+    assert_eq!(kinds, vec![IssueRowKind::Pane(0), IssueRowKind::Pane(1)]);
+}
+
+/// The rows arrive in two waves: panes as soon as the page opens, then the
+/// issue rows ABOVE them when the read lands. The selection has to survive
+/// that, which an index could not.
+#[test]
+fn the_selection_survives_the_document_arriving_above_it() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // Before the read lands, the page has only pane rows.
+    assert_eq!(rows(&d).len(), 2, "{:?}", rows(&d));
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+
+    let before = draw(&d.app, W, H);
+    assert!(before.contains("▶ wA:p2"), "{before}");
+
+    assert!(d.deliver_pending_linear_issue());
+
+    // Four issue rows arrived above the panes. Asserting the stored value alone
+    // would prove nothing -- nothing rewrites it -- so this checks the row the
+    // cursor RESOLVES to, and that the marker is still drawn on that pane.
+    let rows_after = rows(&d);
+    assert_eq!(rows_after.len(), 6, "{rows_after:?}");
+    assert_eq!(page_selection(&d), Some(IssueRowKind::Pane(1)));
+    assert_eq!(
+        board_tui::app::LinearState::selected_kind(
+            &rows_after,
+            d.app.linear.as_ref().unwrap().detail_selection.as_ref()
+        ),
+        Some(IssueRowKind::Pane(1)),
+        "the cursor resolved to a different row once the document arrived"
+    );
+    let after = draw(&d.app, W, H);
+    assert!(after.contains("▶ wA:p2"), "{after}");
+}
+
+/// R12 -- Enter on an issue row opens that issue in place, and Esc walks back
+/// one issue at a time before leaving the page.
+#[test]
+fn enter_opens_a_linked_issue_and_esc_walks_back() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // Move to the first sub-issue and open it.
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3319".into()))
+    );
+    press(&mut d, KeyCode::Enter);
+
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3319")
+    );
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3302"),
+        "Esc went back to the board instead of the previous issue"
+    );
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(d.app.linear.as_ref().unwrap().detail.is_none());
+}
+
+/// R17 -- a back-step re-shows what that page last displayed while its fresh
+/// read runs; it does not empty to loading markers on the way back.
+#[test]
+fn a_back_step_shows_the_previous_page_immediately() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    press(&mut d, KeyCode::Enter);
+    assert!(d.deliver_pending_linear_issue());
+
+    press(&mut d, KeyCode::Esc);
+
+    // The document is back on screen BEFORE its refresh is delivered.
+    let state = d.app.linear.as_ref().unwrap();
+    let (issue, doc) = state.detail_doc.as_ref().expect("previous page restored");
+    assert_eq!(issue, "WEB-3302");
+    assert_eq!(doc.issue.as_ref().unwrap().children.len(), 2);
+    assert_eq!(
+        state.detail_in_flight.as_ref().map(|(i, _)| i.as_str()),
+        Some("WEB-3302")
+    );
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("Sub-issues"), "{frame}");
+}
+
+/// The generation the reducer issues must be the generation the driver hands
+/// back. Only the shipping read path carries it -- the overlapping-read tests
+/// build their arrivals by hand -- and a read answering with a generation the
+/// page never issued is dropped forever: the document never lands, the page
+/// stays on "loading" because the in-flight marker is never cleared, and `r`
+/// cannot rescue it because no error was recorded either.
+#[test]
+fn the_shipping_read_path_answers_with_the_generation_it_was_given() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    open_web_3302(&mut d);
+
+    let (issue, doc) = detail_state(&d)
+        .detail_doc
+        .as_ref()
+        .expect("the read answered but its document was dropped");
+    assert_eq!(issue, "WEB-3302");
+    assert_eq!(doc.issue.as_ref().unwrap().identifier, "WEB-3302");
+    assert!(
+        detail_state(&d).detail_in_flight.is_none(),
+        "the page is still marked loading after its read answered"
+    );
+    assert!(detail_state(&d).detail_error.is_none());
+}
+
+/// Two reads for the SAME issue, told apart by their generation. A page that
+/// compared only the identifier applied both, in whatever order they landed.
+fn feed_issue(d: &mut Driver, issue: &str, generation: u64, title: &str) {
+    let mut doc = issue_doc(issue);
+    doc.issue.as_mut().unwrap().title = title.into();
+    d.handle(Msg::LinearArrived(Box::new(
+        board_tui::app::LinearArrival::Issue {
+            issue: issue.into(),
+            generation,
+            result: Box::new(Ok(doc)),
+        },
+    )));
+}
+
+/// The generation of the read in flight, which is what a second read for the
+/// same issue increments.
+fn in_flight_generation(d: &Driver) -> u64 {
+    detail_state(d)
+        .detail_in_flight
+        .as_ref()
+        .expect("a read is in flight")
+        .1
+}
+
+/// Walk into the first sub-issue and straight back, leaving that page's read
+/// outstanding. Repeating it is what puts two reads for one issue in flight.
+fn hop_into_a_sub_issue_and_back(d: &mut Driver) {
+    for _ in 0..5 {
+        press(d, KeyCode::Char('k'));
+    }
+    press(d, KeyCode::Enter);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3319"),
+        "Enter did not open the sub-issue"
+    );
+    press(d, KeyCode::Esc);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3302"),
+        "Esc did not come back"
+    );
+}
+
+/// Two reads for the same issue can be outstanding at once -- a second hop out
+/// and back starts one while the first is still running -- and the older can
+/// answer last. It must not paint over the newer one.
+#[test]
+fn an_older_read_for_the_open_issue_does_not_overwrite_a_newer_one() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    hop_into_a_sub_issue_and_back(&mut d);
+    let older = in_flight_generation(&d);
+    hop_into_a_sub_issue_and_back(&mut d);
+    let newer = in_flight_generation(&d);
+    assert!(newer > older, "the second hop reused the first read");
+
+    feed_issue(&mut d, "WEB-3302", newer, "the newer read");
+    feed_issue(&mut d, "WEB-3302", older, "the older read");
+
+    let (_, doc) = detail_state(&d).detail_doc.as_ref().expect("a document");
+    assert_eq!(
+        doc.issue.as_ref().unwrap().title,
+        "the newer read",
+        "the older read painted over the newer one"
+    );
+}
+
+/// The same pair the other way round: the older read answers first, while the
+/// newer one is still running. Dropping it must leave the page loading, because
+/// the read the in-flight marker names has not answered yet.
+#[test]
+fn an_older_read_dropped_first_leaves_the_newer_one_in_flight() {
+    let client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", page_document())
+        .with_linear_issue("WEB-3319", issue_doc("WEB-3319"));
+    let mut d = linear_driver_deferred(client, linear_start());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    hop_into_a_sub_issue_and_back(&mut d);
+    let older = in_flight_generation(&d);
+    hop_into_a_sub_issue_and_back(&mut d);
+    let newer = in_flight_generation(&d);
+
+    feed_issue(&mut d, "WEB-3302", older, "the older read");
+    assert_eq!(
+        detail_state(&d).detail_in_flight.as_ref().map(|(_, g)| *g),
+        Some(newer),
+        "dropping the older read cleared the newer read's in-flight marker"
+    );
+
+    feed_issue(&mut d, "WEB-3302", newer, "the newer read");
+    let (_, doc) = detail_state(&d).detail_doc.as_ref().expect("a document");
+    assert_eq!(doc.issue.as_ref().unwrap().title, "the newer read");
+    assert!(detail_state(&d).detail_in_flight.is_none());
+}
+
+/// A document whose only sub-issue is `child`. A chain of these is a walk that
+/// pushes a back step on every Enter and never pops one, and because every
+/// issue in it is distinct, which end of a capped stack was dropped is visible
+/// in what the stack holds.
+fn doc_linking_to(identifier: &str, child: &str) -> board_core::protocol::LinearIssueDocument {
+    use board_core::protocol::*;
+    let mut doc = issue_doc(identifier);
+    doc.issue.as_mut().unwrap().children = vec![LinearLinkedIssue {
+        id: Some(child.to_lowercase()),
+        identifier: child.into(),
+        title: format!("{child} title"),
+        state: LinearIssueState {
+            id: Some("todo".into()),
+            name: Some("Todo".into()),
+            kind: Some("unstarted".into()),
+        },
+    }];
+    doc
+}
+
+/// Each back step holds a whole document, so the walk-back is bounded by count
+/// rather than left to grow with the session. Two issues that link to each
+/// other push a step on every Enter and never pop one, which is the walk that
+/// used to keep every document it passed through. The oldest step goes first,
+/// so the recent ones - the only ones anyone walks back through - are kept.
+#[test]
+fn the_back_stack_stops_growing_at_its_cap() {
+    // A chain: WEB-3302 -> WEB-4001 -> WEB-4002 -> ... Every hop opens an issue
+    // nothing has opened before, so the steps the cap keeps are identifiable.
+    let mut client = fake_with(bound_with_view())
+        .with_linear_issue("WEB-3302", doc_linking_to("WEB-3302", "WEB-4001"));
+    for n in 1..=HOPS {
+        client = client.with_linear_issue(
+            &format!("WEB-{:04}", 4000 + n),
+            doc_linking_to(
+                &format!("WEB-{:04}", 4000 + n),
+                &format!("WEB-{:04}", 4001 + n),
+            ),
+        );
+    }
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // Well past any depth a person reaches.
+    for _ in 0..HOPS {
+        let rows = board_tui::view::issue_page_rows(&d.app);
+        let row = rows
+            .iter()
+            .find(|r| matches!(r.kind, board_tui::view::IssueRowKind::Issue(_)))
+            .expect("a linked-issue row")
+            .kind
+            .clone();
+        d.app.linear.as_mut().unwrap().detail_selection = Some(row);
+        press(&mut d, KeyCode::Enter);
+        assert!(d.deliver_pending_linear_issue());
+    }
+
+    let stack = &detail_state(&d).detail_stack;
+    assert_eq!(stack.len(), CAP, "the back stack is not capped");
+    // Which end was dropped, not just how many. The steps kept are the MOST
+    // RECENT ones: the last pushed is the page the next Esc goes back to, and
+    // the first is the oldest step still reachable. Keeping the other end would
+    // walk the reader back to where they were dozens of pages ago.
+    let pushed = |n: usize| {
+        if n == 1 {
+            "WEB-3302".to_string()
+        } else {
+            format!("WEB-{:04}", 4000 + n - 1)
+        }
+    };
+    assert_eq!(stack.last().unwrap().issue, pushed(HOPS));
+    assert_eq!(stack.first().unwrap().issue, pushed(HOPS - CAP + 1));
+}
+
+/// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
+/// page's own issue whatever row is selected.
+#[test]
+fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let (client, log) = RecordingClient::new(client);
+    let mut d = linear_driver_deferred(client, start_with_socket());
+    open_page_with_document(&mut d);
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // On a pane row, `o` focuses it.
+    press(&mut d, KeyCode::Char('o'));
+    assert_eq!(toast(&d), "focused pane wA:p2");
+
+    // On an issue row, `o` says what it is for rather than focusing the first
+    // pane it can find.
+    for _ in 0..5 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3319".into()))
+    );
+    press(&mut d, KeyCode::Char('o'));
+    assert!(toast(&d).contains("o focuses a pane"), "{}", toast(&d));
+
+    // `y` still copies the page's own worktree path from an issue row.
+    press(&mut d, KeyCode::Char('y'));
+    assert!(!toast(&d).contains("no worktree binding"), "{}", toast(&d));
+
+    let called = methods(&log);
+    assert!(
+        called
+            .iter()
+            .all(|m| m.starts_with("linear.") || m == "pane.focus"),
+        "{called:?}"
+    );
+}
+
+/// Covers AE5. The description's Markdown reaches the page as structure, not
+/// as markup, and the media it cannot draw is named rather than dropped.
+#[test]
+fn the_description_renders_its_markdown_on_the_page() {
+    let mut doc = page_document();
+    if let Some(issue) = doc.issue.as_mut() {
+        issue.description = Some(
+            "## What happens\n\nThe drawer is **blank**.\n\n\
+             - [ ] reproduce\n- [x] triage\n\n\
+             ```\nlet **x** = 1;\n```\n\n\
+             ![a shot](https://example.com/shot.png)"
+                .into(),
+        );
+    }
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", doc);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    // The heading keeps its text and loses its hashes.
+    assert!(frame.contains("What happens"), "{frame}");
+    assert!(!frame.contains("## What"), "{frame}");
+    // Emphasis is styling, not asterisks.
+    assert!(frame.contains("The drawer is blank."), "{frame}");
+    // Checkboxes render as boxes.
+    assert!(frame.contains("☐ reproduce"), "{frame}");
+    assert!(frame.contains("☑ triage"), "{frame}");
+    // A fenced block keeps its contents verbatim, markup and all.
+    assert!(frame.contains("let **x** = 1;"), "{frame}");
+    // The image is named with its link rather than silently dropped.
+    assert!(
+        frame.contains("[a shot] https://example.com/shot.png"),
+        "{frame}"
+    );
+}
+
+// -- findings from code review ---------------------------------------------
+
+/// R14, and the defect that made it a P0: a linked issue is deliberately NOT on
+/// the board, so resolving the page's subject out of the snapshot rendered it
+/// blank. The earlier back-stack test passed over this because it asserted the
+/// state and never that anything was drawn.
+#[test]
+fn a_linked_issue_that_is_not_on_the_board_still_draws_a_page() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+
+    // WEB-3400 is a relation, and the board's snapshot has never heard of it.
+    assert!(
+        d.app.linear.as_ref().unwrap().issue("WEB-3400").is_none(),
+        "fixture no longer off-board; pick another identifier"
+    );
+    for _ in 0..2 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    assert_eq!(
+        page_selection(&d),
+        Some(IssueRowKind::Issue("WEB-3400".into()))
+    );
+    press(&mut d, KeyCode::Enter);
+
+    // Before its read lands, the page draws from the row the reader opened.
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("WEB-3400"), "{frame}");
+    assert!(frame.contains("Ship the drawer"), "{frame}");
+    assert!(frame.contains("Todo"), "{frame}");
+    assert!(frame.contains("not on this board"), "{frame}");
+}
+
+/// The same defect from the other side: a refresh while reading a linked issue
+/// must not close the page, because `clamp` cannot find that issue on the board.
+#[test]
+fn a_refresh_does_not_close_the_page_on_a_linked_issue() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
+    for _ in 0..2 {
+        press(&mut d, KeyCode::Char('k'));
+    }
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3400")
+    );
+
+    press(&mut d, KeyCode::Char('r'));
+    d.deliver_pending_linear_snapshot();
+
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "the refresh closed the page"
+    );
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-3400")
+    );
+}
+
+/// A reachability failure is carried IN the document by contract, so a page that
+/// only checks for an RPC error renders an issue with nothing in it and calls
+/// that success.
+#[test]
+fn an_unavailable_document_is_a_failure_not_an_empty_issue() {
+    let unavailable = board_core::protocol::LinearIssueDocument {
+        schema: 1,
+        status: "unavailable".into(),
+        message: Some("Linear could not be reached".into()),
+        truncated: vec![],
+        issue: None,
+    };
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", unavailable);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let error = detail_state(&d)
+        .detail_error
+        .clone()
+        .expect("an unavailable document has to reach the page as a failure");
+    assert!(error.retryable, "Linear may come back; `r` should retry");
+    assert!(error.message.contains("could not be reached"), "{error:?}");
+
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("could not be reached"), "{frame}");
+    // And the snapshot fields are still there to read.
+    assert!(frame.contains("WEB-3302"), "{frame}");
+}
+
+/// R8a's page half. A read that stopped at its cap has to say so where the
+/// reader is looking: without this the page presents what came back as the
+/// whole thread, and the sub-issue count is a WRONG number rather than an
+/// incomplete one.
+#[test]
+fn a_truncated_document_says_so_and_does_not_print_a_false_count() {
+    let mut doc = page_document();
+    doc.status = "partial".into();
+    doc.truncated = vec!["children".into(), "comments".into()];
+    doc.message = Some("read the first 50 of children and comments".into());
+
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", doc);
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    // The count says the total is at least this, not exactly this.
+    assert!(frame.contains("Sub-issues  1/2+"), "{frame}");
+    assert!(!frame.contains("Sub-issues  1/2 "), "{frame}");
+    // And Activity says where the rest is.
+    assert!(frame.contains("the rest is in Linear"), "{frame}");
+}
+
+/// The same page with nothing truncated makes neither claim.
+#[test]
+fn an_untruncated_document_prints_a_plain_count_and_no_note() {
+    let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
+    let mut d = linear_driver_deferred(client, linear_start());
+    d.deliver_pending_linear_snapshot();
+    open_web_3302(&mut d);
+    assert!(d.deliver_pending_linear_issue());
+
+    let frame = draw(&d.app, W, H);
+    assert!(frame.contains("Sub-issues  1/2"), "{frame}");
+    assert!(!frame.contains("1/2+"), "{frame}");
+    assert!(!frame.contains("the rest is in Linear"), "{frame}");
+}
 #[test]
 fn columns_sort_by_workflow_state_type_not_the_views_order() {
     let mut snapshot = bound_with_view();
