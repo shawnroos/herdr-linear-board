@@ -29,12 +29,12 @@ use render::emit_line;
 
 /// Exit code (and `--json` envelope `code`) for an error raised by the CLI
 /// itself rather than by boardd: bad usage, a refused confirmation, a bad
-/// environment. Deliberately outside the protocol's documented `1..=6` so it
+/// environment. Deliberately outside the protocol's documented `1..=7` so it
 /// cannot be confused with "not found" (`2`), which is what this used to
 /// report. `64` is `EX_USAGE` from `sysexits.h`.
 const CLI_ERROR_CODE: i32 = 64;
 
-/// Exit code for an RPC error whose protocol code is outside `1..=6`. Protocol
+/// Exit code for an RPC error whose protocol code is outside `1..=7`. Protocol
 /// codes are not exit codes: they are unbounded, while a process exit status is
 /// taken modulo 256, so `256` would silently mean success. `70` is
 /// `EX_SOFTWARE`.
@@ -221,7 +221,7 @@ fn json_flag_in_options() -> bool {
 fn exit_code(error: &anyhow::Error) -> i32 {
     match rpc_error(error) {
         Some(rpc) => match rpc.code {
-            code @ 1..=6 => code,
+            code @ 1..=7 => code,
             _ => UNMAPPED_RPC_CODE,
         },
         None => CLI_ERROR_CODE,

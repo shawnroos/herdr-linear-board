@@ -7,8 +7,9 @@ use std::sync::mpsc;
 
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::protocol::{
-    LinearBindHandoffParams, LinearListKind, LinearListParams, LinearSnapshotParams,
-    PaneFocusParams, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearBindHandoffParams, LinearIssueParams, LinearListKind, LinearListParams,
+    LinearSnapshotParams, PaneFocusParams, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
+    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
@@ -19,6 +20,10 @@ use crate::Driver;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pending {
     Snapshot,
+    Issue {
+        issue: String,
+        generation: u64,
+    },
     List {
         kind: LinearListKind,
         id: Option<String>,
@@ -36,6 +41,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
         Effect::Refetch
             | Effect::LinearSnapshot
             | Effect::LinearList { .. }
+            | Effect::LinearIssue { .. }
             | Effect::FocusPane(_)
             | Effect::OpenIssueUrl(_)
             | Effect::CopyWorktreePath { .. }
@@ -55,6 +61,7 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         Effect::Refetch
         | Effect::LinearSnapshot
         | Effect::LinearList { .. }
+        | Effect::LinearIssue { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
         | Effect::CopyWorktreePath { .. }
@@ -120,11 +127,25 @@ pub(crate) fn classify<T>(
         if rpc.is_none() && timed_out {
             return LinearFailure::TimedOut(timeout);
         }
-        match rpc {
-            Some(rpc) if rpc.code == 1 && rpc.message.contains("unknown method") => {
+        // A local client answers with `board_core::Error` itself rather than a
+        // wire error, so the code is read from whichever arrived. Keying only
+        // on the wire error left the whole in-process tier unable to see a
+        // code at all, which is where this distinction is tested.
+        let local_code = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<board_core::Error>())
+            .map(|e| (e.code(), e.to_string()));
+        let code_and_message = rpc
+            .map(|rpc| (rpc.code, rpc.message.clone()))
+            .or(local_code);
+        match code_and_message {
+            Some((1, message)) if message.contains("unknown method") => {
                 LinearFailure::MethodNotFound
             }
-            Some(rpc) => LinearFailure::Failed(rpc.message.clone()),
+            // Code 7 is "the plugin ships no script for this op", which is
+            // fixed by updating the plugin rather than by retrying.
+            Some((7, message)) => LinearFailure::OpUnsupported(message),
+            Some((_, message)) => LinearFailure::Failed(message),
             None => LinearFailure::Failed(format!("{error:#}")),
         }
     })
@@ -175,6 +196,27 @@ impl Driver {
             LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
             move |client| client.linear_snapshot(&params),
             |result| LinearArrival::Snapshot(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_linear_issue(&mut self, issue: String, generation: u64) {
+        if let Some(pending) = self.deferred_linear.as_mut() {
+            pending.push_back(Pending::Issue { issue, generation });
+            return;
+        }
+        let params = LinearIssueParams {
+            issue: issue.clone(),
+            origin_socket: self.origin.origin_socket.clone(),
+            plugin_root: self.origin.plugin_root.clone(),
+        };
+        self.run_linear_read(
+            LINEAR_ISSUE_CLIENT_TIMEOUT,
+            move |client| client.linear_issue(&params),
+            move |result| LinearArrival::Issue {
+                issue,
+                generation,
+                result: Box::new(result),
+            },
         );
     }
 
@@ -303,6 +345,29 @@ impl Driver {
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::Handoff(
             classify(result, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT),
         ))));
+        true
+    }
+
+    /// Run the oldest held issue read synchronously and feed its arrival.
+    /// Returns whether one was pending. A test drives overlapping reads by
+    /// holding two and delivering them in the order it wants.
+    pub fn deliver_pending_linear_issue(&mut self) -> bool {
+        let Some(Pending::Issue { issue, generation }) =
+            self.take_pending(|p| matches!(p, Pending::Issue { .. }))
+        else {
+            return false;
+        };
+        let params = LinearIssueParams {
+            issue: issue.clone(),
+            origin_socket: self.origin.origin_socket.clone(),
+            plugin_root: self.origin.plugin_root.clone(),
+        };
+        let result = self.client.linear_issue(&params);
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::Issue {
+            issue,
+            generation,
+            result: Box::new(classify(result, LINEAR_ISSUE_CLIENT_TIMEOUT)),
+        })));
         true
     }
 
@@ -486,6 +551,10 @@ mod tests {
                 kind: LinearListKind::Spaces,
                 id: None,
             },
+            Effect::LinearIssue {
+                issue: s(),
+                generation: 1,
+            },
             Effect::BindHandoff {
                 space: s(),
                 project: s(),
@@ -519,7 +588,10 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        assert_eq!(allowed, 9, "the allow set grew or shrank");
+        // 10 since the issue page: `linear.issue` is the tenth read Linear mode
+        // may make. The number is pinned so widening what this mode can do is a
+        // deliberate edit rather than a side effect of adding an effect.
+        assert_eq!(allowed, 10, "the allow set grew or shrank");
     }
 
     #[cfg(feature = "fake-client")]

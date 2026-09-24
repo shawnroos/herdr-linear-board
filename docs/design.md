@@ -946,8 +946,7 @@ opens the daemon client and starts the TUI in Linear mode; the upstream path, wh
 project row for the cwd before the terminal exists, is never entered. A Linear-mode board holds no
 project, board, or card id, so the daemon has no row for it and no mutating method can name one.
 
-**The read path.** One request, `linear.snapshot {workspace_id, origin_socket?}`, is the whole
-read:
+**The read path.** `linear.snapshot {workspace_id, origin_socket?}` is the whole board read:
 
 ```text
 board tui / board linear snapshot [id]
@@ -956,6 +955,42 @@ board tui / board linear snapshot [id]
       → herdr  session.snapshot on origin_socket       (best effort: pane_status per named pane)
   ← document + pane_status
 ```
+
+**The issue page.** Opening a card opens a page, not an overlay: it replaces the board at every
+width and is laid out like Linear's own issue page — title, description, sub-issues and Activity in
+a main column, every Linear property in a sidebar, and the board's own bindings last in that
+sidebar. Below 72 cells of body width it is one column in the same order.
+
+The snapshot has none of what that page shows, so a second request fills it in:
+
+```text
+Enter on a card
+  → the page draws at once from the snapshot row   (identifier, title, status, priority,
+  →                                                 assignee, labels, bindings)
+  → boardd  linear.issue {issue}
+      → plugin root / bin/work-issue.sh <id>        (one document, per-section status)
+  ← description, sub-issues, parent, relations, comments, history, project,
+    milestone, cycle, estimate, due date
+```
+
+Four properties of that read are load-bearing:
+
+- **It is ONE Linear call.** The script asks each paged connection for a single page and names what
+  did not fit in `truncated` rather than draining it, so an issue with a thousand comments opens as
+  fast as an empty one. The daemon's deadline for the op is sized for that one call.
+- **A result is applied only to the issue still on screen.** `Enter` on a linked issue opens it in
+  place, so overlapping reads are the normal case; a read that lands after the reader has moved on
+  is dropped rather than painted under another issue's title.
+- **Nothing is cached between opens**, with one exception: a back step re-renders what that page
+  last showed while its own fresh read runs, so `Esc` is a step back rather than a reload.
+- **"This plugin cannot do this read" is its own protocol code.** A plugin that ships no
+  `bin/work-issue.sh` answers `7`, not the `6` every other plugin-side failure uses, because the
+  two have opposite remedies: `6` is worth retrying and `7` is fixed only by updating the plugin. A
+  page that could not tell them apart would offer a retry that can never succeed.
+
+The document's contract is `plugins/work/docs/issue.md` in the work plugin. This repo vendors that
+script's own output as fixtures under `crates/board-core/tests/fixtures/linear-issue/`, pinned by
+sha256 in `VERSION`, so the contract cannot drift on one side without a failing test on the other.
 
 The plugin root is resolved on every request, in order: the caller's `BOARD_WORK_PLUGIN_ROOT`
 (sent as `plugin_root`), the daemon's, `[daemon] work_plugin_root` read from the board config at

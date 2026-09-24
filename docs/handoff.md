@@ -1,138 +1,45 @@
-# Spinoff: herdr-linear-board as the interface for the work plugin
+# Spinoff: Issue detail parity with Linear
 
 > This handoff is directional — author intent and a starting point, not a spec.
 > The code and tests are the source of truth; validate against them and refine.
 
 ## Goal
 
-Repurpose the `herdr-linear-board` fork into a visible interface for the `work`
-plugin. The board takes its state from the herdr space it is open in, rather than
-from its own database.
-
-Shawn's words: "a kind of interface for this plugin. Getting its state from the
-herdr space it is in."
+Make the board's issue detail page (the card detail opened with Enter or a click in Linear mode) structurally identical to Linear's own issue page. Same sections, same order, same properties, so a person moving between the two finds things in the same place.
 
 ## Why now / context
 
-The `work` plugin just learned to place work by a premise: **herdr state follows
-the Linear model**.
+The Linear mode pickers PR (shawnroos/herdr-linear-board#2) shipped a card detail view, but it is a thin overlay. It shows one meta line (state · priority · assignee), labels, URL, binding path/tab and the bound panes. Shawn wants the detail page to mirror Linear's issue page structure. The board is now running live in herdr and bind from the board works (after the herdr preview-version gate fix, commit 6acb8b1).
 
-| Herdr | Linear | Recorded where |
-|---|---|---|
-| space | project | `~/.claude/work/workspaces/<space-id>.json` |
-| tab | a piece of work, one ticket | the ticket's binding record |
-| pane | a session on that work | herdr itself |
+## Key decisions already made
 
-That model has no view. Everything the plugin knows lives in JSON records and a
-shadow log. A board that opens inside a space and shows that space's tickets, their
-worktrees, and their sessions is the obvious missing surface.
-
-`herdr-board` is already most of the chassis. It is a herdr 0.9.0 plugin that opens
-as an overlay pane, it reads which space and pane it was opened from, and it already
-dispatches agents into visible panes.
-
-## Facts established before this spinoff
-
-- **The fork is untouched.** It is 0 commits ahead of and 0 behind its parent,
-  `nelsonPires5/herdr-board`, at v0.17.0. Despite the repo description "Linear boards
-  in herdr", nothing is repurposed yet.
-- **Upstream is active.** v0.17.0 shipped on 2026-09-13 with herdr 0.9.0 support.
-- **It is Rust**, five crates: `board-cli`, `board-core`, `board-daemon`,
-  `board-herdr`, `board-tui`. One binary, `board`, is the TUI, the daemon and the CLI.
-- **It has its own source of truth.** A `boardd` daemon owns an SQLite store at
-  schema v15 (`schema.sql`): projects, boards, columns, cards, comments, runs.
-- **Its runtime pins exactly herdr 0.9.0 and socket protocol 22.** The local machine
-  runs herdr 0.9.0 on protocol 22, so it is compatible today. A herdr upgrade breaks it.
-- **It already knows its context.** Scope selection reads
-  `HERDR_PLUGIN_CONTEXT_JSON.focused_pane_cwd`, then `workspace_cwd`, then the process
-  cwd. That is the natural hook for "state from the space it is in".
-- **The work plugin's live store is sparse.** One bound space, two worktree bindings,
-  zero repository records. PR #82, which adds the repository records and the
-  space-and-tab placement, is open and unmerged. A board reading the store today
-  shows almost nothing.
-
-## Key decisions already made (in the work plugin — do not relitigate)
-
-- **Bindings are authoritative; labels never are.** On Shawn's machine the only bound
-  space is labelled `Editor` and carries the project `Example Launch`. A board
-  that matches a space to a project by label shows the wrong project.
-- **One resolution rule** for team, repository, space and tab. Exactly one known
-  answer: resolve it and state the fact and its source. More than one: ask, naming
-  every candidate. None: ask and record the answer.
-- **Writes to Linear go through a consent gate.** A write with no recorded answer for
-  that directory goes to a shadow log and records a notice instead of reaching
-  Linear. A person can decline. Nothing records consent on the agent's own initiative.
-- **A hook never binds or chooses.** It has nobody to ask.
-
-## The collisions this work has to resolve
-
-These are the real design questions. Each is a place where two systems each
-believe they own the same thing.
-
-1. **Source of truth.** The board's SQLite versus the work plugin's store plus Linear.
-   "State from the space" points at the work plugin's records. Is the SQLite store
-   kept as a cache, reduced to board-only concerns such as column layout, or removed?
-2. **Tabs.** The board opens one `card-<id>` tab per card. The work plugin records one
-   tab per ticket and never infers it from a label. Two tab conventions in one space
-   produce duplicate tabs for the same work.
-3. **Scope.** The board's project is a Git root or a cwd. The work plugin's scope is a
-   Linear project bound to a space, and one project spans several repositories.
-   These are different keys for different things.
-4. **Placement.** The board dispatches an agent when a card moves into an `auto`
-   column. The work plugin opens sessions in the ticket's tab. Two placers means two
-   sets of rules for where a session lands. One has to call the other.
-5. **Write authority.** If moving a card changes a Linear state, that write has to
-   pass the work plugin's consent gate. A board that writes to Linear directly is a
-   second, ungated write path — the exact thing the gate exists to prevent.
-6. **Upstream.** Keep merging from `nelsonPires5/herdr-board`, or diverge into a hard
-   fork? Upstream is active, and every divergence makes the next merge harder. A thin
-   adapter layer keeps the option open; a rewrite of the data model closes it.
+- **Base is PR #2's branch (`feature/linear-mode-pickers`), not `main`.** Linear mode does not exist on `main` yet: PR #1 (read-only Linear mode) and PR #2 are stacked and unmerged. This spinoff stacks on PR #2.
+- **The board never reads Linear directly.** All Linear data comes from the work plugin (shrimpshack, `plugins/work`) through the daemon: `linear.snapshot` runs `bin/work-snapshot.sh`, `linear.list` runs the list scripts. Any new field the detail page needs must come the same way (plugin script → daemon op → typed protocol struct → TUI).
+- **Cross-process JSON rows must tolerate null.** See `docs/solutions/integration-issues/serde-default-rejects-explicit-null.md`: every field the plugin can print as `null` needs `Option<T>` or the `null_as_empty` deserializer.
+- **Read-only.** The detail page shows Linear data and board bindings; it does not edit issues. Writes to Linear go through the plugin's consent gate, which is out of scope here.
 
 ## Open questions / not yet decided
 
-- Is the board a **view** of work-plugin state, a **controller** that calls work-plugin
-  verbs, or both?
-- How does a Rust binary read the work plugin's state: parse the JSON records
-  directly, shell out to the `lib/` verbs, or does the work plugin need a stable
-  read-only interface first?
-- What is a "card" when the source of truth is Linear: an issue, a worktree binding,
-  or a session?
-- What does the board show in a space with no binding? Under the one resolution rule
-  it proposes a binding and asks. It does not guess.
+- **What "structurally identical" covers.** Linear's issue page has a main column (title, description, sub-issues, activity/comments) and a properties sidebar (status, priority, assignee, labels, project, milestone, cycle, estimate, due date, relations). Which sections are in scope for a terminal UI, and how the two-column layout collapses at narrow widths (the board stacks below 72 cells).
+- **Where the extra data comes from.** The snapshot's `LinearIssue` (`crates/board-core/src/protocol.rs`, `pub struct LinearIssue`) carries only id, identifier, title, url, state, assignee, priority, labels, stale and bindings. There is no description, comments, sub-issues, project, cycle, estimate or due date. Options: widen the snapshot (heavier: 250+ issues per space), or add a per-issue read (a new plugin script like `work-issue.sh <id>` plus a `linear.issue` daemon op) fetched when the detail opens. The per-issue read looks more likely; it needs a plugin version bump (the board's floor is `PLUGIN_VERSION_FLOOR = "0.4.0"`).
+- **Markdown rendering** of the description and comments in ratatui, and how much of it is worth doing.
+- **Where the board-only sections go** (bound worktree, tab, panes, `b` to bind): as a sidebar block, or below the Linear sections.
 
 ## Starting point
 
-**This repo** (`~/projects/herdr-linear-board`, branch from `origin/main`):
-- `docs/design.md` — §1 Concepts, §3 Data model, and the Scope selection section
-  near line 416.
-- `docs/herdr.md` — how the board talks to herdr, including placement and env.
-- `crates/board-herdr` — the herdr client.
-- `herdr-plugin.toml` — the overlay pane wiring.
-- `schema.sql` — the store this work competes with.
-
-**The work plugin** (`~/projects/shrimpshack`, branch `feature/work-plugin-initiative`,
-PR #82):
-- `CONCEPTS.md` — the vocabulary: Binding, Unbound, Misplaced, Stale.
-- `plugins/work/lib/binding.sh` — `workspace_read`, `workspace_state`,
-  `workspace_project`, and the record format.
-- `plugins/work/lib/herdr-read.sh` — `workspace_id`, `tab_id`, `panes_in_tab`.
-- `plugins/work/lib/context.sh` — the one resolution rule to mirror.
-- `docs/plans/2026-09-11-0753-refactor-ticket-derived-worktree-location-plan.md` —
-  KTD12 to KTD14 and U7, the placement design.
-
-**A sibling spinoff overlaps.** `feature/work-plugin-config` in the shrimpshack repo is
-designing a config file for the work plugin, including how spaces, tabs and splits
-map and how they are named. A board that renders that mapping depends on it.
-Coordinate rather than invent a second naming scheme.
+- Detail rendering: `crates/board-tui/src/view/linear.rs`, `fn draw_detail` and `fn detail_lines`.
+- Detail keys and state: `crates/board-tui/src/app/linear.rs` (`detail_key`, `LinearState::detail_issue`).
+- Snapshot types: `crates/board-core/src/protocol.rs` (`LinearSnapshot`, `LinearIssue`).
+- Daemon script runner: `crates/board-daemon/src/ops/linear.rs` (shared `ScriptRunner`, envelope, version floor).
+- Plugin side: `~/projects/shrimpshack/worktrees/work-snapshot-board/plugins/work` — `bin/work-snapshot.sh`, `lib/linear.sh` (GraphQL queries), `docs/snapshot.md` (the contract), `tests/fixtures/fake-linear.sh`. Plugin PR shawnroos/shrimpshack#88 is stacked on #86.
+- Snapshot tests: `crates/board-tui/tests/linear/` (insta). Sandbox gates: `scripts/sandbox.sh prepare` once, then `scripts/sandbox.sh gates` (Docker via `colima start`).
+- Plan for the previous round: `docs/plans/2026-09-16-0929-feat-linear-mode-pickers-and-layout-plan.md`.
 
 ## Recommended next step
 
-`/ce-brainstorm`. The hard part is deciding which system owns what — source of
-truth, tab convention, placement, and write authority — not writing Rust. Five of
-the six collisions above are ownership questions, and the upstream question changes
-how much of the board it is sane to touch. Scope that first, then `/ce-plan`.
+`/ce-brainstorm`. The scope of "structurally identical" and the data source (a wider snapshot or a per-issue read) are real product and contract choices that span two repos, so settle them before planning.
 
 ## Source session
 
-Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos-projects-shrimpshack-worktrees-work-plugin-initiative/2b955433-71c5-4679-8ff9-e8d925d5a9f5.jsonl`
-Resume:     `cd /Users/shawnroos/projects/shrimpshack/worktrees/work-plugin-initiative && claude -r 2b955433-71c5-4679-8ff9-e8d925d5a9f5`
+Transcript: `/Users/shawnroos/.claude/projects/-Users-shawnroos-projects-herdr-linear-board-worktrees-herdr-board-work-interface/550348e7-b627-43fb-97e8-aa9fbe3ef6ef.jsonl`
+Resume:     `cd /Users/shawnroos/projects/herdr-linear-board/worktrees/herdr-board-work-interface && claude -r 550348e7-b627-43fb-97e8-aa9fbe3ef6ef`

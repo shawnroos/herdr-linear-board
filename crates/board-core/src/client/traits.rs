@@ -12,14 +12,14 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DaemonStatus, DeletedResult, Event, HarnessCapabilitiesParams,
-    HarnessListResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearListParams,
-    LinearListResult, LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult,
-    PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
-    ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
-    ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
-    RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams,
-    SessionListResult, SpaceListParams, SpaceListResult, StopResult, TemplateApplyParams,
-    Visibility,
+    HarnessListResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearIssueDocument,
+    LinearIssueParams, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
+    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
+    RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
+    RunPaneExitedParams, SessionListResult, SpaceListParams, SpaceListResult, StopResult,
+    TemplateApplyParams, Visibility,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -524,6 +524,12 @@ pub trait BoardClient {
     fn linear_list(&mut self, p: &LinearListParams) -> anyhow::Result<LinearListResult> {
         let value = self.call("linear.list", serde_json::to_value(p)?)?;
         Ok(LinearListResult::from_value(p.kind, value)?)
+    }
+
+    fn linear_issue(&mut self, p: &LinearIssueParams) -> anyhow::Result<LinearIssueDocument> {
+        Ok(serde_json::from_value(
+            self.call("linear.issue", serde_json::to_value(p)?)?,
+        )?)
     }
 
     fn linear_bind_handoff(

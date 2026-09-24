@@ -43,6 +43,12 @@ pub(crate) enum LinearCmd {
         /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
         workspace_id: Option<String>,
     },
+    /// One Linear issue in full: description, sub-issues, parent and relations,
+    /// comments and history, as the board's issue page reads it.
+    Issue {
+        /// The issue's identifier, e.g. `WEB-3318`.
+        issue: String,
+    },
     /// herdr spaces and their Linear binding state.
     Space {
         #[command(subcommand)]

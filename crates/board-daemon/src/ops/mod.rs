@@ -122,6 +122,7 @@ routes!(d, params, {
     "pane.focus" => panes::pane_focus(from(params)?),
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
     "linear.list" => linear::linear_list(d, from(params)?),
+    "linear.issue" => linear::linear_issue(d, from(params)?),
     "linear.bind_handoff" => bind_handoff::linear_bind_handoff(d, from(params)?),
 });
 
