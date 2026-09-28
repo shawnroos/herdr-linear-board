@@ -13,8 +13,9 @@ All facts are against shrimpshack `origin/main` at `223f27c` (`plugins/work/test
 - About 3,050 of those lines (16%) are setup and inline stubs before the first test.
 - Plus `tests/unit/setup_common.bash` (58 lines, loaded by every suite) and `tests/run-tests.sh`
   (912 lines, 16 static gates).
-- Roughly **900 to 1,000 behaviours** are worth porting. The Rust suite does not need to match the
-  line count: Rust fakes replace the curl-script and fake-CLI setup.
+- Because agents write Linear through Linear's MCP server and the board only reads Linear, most of
+  the Linear-write tests become obsolete rather than ported. The Rust suite does not need to match
+  the line count: Rust fakes replace the curl-script and fake-CLI setup.
 
 ## Behaviour classes
 
@@ -23,7 +24,7 @@ All facts are against shrimpshack `origin/main` at `223f27c` (`plugins/work/test
 | Placement engine | `board-plan` | 506 / 106 / 28 | Moves as-is |
 | Config validation | `board-config` | 712 / 54 / 62 | Moves, about 90% as-is |
 | Store semantics | `binding`, `board-store`, `repos`, `context-filter`, `states` | 3,315 / 267 / 252 | Invariants move; file mechanics go |
-| Linear client, writes, consent | `linear`, `board-linear`, `reconcile`, `description`, `documents`, `views`, `create`, `start`, `propose` | 5,432 / 712 / 385 | Invariants move; needs a Rust fake Linear |
+| Linear client, writes, consent | `linear`, `board-linear`, `reconcile`, `description`, `documents`, `views`, `create`, `start`, `propose` | 5,432 / 712 / 385 | Read path moves; write path mostly obsolete |
 | Credential and fakes | `fake-linear`, `migrate`, `secrets` | 1,144 / 200 / 81 | Mostly obsolete or re-scoped |
 | herdr sync and placement | `board-sync`, `board-write`, `board-attended`, `board-herdr`, `placement`, `herdr-read`, `herdr-write` | 4,062 / 1,028 / 235 | Behaviours move onto boardd's herdr stack |
 | Hooks | `ground`, `board-behind` | 580 / 121 / 39 | Stay bash, get thin |
@@ -34,8 +35,10 @@ All facts are against shrimpshack `origin/main` at `223f27c` (`plugins/work/test
 | Verdict | Classes | Lines | Tests |
 |---|---|---|---|
 | Port as-is | placement engine, config validation (most), paths and names | about 2,300 | about 180 |
-| Port the invariant, new harness | store, Linear writes, herdr sync, hook content | about 13,400 | about 910 |
-| Obsolete | snapshot wire, bash-only gates, most credential and fake tests, plus the file-mode, argv, sourcing, binary-resolution and lock slices of the others | about 2,900 plus slices | about 270 |
+| Port the invariant, new harness | store, the Linear read path, herdr sync, hook content | about 8,000 plus the read slice of the Linear class | not yet counted |
+| Obsolete | the Linear write path, snapshot wire, bash-only gates, most credential and fake tests, plus the file-mode, argv, sourcing, binary-resolution and lock slices of the others | about 2,900 plus most of the Linear class | not yet counted |
+
+The split inside the Linear class has not been counted file by file; that is migration-plan work.
 
 ## Per class
 
@@ -51,21 +54,21 @@ global one), the triage/backlog exclusion, `level-of`, and the session scope cla
 cover file mode, symlinks and the lock; they go if the config lives in SQLite. "Space order in the
 file decides a ticket's home" needs an explicit order column.
 
-**Store semantics.** The domain rules move: the binding state machine and its nonce ordering (a
-superseded nonce is dead, a declined candidate never returns), a branch change downgrading a binding
-to proposed, `prior_bindings` on rebind, consent covering team, project and branch, question
-preconditions, per-field space consent, sync `behind`, session isolation (two herdr sessions with the
+**Store semantics.** The domain rules move: the binding state machine (a declined candidate never
+returns, a branch change downgrades a binding to proposed, `prior_bindings` on rebind), question
+preconditions, sync `behind`, session isolation (two herdr sessions with the
 same workspace id do not share a record), and misplaced/stale suspension of writes. The per-file
 mode, truncation, rename and lock tests go. One new test replaces them: importing the existing JSON
 store into SQLite once.
 
-**Linear client, writes, consent.** The rules move: branch-to-identifier parsing, error mapping and
-retry, paging with truncation flags, the cache freshness bound, `write_allowed`, shadow mode
-(compute, log, send nothing), the consent gate, the GraphQL shape of every mutation, description
-template validation, document create-then-update, and `start`'s path, branch and repository
-question with idempotent retry. The "credential never reaches argv" tests are specific to a curl
-subprocess and collapse to "the key is never logged". This class needs a Rust HTTP fake Linear; it
-can reuse the plugin fake's captured response shapes, not its role as a curl stand-in.
+**Linear client, writes, consent.** The read rules move: branch-to-identifier parsing, error
+mapping and retry, paging with truncation flags, the cache freshness bound, and `start`'s path,
+branch and repository question with idempotent retry. The write rules become obsolete, because
+agents write through Linear MCP: `write_allowed`, shadow mode, the consent gate and the nonce, the
+GraphQL shape of every mutation, description template validation and document create-then-update.
+Any worth keeping become skill guidance. The "credential never reaches argv" tests collapse to "the
+key is never logged". The read path needs a Rust HTTP fake Linear; it can reuse the plugin fake's
+captured response shapes, not its role as a curl stand-in.
 
 **Credential and fakes.** Keychain access from Rust needs a much smaller suite; the `security -w`
 traps are specific to the CLI. `migrate` stays only if the plaintext fallback stays.
@@ -87,14 +90,13 @@ exit-code, cleared-env and cross-repo hash-pin tests go with the wire. The conte
 boardd's Linear-mode tests: view fallback to team columns, archived and not-in-project views,
 unmapped tabs, offline project naming, and sanitising at range edges.
 
-**Bash-only gates.** Each exists because bash has no modules or types, and all go. Two ideas
-survive. "Only a person-facing entry point can confirm" becomes a Rust test that no MCP tool or
-non-interactive CLI verb reaches the confirm path. The settings-doc check already has a home in
+**Bash-only gates.** Each exists because bash has no modules or types, and all go, including the
+consent caller checks, since the nonce retires. The settings-doc check already has a home in
 `scripts/tests/test_docs.py`.
 
 **Paths and names.** Pure logic that becomes table tests: root containment (symlink, hardlink,
 sibling prefix), worktrees-root rules, naming schemes and their length caps, and safe worktree
-removal (commits delivered, no process running in it, the answered question's nonce required).
+removal (commits delivered, no process running in it).
 Removal needs real git repositories, which the crate tests already build, plus seams for `gh` and
 `lsof`.
 
