@@ -123,13 +123,27 @@ calls into board socket requests.
 | Mark | flag a card "needs you", "done" or "has a question"; attach a short note to a card | write |
 | Notify | send a herdr notification ("ENG-123 is ready for review") | write |
 | Ask to show | ask the person to look at an issue: the board shows "Claude wants to show you ENG-123 — press enter" | write |
+| Open a board | open the TUI in a new tab or a split beside the agent's own pane, already showing the issue, space or card the agent is working on | write |
 
-Agents point; they do not grab the person's view. No tool opens the board, focuses a pane, moves
-the cursor or jumps the TUI to a screen. [skill/SKILL.md](../skill/SKILL.md) already refuses a CLI
+Agents point; they do not grab the person's view. No tool focuses a pane, moves the cursor, or
+jumps an existing TUI to a screen. [skill/SKILL.md](../skill/SKILL.md) already refuses a CLI
 verb for focusing a pane because "it moves the person's view in herdr, which an agent has no
 reason to do", and this keeps that rule. An agent in a background pane would take focus while the
 person types, and several agents would fight over one view. "Ask to show" moves the view only when
 the person presses the key.
+
+"Open a board" adds a board without taking the view. boardd calls herdr's `plugin.pane.open`
+(verified against the 0.9.0 schema, `docs/herdr-0.9.0-schema.json`) with:
+
+- **placement** `tab` or `split` only. `overlay`, `popup` and `zoomed` cover what the person is
+  looking at, so the tool refuses them.
+- **`focus: false`**, always. The new pane appears; the cursor stays where the person left it.
+- **`target_pane_id`** set to the agent's own pane (`HERDR_PANE_ID`) for a split, so the split
+  lands in the agent's tab, not the one the person is working in.
+- **context in the pane's environment**: the space, issue or card to show, so the TUI opens on it.
+
+The tool reuses a board pane it already opened for the same context instead of stacking new ones,
+and returns the pane id so the agent can close it later (`plugin.pane.close`).
 
 Marks, notes and show-requests reach the TUI the way board changes already do: the tool call goes
 to boardd, boardd records it, and the TUI draws it from an event. Agents never drive the TUI
@@ -236,8 +250,8 @@ field that crosses a process boundary needs `Option<T>` or `null_as_empty`
   this record exists to design out.
 - **TUI confirmation for bindings.** Costs a round-trip to the TUI to guard local, undoable links;
   the tool permission prompt already asks the person when they want to be asked.
-- **Agent tools that move the person's view.** Background agents would take focus while the person
-  types.
+- **Agent tools that move the person's view** (focus a pane, open the board as an overlay, popup or
+  zoomed pane, drive an open TUI). Background agents would take focus while the person types.
 - **An MCP tool that watches Linear MCP.** An MCP server cannot see another server's calls.
 - **A `.mcp.json` written into each worktree.** Needs an approval per worktree and dirties every
   worktree; user scope covers every session.
