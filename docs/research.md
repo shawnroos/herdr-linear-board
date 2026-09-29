@@ -158,7 +158,7 @@ through a temporary `0600` file, waits for `interactive_ready`, and sends the ca
 ## D. Building-block recommendations (from research; adapted to our TUI-in-pane choice)
 
 - **Storage**: SQLite WAL, daemon sole writer; CLI/TUI go through the daemon socket. JSON/md files race with concurrent writers.
-- **Agent→board channel**: tiny CLI (`board comment/move/done`) > MCP for v1 — works from any harness via Bash, allowlistable (`Bash(board *)`), zero per-harness MCP config. MCP wrapper later.
+- **Agent→board channel**: tiny CLI (`board comment/move/done`) > MCP for v1 — works from any harness via Bash, allowlistable (`Bash(board *)`), zero per-harness MCP config. MCP wrapper later. (That "later" is proposed in [board-owns-the-store.md](board-owns-the-store.md).)
 - **Completion**: explicit agent signal > process exit (headless) > Stop/SessionEnd hook > herdr status events > idle heuristics. Never idle-scraping alone.
 - **Concurrency**: per-space FIFO + global semaphore; worktree mode for parallelism on one repo.
 - **TUI kanbans that exist** (rust_kanban, kanban-tui/ratatui, kanbanban) are standalone apps, not embeddable libs — we write our own view (ratatui or bubbletea).

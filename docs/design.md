@@ -891,7 +891,7 @@ mode, terminal capture, or telemetry upload.
 5. boardd lifecycle: `board tui` auto-starts the daemon if absent; daemon outlives the overlay (runs continue with the board closed; `herdr notification show` covers "done while closed").
 
 6. **Independent canonical-path boards.** Git-root/CWD chooses the pipeline board; `Global` preserves legacy data. The agent's runtime session/workspace remains explicit card configuration and is never inferred from board scope.
-7. **No MCP — CLI only.** Agents interact with the board exclusively through the `board` CLI.
+7. **No MCP — CLI only.** Agents interact with the board exclusively through the `board` CLI. Reopened by [board-owns-the-store.md](board-owns-the-store.md) (proposed, not built).
 
 ## 10. The herdr-board skill
 
@@ -900,7 +900,7 @@ The repo ships a **skill** (`skill/SKILL.md`, optionally installed into an agent
 Two consumers:
 
 - **Dispatched card agents**: the column `system_prompt` stays short ("you are in the PLAN stage…, finish with `board done`") because the skill carries the full CLI knowledge; `$BOARD_CARD_ID`/`$BOARD_RUN_ID` arrive via env at spawn.
-- **Any interactive agent session** (e.g. the user's main Claude Code): can create/inspect/move cards conversationally — "create a card to fix X in space w4, put it in Plan" — no MCP needed.
+- **Any interactive agent session** (e.g. the user's main Claude Code): can create/inspect/move cards conversationally — "create a card to fix X in space w4, put it in Plan" — no MCP needed. A proposal to add an MCP door beside the CLI is in [board-owns-the-store.md](board-owns-the-store.md).
 
 Permissions: allowlist `Bash(board *)` (or per-subcommand) so card agents can comment/done without prompts.
 
@@ -935,6 +935,8 @@ has bound to a Linear project. It is a view over the plugin's snapshot document;
 kanban, its SQLite rows, and its dispatch engine are not involved. The board never moves a card,
 edits an issue, or writes a Linear object, a plugin record or a SQLite row. Its herdr writes are
 its own pane title and, when a person starts a bind, one new `bind` tab running Claude.
+[board-owns-the-store.md](board-owns-the-store.md) proposes reversing this: boardd would own the
+plugin's store and write it. That is a proposal; this section describes what ships.
 
 **Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
 `workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
