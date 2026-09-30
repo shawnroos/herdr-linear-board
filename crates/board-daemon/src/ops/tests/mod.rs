@@ -724,6 +724,7 @@ mod comments;
 mod discovery;
 mod lifecycle;
 mod linear;
+mod linear_state;
 mod panes;
 mod parity;
 mod rollback;

@@ -878,7 +878,61 @@ fake_methods!(db, config, linear, params, {
             Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
         }
     },
+    "linear.state.get" => {
+        let p: crate::protocol::LinearStateGetParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_state(&p.space)?)?
+    },
+    "linear.bind" => serde_json::to_value(db.linear_bind(&serde_json::from_value(params)?)?)?,
+    "linear.unbind" => serde_json::to_value(db.linear_unbind(&serde_json::from_value(params)?)?)?,
+    "linear.grouping.get" => {
+        serde_json::to_value(db.linear_grouping_get(&params_or_default(params)?)?)?
+    },
+    "linear.grouping.set" => {
+        serde_json::to_value(db.linear_grouping_change(&serde_json::from_value(params)?, true)?)?
+    },
+    "linear.grouping.preview" => {
+        serde_json::to_value(db.linear_grouping_change(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.mark.set" => {
+        serde_json::to_value(db.linear_mark_set(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.mark.clear" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_mark_clear(p.id)?)?
+    },
+    "linear.note.set" => {
+        serde_json::to_value(db.linear_note_set(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.note.clear" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_note_clear(p.id)?)?
+    },
+    "linear.show.request" => {
+        serde_json::to_value(db.linear_show_request(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.show.accept" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_show_answer(p.id)?)?
+    },
+    "linear.show.dismiss" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_show_answer(p.id)?)?
+    },
+    "linear.activity.record" => {
+        serde_json::to_value(db.linear_activity_record(&serde_json::from_value(params)?)?)?
+    },
+    "linear.activity.list" => {
+        serde_json::to_value(db.linear_activity_list(&params_or_default(params)?)?)?
+    },
 });
+
+fn params_or_default<T: serde::de::DeserializeOwned + Default>(params: Value) -> anyhow::Result<T> {
+    if params.is_null() {
+        Ok(T::default())
+    } else {
+        Ok(serde_json::from_value(params)?)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1083,5 +1137,103 @@ mod tests {
             err.downcast_ref::<crate::Error>(),
             Some(crate::Error::HerdrUnavailable(m)) if m == "herdr is not running"
         ));
+    }
+
+    #[test]
+    fn linear_local_state_writes_round_trip_through_the_fake() {
+        use crate::protocol::{
+            LinearActivityListParams, LinearActivityOutcome, LinearActivityRecordParams,
+            LinearBindParams, LinearGroupingGetParams, LinearGroupingSetParams,
+            LinearMarkSetParams, LinearNoteSetParams, LinearShowRequestParams,
+            LinearStateGetParams, LinearUnbindParams, MarkKind,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let cwd = root.to_str().unwrap().to_string();
+        let mut client = FakeBoardClient::new().unwrap();
+        let get = LinearStateGetParams {
+            space: "space-1".into(),
+        };
+        let initial = client.linear_state_get(&get).unwrap();
+
+        let bound = client
+            .linear_bind(&LinearBindParams {
+                cwd: cwd.clone(),
+                issue: "WEB-1".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        assert_eq!(bound.before, None);
+        assert_eq!(bound.after.as_ref().unwrap().worktree_path, cwd);
+
+        let mark = client
+            .linear_mark_set(&LinearMarkSetParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                kind: MarkKind::Attention,
+                text: Some("look".into()),
+                created_by: None,
+            })
+            .unwrap();
+        client.linear_mark_clear(mark.after.id).unwrap();
+        let note = client
+            .linear_note_set(&LinearNoteSetParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                body: "b\u{1b}".into(),
+                author: "a".into(),
+            })
+            .unwrap();
+        assert_eq!(note.after.body, "b");
+        client.linear_note_clear(note.after.id).unwrap();
+        let show = client
+            .linear_show_request(&LinearShowRequestParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                ..LinearShowRequestParams::default()
+            })
+            .unwrap();
+        let id = show.after.unwrap().id;
+        client.linear_show_dismiss(id).unwrap();
+        assert!(client.linear_show_accept(id).is_err());
+        let recorded = client
+            .linear_activity_record(&LinearActivityRecordParams {
+                tool_name: "mcp__linear__save_comment".into(),
+                space: Some("space-1".into()),
+                ..LinearActivityRecordParams::default()
+            })
+            .unwrap();
+        assert_eq!(recorded.outcome, LinearActivityOutcome::Recorded);
+        let listed = client
+            .linear_activity_list(&LinearActivityListParams {
+                space: Some("space-1".into()),
+                limit: None,
+            })
+            .unwrap();
+        assert_eq!(listed.activity.len(), 1);
+        let text = r#"{"global": {"levels": {"column": "state"}, "filter": {"team": "ENG"}}}"#;
+        let set = LinearGroupingSetParams {
+            space: None,
+            text: Some(text.into()),
+        };
+        assert_eq!(
+            client.linear_grouping_preview(&set).unwrap(),
+            client.linear_grouping_set(&set).unwrap()
+        );
+        assert!(client
+            .linear_grouping_get(&LinearGroupingGetParams::default())
+            .unwrap()
+            .config
+            .is_some());
+        client
+            .linear_unbind(&LinearUnbindParams {
+                cwd,
+                ..LinearUnbindParams::default()
+            })
+            .unwrap();
+        let after = client.linear_state_get(&get).unwrap();
+        assert_eq!(after.worktree_bindings, initial.worktree_bindings);
+        assert!(after.marks.is_empty() && after.notes.is_empty() && after.show_requests.is_empty());
     }
 }

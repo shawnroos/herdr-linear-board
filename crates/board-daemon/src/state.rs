@@ -227,6 +227,7 @@ impl Daemon {
         self.record_effect(match &ev {
             Event::RunEnded { .. } => "run_ended",
             Event::BoardChanged { .. } => "board_changed",
+            Event::LocalStateChanged { .. } => "local_state_changed",
         });
         let _ = self.events_tx.send(ev);
     }

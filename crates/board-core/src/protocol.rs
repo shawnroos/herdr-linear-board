@@ -351,6 +351,14 @@ pub enum Event {
         run_id: i64,
         outcome: RunOutcome,
     },
+    /// Linear-mode local state changed. A variant rather than a
+    /// `BoardChangedReason`: an old client skips an unknown event line but
+    /// drops a whole `board_changed` line whose reason it cannot parse.
+    /// `space` absent means any space.
+    LocalStateChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        space: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1381,6 +1389,197 @@ pub struct LinearBindHandoffParams {
 pub struct LinearBindHandoffResult {
     pub tab_id: String,
     pub pane_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// linear local-state methods (boardd owns the rows; schema v16)
+// ---------------------------------------------------------------------------
+
+pub use crate::db::{
+    Activity, ActivityClaims, GroupingConfig, Mark, MarkKind, Note, ResolvedGrouping, ShowRequest,
+    SpaceBinding, WorktreeBinding,
+};
+
+/// What one write changed: the row before and after. `None` on one side
+/// means the row did not exist then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearChange<T> {
+    pub before: Option<T>,
+    pub after: Option<T>,
+}
+
+/// A set that replaces the rows it supersedes: `before` lists every row it
+/// removed, `after` is the row it wrote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearReplace<T> {
+    pub before: Vec<T>,
+    pub after: T,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearStateGetParams {
+    pub space: String,
+}
+
+/// One space's local state. Worktree bindings are not keyed by space, so
+/// every binding is listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearState {
+    pub space: String,
+    #[serde(default)]
+    pub space_bindings: Vec<SpaceBinding>,
+    #[serde(default)]
+    pub worktree_bindings: Vec<WorktreeBinding>,
+    #[serde(default)]
+    pub grouping: Option<ResolvedGrouping>,
+    #[serde(default)]
+    pub marks: Vec<Mark>,
+    #[serde(default)]
+    pub notes: Vec<Note>,
+    #[serde(default)]
+    pub show_requests: Vec<ShowRequest>,
+}
+
+/// `linear.bind`: bind the git worktree containing `cwd` to `issue`.
+/// `space` (else `claims.herdr_workspace_id`) names the space the change is
+/// announced for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearBindParams {
+    pub cwd: String,
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearUnbindParams {
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGroupingGetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearGroupingGetResult {
+    pub config: Option<GroupingConfig>,
+    #[serde(default)]
+    pub resolved: Option<ResolvedGrouping>,
+}
+
+/// `linear.grouping.set` / `preview`. `text` is raw JSON so the daemon can
+/// refuse a duplicate key, which a parsed request object has already lost.
+/// Without `space` it is a whole config; with `space` it is that space's
+/// mapping, and `text: null` removes the space's override.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGroupingSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMarkSetParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default = "attention")]
+    pub kind: MarkKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+}
+
+fn attention() -> MarkKind {
+    MarkKind::Attention
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearIdParams {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearNoteSetParams {
+    pub space: String,
+    pub issue: String,
+    pub body: String,
+    pub author: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearShowRequestParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
+}
+
+/// `linear.activity.record`: one Linear MCP write an agent made. `space`
+/// falls back to `claims.herdr_workspace_id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearActivityRecordParams {
+    pub tool_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearActivityOutcome {
+    /// The calling session was bound to the issue.
+    Linked,
+    /// A suggestion mark was written instead of a binding.
+    Suggested,
+    /// Only the activity row was written.
+    Recorded,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearActivityRecordResult {
+    pub activity: Activity,
+    pub outcome: LinearActivityOutcome,
+    #[serde(default)]
+    pub binding: Option<LinearChange<WorktreeBinding>>,
+    #[serde(default)]
+    pub mark: Option<LinearReplace<Mark>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearActivityListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearActivityListResult {
+    #[serde(default)]
+    pub activity: Vec<Activity>,
 }
 
 /// The document `bin/work-snapshot.sh` prints, plus the daemon-attached

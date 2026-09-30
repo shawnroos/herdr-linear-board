@@ -1068,6 +1068,39 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn mark(&self, id: i64) -> Result<Option<Mark>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{MARK_SELECT} WHERE id = ?1"),
+                params![id],
+                row_to_mark,
+            )
+            .optional()?)
+    }
+
+    pub fn note(&self, id: i64) -> Result<Option<Note>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{NOTE_SELECT} WHERE id = ?1"),
+                params![id],
+                row_to_note,
+            )
+            .optional()?)
+    }
+
+    pub fn show_request(&self, id: i64) -> Result<Option<ShowRequest>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{SHOW_SELECT} WHERE id = ?1"),
+                params![id],
+                row_to_show,
+            )
+            .optional()?)
+    }
+
     pub fn remove_mark(&self, id: i64) -> Result<bool> {
         Ok(self
             .conn

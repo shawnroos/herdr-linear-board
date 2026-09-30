@@ -18,6 +18,7 @@ mod comments;
 mod discovery;
 mod errors;
 mod linear;
+mod linear_state;
 mod panes;
 mod projects;
 mod runs;
@@ -124,10 +125,33 @@ routes!(d, params, {
     "linear.list" => linear::linear_list(d, from(params)?),
     "linear.issue" => linear::linear_issue(d, from(params)?),
     "linear.bind_handoff" => bind_handoff::linear_bind_handoff(d, from(params)?),
+    "linear.state.get" => linear_state::state_get(d, from(params)?),
+    "linear.bind" => linear_state::bind(d, from(params)?),
+    "linear.unbind" => linear_state::unbind(d, from(params)?),
+    "linear.grouping.get" => linear_state::grouping_get(d, from_or_default(params)?),
+    "linear.grouping.set" => linear_state::grouping_set(d, from(params)?),
+    "linear.grouping.preview" => linear_state::grouping_preview(d, from(params)?),
+    "linear.mark.set" => linear_state::mark_set(d, from(params)?),
+    "linear.mark.clear" => linear_state::mark_clear(d, from(params)?),
+    "linear.note.set" => linear_state::note_set(d, from(params)?),
+    "linear.note.clear" => linear_state::note_clear(d, from(params)?),
+    "linear.show.request" => linear_state::show_request(d, from(params)?),
+    "linear.show.accept" => linear_state::show_answer(d, from(params)?),
+    "linear.show.dismiss" => linear_state::show_answer(d, from(params)?),
+    "linear.activity.record" => linear_state::activity_record(d, from(params)?),
+    "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
 });
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
     serde_json::from_value(v).map_err(|e| Error::BadRequest(format!("bad params: {e}")))
+}
+
+fn from_or_default<T: serde::de::DeserializeOwned + Default>(v: Value) -> Result<T> {
+    if v.is_null() {
+        Ok(T::default())
+    } else {
+        from(v)
+    }
 }
 
 fn require_card(d: &Arc<Daemon>, id: i64) -> Result<board_core::model::Card> {

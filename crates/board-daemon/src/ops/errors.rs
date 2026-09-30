@@ -1,9 +1,11 @@
-//! Engine-decision adapters for the run handlers.
+//! Domain refusals to protocol error codes: the run lifecycle decider and the
+//! Linear local-state writes.
 //!
-//! The pure `board_core::engine` lifecycle decider knows nothing about the
-//! protocol error codes, so the translation both ways lives here rather than
-//! inside the handlers.
+//! Neither `board_core::engine` nor `board_core::db`'s local-state writes know
+//! the protocol error codes, so the translation lives here rather than inside
+//! the handlers.
 
+use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::engine::{LifecycleFacts, LifecycleHarness, LifecycleRejection};
 use board_core::harness::is_builtin_harness;
 use board_core::model::{Card, Run};
@@ -51,6 +53,23 @@ pub(super) fn lifecycle_rejection(card_id: i64, rejection: LifecycleRejection) -
         }
         LifecycleRejection::TimeoutPaused => {
             Error::InvalidState(format!("run for card {card_id} is awaiting review"))
+        }
+    }
+}
+
+pub(super) fn local_state_error(error: LocalStateError) -> Error {
+    match error {
+        LocalStateError::Store(error) => error,
+        LocalStateError::Rejected(rejection) => {
+            let message = rejection.to_string();
+            match rejection {
+                LocalStateRejection::Refused(_) => Error::BadRequest(message),
+                LocalStateRejection::UnknownIssue { .. } | LocalStateRejection::Missing(_) => {
+                    Error::NotFound(message)
+                }
+                LocalStateRejection::IssueBoundElsewhere { .. }
+                | LocalStateRejection::ShowRequestAnswered { .. } => Error::InvalidState(message),
+            }
         }
     }
 }
