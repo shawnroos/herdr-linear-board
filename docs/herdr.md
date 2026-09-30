@@ -395,6 +395,51 @@ pane for up to 90 s (250 ms first wait, doubling to 5 s a step), where a card ru
 gives up after about 3 s. Any failure after the tab exists closes its pane with
 `pane.close`, which closes the tab; `pane_not_found` counts as closed.
 
+## Opening a plugin pane by API (observed 2026-09-30)
+
+Observed on Herdr 0.9.0 / protocol 22 in the sandbox, against an ephemeral `hb-e2e-*` session with a
+throwaway plugin whose manifest declares `placement = "overlay"`. This grounds the "open a board"
+design in [board-owns-the-store.md](board-owns-the-store.md).
+
+- **A request-time placement overrides the manifest.** `plugin.pane.open` with `placement: "tab"`
+  opened a new tab (`w1:t2`); `placement: "split"` with `target_pane_id: "w1:p2"` split that pane
+  in its own tab (`split_0_root`, direction `right`, ratio 0.5). Neither opened an overlay.
+- **`focus: false` holds.** After both calls the session's focused workspace, tab and pane were
+  unchanged (`w1:t1`, `w1:p1`). The split's tab records `w1:p2` as its own focused pane, which does
+  not move the person's view.
+- **The pane knows its space.** Both panes got `HERDR_WORKSPACE_ID`, `HERDR_PANE_ID`,
+  `HERDR_TAB_ID`, `HERDR_SOCKET_PATH`, `HERDR_SESSION` and `HERDR_PLUGIN_CONTEXT_JSON`, whose
+  `invocation_source` is `"api"` and whose `workspace_id` is set.
+- **`env` reaches the pane command.** A `PROBE_ENV` value passed in `env` was present in each pane's
+  environment.
+- The pane's working directory is the plugin root, as for a manifest-launched pane.
+- The call returns `plugin_pane_opened {plugin_pane: {plugin_id, entrypoint, pane: PaneInfo}}`.
+
+## Claude Code hooks and stdio MCP servers (observed 2026-09-30)
+
+Observed on the host with headless `claude -p`, a throwaway stdio MCP server and throwaway
+PreToolUse and PostToolUse hooks, all started from a shell that set `HERDR_PANE_ID` and
+`HERDR_SOCKET_PATH`.
+
+- **Both inherit the session's environment.** The MCP server and both hooks saw the values the
+  Claude session was started with.
+- **A PreToolUse hook can rewrite an MCP tool's input.** Returning
+  `hookSpecificOutput {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: {...}}`
+  changed the arguments the MCP server received.
+- **The PostToolUse payload** carries `session_id`, `transcript_path`, `cwd`, `permission_mode`,
+  `hook_event_name`, `tool_name` (`mcp__<server>__<tool>`), `tool_input`, `tool_response`,
+  `tool_use_id`, `duration_ms` and `mcp_server {name, source}`. For an MCP tool, `tool_response` is the
+  MCP content array, `[{"type": "text", "text": "..."}]`.
+- **Linear MCP `save_issue`** (the claude.ai connector, `mcp__claude_ai_Linear__save_issue`) returns
+  the same object for a create and an update, as that content array's text: `id` is the human
+  identifier (`TEAM-123`), `uuid` is Linear's id, and `createdAt == updatedAt` on a create. The
+  `mcp__linear__` server's shape was not observed; parse it defensively.
+
+Linear's GraphQL `CustomView` exposes its board grouping through `viewPreferencesValues`
+(`issueGrouping`, `issueSubGrouping`, `issueNesting`, `layout`, `hiddenColumns`, `hiddenRows`,
+`columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
+schema, 2026-09-29).
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:
