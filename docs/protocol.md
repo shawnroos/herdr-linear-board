@@ -69,6 +69,8 @@ at each operation boundary rather than treated as a one-time startup check:
   separate CLI discovery step, not a socket call; once it selects a socket, socket operations are
   gated.
 - New pane operations are checked before `pane.get`/`pane.focus` for `run.focus` and `pane.focus`,
+  `pane.get`/`plugin.pane.open`/`plugin.pane.close` for `board.pane.open` and `board.pane.close`,
+  `notification.show` for `board.notify`,
   `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, `workspace.list`/`tab.create`/`agent.start`
   for `linear.bind_handoff` (its closing `pane.close` after a failed start uses the same checked
   connection), and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
@@ -103,6 +105,7 @@ and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
 `space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
+`board.pane.open`, `board.pane.close`, `board.notify`,
 `linear.snapshot`, `linear.list`, `linear.bind_handoff`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
 `linear.note.*`, `linear.show.*`, `linear.activity.*`), in addition to the
@@ -513,6 +516,32 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   never sent. The Linear-mode board uses it for the panes a snapshot names, which may be stale, so
   `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
   socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
+- `board.pane.open {context: {space?, issue?, card?}, placement, origin_socket, origin_pane}` →
+  `{pane_id, tab_id, workspace_id, placement, reused}` — open a board beside an agent's own pane,
+  in the **caller's own** herdr session (`origin_socket`, as for `pane.focus`). `placement` is
+  `tab` or `split`; `overlay`, `popup` and `zoomed` cover the person's view and are refused with
+  error 1 before any herdr call. `context` needs at least one field: `space` is a herdr workspace
+  id (ASCII letters, digits, `_ - . :`, at most 64), `issue` a Linear key or UUID, `card` a
+  positive card id; anything else is error 1 before any herdr call. After the protocol gate,
+  `pane.get origin_pane` must list the pane (error 2 otherwise, and nothing is opened). If boardd
+  recorded a pane for the same context on that socket and `pane.get` still lists it, that pane is
+  returned with `reused:true` and nothing is opened; a recorded pane that is gone loses its row.
+  Otherwise boardd sends one herdr `plugin.pane.open` with `plugin_id:"herdr-board"`,
+  `entrypoint:"board"`, `focus:false`, `target_pane_id` = the origin pane for a split or
+  `workspace_id` = the origin pane's workspace for a tab, and an `env` of exactly `BOARD_SOCKET`
+  and `BOARD_DB` (the daemon's own) plus `BOARD_SHOW_SPACE`/`BOARD_SHOW_ISSUE`/`BOARD_SHOW_CARD`
+  for the context fields given. The returned pane is recorded in `linear_board_panes`, keyed by
+  the canonical socket path and pane id. Error 4 for an unavailable socket, the protocol gate, or
+  a herdr refusal.
+- `board.pane.close {context, origin_socket}` → `{pane_id, closed: bool, gone: bool}` — close the
+  board pane boardd recorded for `context` on that socket. With no recorded pane it is error 2
+  before any herdr call, so it can never close a pane the board did not open. A recorded pane
+  `pane.get` still lists gets one herdr `plugin.pane.close` (`closed:true`); one that is gone gets
+  none (`gone:true`). Either way its row is cleared.
+- `board.notify {origin_socket, title, body?}` → `{shown: bool}` — one herdr `notification.show`
+  (sound `none`) in the caller's own session. `title` and `body` have control and format
+  characters stripped first; a title that is empty after that is error 1 before any herdr call.
+  Error 4 for an unavailable socket, the protocol gate, or a herdr refusal.
 
 ### linear
 

@@ -7,16 +7,17 @@ use crate::model::{Card, Column, Comment, CommentHistory, CommentRecord};
 
 use crate::protocol::{
     BoardArchiveParams, BoardCreateParams, BoardGetParams, BoardListParams, BoardListResult,
-    BoardOpenParams, BoardRenameParams, BoardSelectParams, BoardSnapshot, CardArchiveParams,
-    CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams, CardVisibility,
-    ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
-    CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DaemonStatus, DeletedResult, Event, GroupingConfig,
-    HarnessCapabilitiesParams, HarnessListResult, LinearActivityListParams,
-    LinearActivityListResult, LinearActivityRecordParams, LinearActivityRecordResult,
-    LinearBindHandoffParams, LinearBindHandoffResult, LinearBindParams, LinearChange,
-    LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams, LinearIdParams,
-    LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
+    BoardNotifyParams, BoardNotifyResult, BoardOpenParams, BoardPaneCloseParams,
+    BoardPaneCloseResult, BoardPaneOpenParams, BoardPaneOpenResult, BoardRenameParams,
+    BoardSelectParams, BoardSnapshot, CardArchiveParams, CardCreateParams, CardDetail,
+    CardListParams, CardMoveParams, CardUpdateParams, CardVisibility, ColumnCreateParams,
+    ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams, CommentAddParams,
+    CommentDeleteParams, CommentGetParams, CommentHistoryParams, CommentUpdateParams, DaemonStatus,
+    DeletedResult, Event, GroupingConfig, HarnessCapabilitiesParams, HarnessListResult,
+    LinearActivityListParams, LinearActivityListResult, LinearActivityRecordParams,
+    LinearActivityRecordResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearBindParams,
+    LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
+    LinearIdParams, LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
     LinearMarkSetParams, LinearNoteSetParams, LinearReplace, LinearShowRequestParams,
     LinearSnapshot, LinearSnapshotParams, LinearState, LinearStateGetParams, LinearUnbindParams,
     Mark, Note, PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult,
@@ -517,6 +518,27 @@ pub trait BoardClient {
     fn pane_focus(&mut self, p: &PaneFocusParams) -> anyhow::Result<PaneFocusResult> {
         Ok(serde_json::from_value(
             self.call("pane.focus", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn board_pane_open(&mut self, p: &BoardPaneOpenParams) -> anyhow::Result<BoardPaneOpenResult> {
+        Ok(serde_json::from_value(
+            self.call("board.pane.open", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn board_pane_close(
+        &mut self,
+        p: &BoardPaneCloseParams,
+    ) -> anyhow::Result<BoardPaneCloseResult> {
+        Ok(serde_json::from_value(
+            self.call("board.pane.close", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn board_notify(&mut self, p: &BoardNotifyParams) -> anyhow::Result<BoardNotifyResult> {
+        Ok(serde_json::from_value(
+            self.call("board.notify", serde_json::to_value(p)?)?,
         )?)
     }
 

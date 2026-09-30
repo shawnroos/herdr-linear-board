@@ -1046,6 +1046,65 @@ pub struct PaneFocusResult {
     pub gone: bool,
 }
 
+/// What an agent-opened board shows: a space, an issue, a card, or a mix.
+/// The daemon shape-checks every field and requires at least one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+}
+
+/// `board.pane.open` params. `placement` is text so the daemon can name its
+/// refusal of `overlay`, `popup` and `zoomed`; only `tab` and `split` open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneOpenParams {
+    pub context: BoardPaneContext,
+    pub placement: String,
+    pub origin_socket: String,
+    pub origin_pane: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneOpenResult {
+    pub pane_id: String,
+    pub tab_id: String,
+    pub workspace_id: String,
+    pub placement: BoardPanePlacement,
+    pub reused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneCloseParams {
+    pub context: BoardPaneContext,
+    pub origin_socket: String,
+}
+
+/// `board.pane.close` result. `gone` means the recorded pane had already
+/// closed; its row is cleared and no `plugin.pane.close` is sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneCloseResult {
+    pub pane_id: String,
+    pub closed: bool,
+    pub gone: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardNotifyParams {
+    pub origin_socket: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardNotifyResult {
+    pub shown: bool,
+}
+
 // ---------------------------------------------------------------------------
 // linear methods (the work plugin's space snapshot)
 // ---------------------------------------------------------------------------
@@ -1396,8 +1455,8 @@ pub struct LinearBindHandoffResult {
 // ---------------------------------------------------------------------------
 
 pub use crate::db::{
-    Activity, ActivityClaims, GroupingConfig, Mark, MarkKind, Note, ResolvedGrouping, ShowRequest,
-    SpaceBinding, WorktreeBinding,
+    Activity, ActivityClaims, BoardPanePlacement, GroupingConfig, Mark, MarkKind, Note,
+    ResolvedGrouping, ShowRequest, SpaceBinding, WorktreeBinding,
 };
 
 /// What one write changed: the row before and after. `None` on one side
