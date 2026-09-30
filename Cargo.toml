@@ -53,6 +53,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 libc = "0.2"
 base64 = "0.22"
 
+# Linear GraphQL (daemon only). rustls with the ring provider: aws-lc-sys wants
+# cmake, which the sandbox image does not carry.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 # Dev / test
 insta = "1"
 tempfile = "3"
