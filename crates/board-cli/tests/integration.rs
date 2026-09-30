@@ -32,6 +32,8 @@ mod mcp;
 mod meta;
 #[path = "integration/projects.rs"]
 mod projects;
+#[path = "integration/report.rs"]
+mod report;
 #[path = "integration/runs.rs"]
 mod runs;
 #[path = "integration/scope.rs"]

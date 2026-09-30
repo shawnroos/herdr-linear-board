@@ -64,6 +64,9 @@ pub(crate) enum LinearCmd {
         #[command(subcommand)]
         sub: LinearViewCmd,
     },
+    /// Report a Linear MCP write from a Claude Code PostToolUse hook. Reads
+    /// the hook payload on stdin, prints nothing, and always exits 0.
+    Report,
 }
 
 #[derive(Subcommand)]

@@ -118,6 +118,10 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
         LinearCmd::View {
             sub: LinearViewCmd::List { project_id },
         } => linear_list(ctx, LinearListKind::Views, Some(project_id)),
+        LinearCmd::Report => {
+            super::linear_report::run();
+            Ok(())
+        }
     }
 }
 

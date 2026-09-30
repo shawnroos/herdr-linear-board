@@ -328,6 +328,20 @@ fn the_three_linear_list_verbs_parse() {
 }
 
 #[test]
+fn linear_report_parses_and_takes_no_arguments() {
+    assert!(matches!(
+        parse(&["board", "linear", "report"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Report
+        }
+    ));
+    assert_eq!(
+        reject(&["board", "linear", "report", "WEB-1"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
+}
+
+#[test]
 fn linear_list_arguments_are_checked_at_parse_time() {
     assert_eq!(
         reject(&["board", "linear", "view", "list"]).kind(),
