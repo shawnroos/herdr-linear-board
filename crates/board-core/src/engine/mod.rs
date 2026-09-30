@@ -4,6 +4,7 @@
 
 pub mod archive;
 mod columns;
+pub mod grouping;
 mod lifecycle;
 mod signals;
 mod transitions;

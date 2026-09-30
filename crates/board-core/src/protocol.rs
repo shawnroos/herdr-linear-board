@@ -1360,6 +1360,14 @@ fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
+fn null_as_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSpaceRow {
     #[serde(default, deserialize_with = "null_as_empty")]
@@ -1663,8 +1671,11 @@ pub struct LinearSnapshot {
     pub linear: LinearSource,
     #[serde(default)]
     pub herdr: LinearHerdr,
+    /// `tabs[0].groups`, kept for clients that predate `tabs`.
     #[serde(default)]
     pub groups: Vec<LinearGroup>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub tabs: Vec<LinearTab>,
     #[serde(default)]
     pub issues: std::collections::BTreeMap<String, LinearIssue>,
     #[serde(default)]
@@ -1772,6 +1783,31 @@ pub struct LinearGroup {
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
+    pub issues: Vec<String>,
+    /// Swimlanes across this column; empty when the board has no row level.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lanes: Vec<LinearLane>,
+}
+
+/// One tab of the board strip. A key is the Linear id the tab groups by, or
+/// empty for a "No <field>" or ungrouped tab.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearTab {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub key: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub label: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub groups: Vec<LinearGroup>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearLane {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub key: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub label: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub issues: Vec<String>,
 }
 

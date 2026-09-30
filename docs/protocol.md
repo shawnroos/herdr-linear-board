@@ -575,6 +575,12 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
   to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
   unparseable document, or a `schema` other than `1`.
+  Additive board-view fields (the `board-core::engine::grouping` engine): `tabs: [{key, label,
+  groups}]` is the tab strip, and each group (column) may carry `lanes: [{key, label, issues}]`,
+  the swimlane rows across that tab's columns. A key is the Linear id the level groups by, or
+  empty for a "No <field>" or ungrouped group. `groups` stays equal to `tabs[0].groups`, so a
+  client that predates `tabs` renders the first tab's columns. Both fields default to empty and
+  read an explicit `null` as empty.
 - `linear.list {kind, id?, origin_socket?, plugin_root?}` → `{status, message, rows}` — one of the
   work plugin's lists, run through the same plugin-root resolution, `0.5.0` floor, environment,
   stderr rule, stdout cap and stop rules as `linear.snapshot`, under its own bounded deadline.
