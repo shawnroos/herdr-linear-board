@@ -287,7 +287,8 @@ mod tests {
             events,
             vec![
                 Event::LocalStateChanged {
-                    space: Some("space-1".into())
+                    space: Some("space-1".into()),
+                    snapshot: false,
                 },
                 Event::RunEnded {
                     card_id: 1,
@@ -307,6 +308,7 @@ mod tests {
         }
         let line = serde_json::to_string(&Event::LocalStateChanged {
             space: Some("space-1".into()),
+            snapshot: false,
         })
         .unwrap();
         assert!(serde_json::from_str::<OldEvent>(&line).is_err());

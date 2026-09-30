@@ -139,8 +139,8 @@ routes!(d, params, {
     "linear.note.set" => linear_state::note_set(d, from(params)?),
     "linear.note.clear" => linear_state::note_clear(d, from(params)?),
     "linear.show.request" => linear_state::show_request(d, from(params)?),
-    "linear.show.accept" => linear_state::show_answer(d, from(params)?),
-    "linear.show.dismiss" => linear_state::show_answer(d, from(params)?),
+    "linear.show.accept" => linear_state::show_accept(d, from(params)?),
+    "linear.show.dismiss" => linear_state::show_dismiss(d, from(params)?),
     "linear.activity.record" => linear_state::activity_record(d, from(params)?),
     "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
     "linear.import" => linear_import(d, from_or_default(params)?),
@@ -157,7 +157,10 @@ pub(crate) fn linear_import_at(
 ) -> Result<Value> {
     let outcome = crate::import::import_work_store(&d.store.lock(), store_dir, dry_run)?;
     for space in outcome.changed_spaces {
-        d.emit(Event::LocalStateChanged { space });
+        d.emit(Event::LocalStateChanged {
+            space,
+            snapshot: false,
+        });
     }
     Ok(json!(outcome.result))
 }

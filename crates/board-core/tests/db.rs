@@ -4,6 +4,8 @@
 mod atomic;
 #[path = "db/crud.rs"]
 mod crud;
+#[path = "db/linear_local_state.rs"]
+mod linear_local_state;
 #[path = "db/linear_state.rs"]
 mod linear_state;
 #[path = "db/migrations.rs"]

@@ -82,6 +82,7 @@ fn claims(pane: &str) -> Value {
 fn changed(space: Option<&str>) -> Event {
     Event::LocalStateChanged {
         space: space.map(str::to_owned),
+        snapshot: false,
     }
 }
 

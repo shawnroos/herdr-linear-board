@@ -309,6 +309,7 @@ impl BoardMcp {
             kind: MarkKind::Attention,
             text: args.text,
             created_by: Some(caller.author()),
+            owner: Default::default(),
         };
         forward(move |c| c.linear_mark_set(&params)).await
     }
@@ -324,6 +325,7 @@ impl BoardMcp {
             issue: args.issue,
             body: args.body,
             author: caller.author(),
+            owner: Default::default(),
         };
         forward(move |c| c.linear_note_set(&params)).await
     }
@@ -352,6 +354,7 @@ impl BoardMcp {
             issue: args.issue,
             reason: args.reason,
             requested_by: Some(caller.author()),
+            owner: Default::default(),
         };
         forward(move |c| c.linear_show_request(&params)).await
     }

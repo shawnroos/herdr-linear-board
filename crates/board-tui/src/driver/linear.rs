@@ -277,6 +277,7 @@ impl Driver {
             workspace_id,
             origin_socket: self.origin.origin_socket.clone(),
             plugin_root: self.origin.plugin_root.clone(),
+            force: false,
         })
     }
 

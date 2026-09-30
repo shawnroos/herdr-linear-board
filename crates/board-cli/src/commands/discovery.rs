@@ -93,6 +93,7 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
                     workspace_id,
                     origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
                     plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+                    force: false,
                 })
             })?;
             let text = serde_json::to_string_pretty(&document)?;

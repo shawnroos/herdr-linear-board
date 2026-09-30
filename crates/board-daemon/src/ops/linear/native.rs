@@ -456,7 +456,10 @@ pub(in crate::ops) fn schedule_refetch(d: &Arc<Daemon>, session: String, space: 
         move || refetch(&worker, &work_key),
         move || {
             if !announcer.is_shutdown() {
-                announcer.emit(Event::LocalStateChanged { space: Some(space) });
+                announcer.emit(Event::LocalStateChanged {
+                    space: Some(space),
+                    snapshot: false,
+                });
             }
         },
     );

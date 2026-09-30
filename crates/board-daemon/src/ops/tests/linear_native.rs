@@ -416,7 +416,7 @@ fn a_reported_save_issue_causes_one_refetch_then_one_local_state_changed() {
 
     assert_eq!(board.count("issues("), 2, "one refetch");
     assert!(
-        matches!(events.as_slice(), [Event::LocalStateChanged { space: Some(s) }] if s == SPACE),
+        matches!(events.as_slice(), [Event::LocalStateChanged { space: Some(s), .. }] if s == SPACE),
         "{events:?}"
     );
     std::thread::sleep(Duration::from_millis(200));

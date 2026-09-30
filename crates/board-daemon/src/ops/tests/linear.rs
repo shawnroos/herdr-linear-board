@@ -93,6 +93,7 @@ fn params(origin_socket: Option<&Path>) -> LinearSnapshotParams {
         workspace_id: "wA".into(),
         origin_socket: origin_socket.map(|p| p.display().to_string()),
         plugin_root: None,
+        force: false,
     }
 }
 

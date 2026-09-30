@@ -855,3 +855,153 @@ fn linear_bind_handoff_params_and_result_round_trip() {
         json!({"tab_id": "tab-1", "pane_id": "pane-1"})
     );
 }
+
+#[test]
+fn local_state_changed_reads_a_missing_or_null_snapshot_flag_as_false() {
+    for line in [
+        json!({"event": "local_state_changed", "space": "ws-1"}),
+        json!({"event": "local_state_changed", "space": "ws-1", "snapshot": null}),
+    ] {
+        let event: Event = serde_json::from_value(line).unwrap();
+        assert_eq!(
+            event,
+            Event::LocalStateChanged {
+                space: Some("ws-1".into()),
+                snapshot: false
+            }
+        );
+    }
+    let quiet = serde_json::to_value(Event::LocalStateChanged {
+        space: None,
+        snapshot: false,
+    })
+    .unwrap();
+    assert_eq!(quiet, json!({"event": "local_state_changed"}));
+    let refetched = Event::LocalStateChanged {
+        space: Some("ws-1".into()),
+        snapshot: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&refetched).unwrap()["snapshot"],
+        json!(true)
+    );
+    roundtrip(&refetched);
+}
+
+#[test]
+fn snapshot_force_defaults_to_false_and_is_left_off_the_wire_when_false() {
+    use board_core::protocol::LinearSnapshotParams;
+    for params in [
+        json!({"workspace_id": "wA"}),
+        json!({"workspace_id": "wA", "force": null}),
+    ] {
+        let p: LinearSnapshotParams = serde_json::from_value(params).unwrap();
+        assert!(!p.force);
+    }
+    let plain = LinearSnapshotParams {
+        workspace_id: "wA".into(),
+        ..LinearSnapshotParams::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&plain).unwrap(),
+        json!({"workspace_id": "wA"})
+    );
+    let forced = LinearSnapshotParams {
+        force: true,
+        ..plain
+    };
+    assert_eq!(serde_json::to_value(&forced).unwrap()["force"], json!(true));
+}
+
+#[test]
+fn local_state_rows_read_null_owner_expiry_and_outcome_fields() {
+    use board_core::protocol::{Mark, Note, ShowOutcome, ShowRequest};
+    let mark: Mark = serde_json::from_value(json!({
+        "id": 1, "space": "ws-1", "issue": "ENG-1", "kind": "question",
+        "text": null, "detail": null, "created_by": null, "created_at": "2026-09-30 12:00:00",
+        "owner_herdr_socket": null, "owner_herdr_pane_id": null, "owner_claude_session_id": null
+    }))
+    .unwrap();
+    assert!(mark.owner().is_anonymous());
+    let _: Note = serde_json::from_value(json!({
+        "id": 1, "space": "ws-1", "issue": "ENG-1", "body": "b", "author": "a",
+        "created_at": "2026-09-30 12:00:00",
+        "owner_herdr_socket": null, "owner_herdr_pane_id": null, "owner_claude_session_id": null
+    }))
+    .unwrap();
+    let request: ShowRequest = serde_json::from_value(json!({
+        "id": 1, "space": "ws-1", "issue": "ENG-1", "reason": null, "requested_by": null,
+        "created_at": "2026-09-30 12:00:00", "acknowledged_at": null,
+        "owner_herdr_socket": null, "owner_herdr_pane_id": null, "owner_claude_session_id": null,
+        "expires_at": null, "outcome": null
+    }))
+    .unwrap();
+    assert_eq!(request.outcome, None);
+    let closed: ShowRequest = serde_json::from_value(json!({
+        "id": 1, "space": "ws-1", "issue": "ENG-1", "created_at": "2026-09-30 12:00:00",
+        "expires_at": "2026-09-30 12:30:00", "outcome": "withdrawn"
+    }))
+    .unwrap();
+    assert_eq!(closed.outcome, Some(ShowOutcome::Withdrawn));
+}
+
+#[test]
+fn new_local_state_params_read_a_null_owner_and_kind() {
+    use board_core::protocol::{
+        LinearMarkClearParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
+        LinearSessionGetParams, LinearShowRequestParams, LinearShowWithdrawParams,
+    };
+    let base = json!({"space": "ws-1", "issue": "ENG-1", "owner": null});
+    let mark: LinearMarkSetParams = serde_json::from_value(base.clone()).unwrap();
+    assert!(mark.owner.is_anonymous());
+    let mut note = base.clone();
+    note["body"] = json!("b");
+    note["author"] = json!("a");
+    let _: LinearNoteSetParams = serde_json::from_value(note).unwrap();
+    let _: LinearShowRequestParams = serde_json::from_value(base.clone()).unwrap();
+    let _: LinearShowWithdrawParams = serde_json::from_value(base.clone()).unwrap();
+    let mut unmark = base;
+    unmark["kind"] = json!(null);
+    let unmark: LinearMarkUnmarkParams = serde_json::from_value(unmark).unwrap();
+    assert_eq!(unmark.kind, None);
+    let owner: LinearMarkUnmarkParams = serde_json::from_value(json!({
+        "space": "ws-1", "issue": "ENG-1",
+        "owner": {"herdr_socket": null, "herdr_pane_id": "p-1", "claude_session_id": null}
+    }))
+    .unwrap();
+    assert_eq!(owner.owner.herdr_pane_id.as_deref(), Some("p-1"));
+    let clear: LinearMarkClearParams =
+        serde_json::from_value(json!({"id": null, "ids": [1, 2]})).unwrap();
+    assert_eq!(clear.ids, Some(vec![1, 2]));
+    let _: LinearSessionGetParams = serde_json::from_value(json!({
+        "space": "ws-1", "herdr_socket": null, "herdr_pane_id": null,
+        "claude_session_id": null, "cwd": null
+    }))
+    .unwrap();
+}
+
+#[test]
+fn new_local_state_results_read_every_field_as_null() {
+    use board_core::protocol::{
+        LinearBound, LinearChange, LinearRemoved, LinearSessionBinding, LinearSessionGetResult,
+        Mark, WorktreeBinding,
+    };
+    let session: LinearSessionGetResult = serde_json::from_value(json!({
+        "space": null, "space_bound": null, "binding": null, "column": null,
+        "marks": null, "pending_requests": null
+    }))
+    .unwrap();
+    assert_eq!(session, LinearSessionGetResult::default());
+    let binding: LinearSessionBinding = serde_json::from_value(json!({
+        "worktree_path": null, "issue": null, "bound_at": null
+    }))
+    .unwrap();
+    assert_eq!(binding, LinearSessionBinding::default());
+    let removed: LinearRemoved<Mark> = serde_json::from_value(json!({"removed": null})).unwrap();
+    assert!(removed.removed.is_empty());
+    let bound = json!({"before": null, "after": null, "cleared_suggestions": null});
+    let parsed: LinearBound = serde_json::from_value(bound.clone()).unwrap();
+    assert!(parsed.cleared_suggestions.is_empty());
+    let older_reader: LinearChange<WorktreeBinding> = serde_json::from_value(bound).unwrap();
+    assert_eq!(older_reader.after, None);
+}

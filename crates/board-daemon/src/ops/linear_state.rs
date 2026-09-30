@@ -5,7 +5,9 @@
 
 use super::*;
 
-use board_core::db::{claimed_space, clean_claims, ActivityClaims, LocalStateError};
+use board_core::db::{
+    claimed_space, clean_claims, ActivityClaims, LocalStateError, SHOW_REQUEST_TTL_DEFAULT_SECS,
+};
 
 use super::errors::local_state_error;
 
@@ -13,8 +15,15 @@ fn ls(error: LocalStateError) -> Error {
     local_state_error(error)
 }
 
+fn now_secs(d: &Arc<Daemon>) -> i64 {
+    d.wall_now_ms() / 1000
+}
+
 fn announce(d: &Arc<Daemon>, space: Option<String>) {
-    d.emit(Event::LocalStateChanged { space });
+    d.emit(Event::LocalStateChanged {
+        space,
+        snapshot: false,
+    });
 }
 
 /// A card listed in a reader's cached read of the space is known (KTD11).
@@ -35,7 +44,7 @@ fn activity_recorded(d: &Arc<Daemon>, claims: &ActivityClaims, space: Option<&st
 }
 
 pub(super) fn state_get(d: &Arc<Daemon>, p: LinearStateGetParams) -> Result<Value> {
-    Ok(json!(d.store.lock().linear_state(&p.space)?))
+    Ok(json!(d.store.lock().linear_state(&p.space, now_secs(d))?))
 }
 
 pub(super) fn bind(d: &Arc<Daemon>, p: LinearBindParams) -> Result<Value> {
@@ -104,13 +113,31 @@ pub(super) fn note_clear(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
 
 pub(super) fn show_request(d: &Arc<Daemon>, p: LinearShowRequestParams) -> Result<Value> {
     let known = snapshot_lists_issue(d, &p.space, &p.issue);
-    let change = d.store.lock().linear_show_request(&p, known).map_err(ls)?;
+    let change = d
+        .store
+        .lock()
+        .linear_show_request(&p, known, now_secs(d), SHOW_REQUEST_TTL_DEFAULT_SECS)
+        .map_err(ls)?;
     announce(d, change.after.as_ref().map(|r| r.space.clone()));
     Ok(json!(change))
 }
 
-pub(super) fn show_answer(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
-    let change = d.store.lock().linear_show_answer(p.id).map_err(ls)?;
+pub(super) fn show_accept(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
+    let change = d
+        .store
+        .lock()
+        .linear_show_accept(p.id, now_secs(d))
+        .map_err(ls)?;
+    announce(d, change.before.as_ref().map(|r| r.space.clone()));
+    Ok(json!(change))
+}
+
+pub(super) fn show_dismiss(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
+    let change = d
+        .store
+        .lock()
+        .linear_show_dismiss(p.id, now_secs(d))
+        .map_err(ls)?;
     announce(d, change.before.as_ref().map(|r| r.space.clone()));
     Ok(json!(change))
 }

@@ -497,7 +497,7 @@ fn a_real_import_announces_each_affected_space_once_and_a_rerun_announces_nothin
         .events()
         .into_iter()
         .map(|ev| match ev {
-            Event::LocalStateChanged { space } => space,
+            Event::LocalStateChanged { space, .. } => space,
             other => panic!("unexpected event {other:?}"),
         })
         .collect();

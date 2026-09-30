@@ -285,6 +285,7 @@ fn stopping_the_daemon_mid_snapshot_stops_the_script() {
                 workspace_id: "wA".into(),
                 origin_socket: None,
                 plugin_root: None,
+                force: false,
             },
         );
     });

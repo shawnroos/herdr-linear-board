@@ -9,22 +9,26 @@ use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visit
 use serde_json::{json, Map, Value};
 
 use super::linear_state::{
-    is_issue_identifier, ActivityClaims, GroupingConfig, GroupingMapping, Mark, MarkKind,
-    NewActivity, NewMark, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
-    LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    is_issue_identifier, ActivityClaims, GroupingConfig, GroupingMapping, LinearOwner, Mark,
+    MarkKind, NewActivity, NewMark, NewShowRequest, ShowOutcome, SpaceGrouping, WorktreeBinding,
+    WorktreeBindingState, LINEAR_ACTIVITY_KEEP_PER_SPACE,
 };
 use super::Db;
 use crate::protocol::{
     LinearActivityListParams, LinearActivityListResult, LinearActivityOutcome,
-    LinearActivityRecordParams, LinearActivityRecordResult, LinearBindParams, LinearChange,
-    LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams, LinearMarkSetParams,
-    LinearNoteSetParams, LinearReplace, LinearShowRequestParams, LinearState, LinearUnbindParams,
-    Note, ShowRequest,
+    LinearActivityRecordParams, LinearActivityRecordResult, LinearBindParams, LinearBound,
+    LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
+    LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams, LinearRemoved, LinearReplace,
+    LinearSessionBinding, LinearSessionGetParams, LinearSessionGetResult, LinearShowRequestParams,
+    LinearShowWithdrawParams, LinearState, LinearUnbindParams, Note, ShowRequest,
 };
 use crate::text::{sanitise_json, strip_control_and_format, strip_control_keep_lines};
 use crate::Error;
 
 const ACTIVITY_LIST_DEFAULT: usize = 50;
+
+/// R18's default: how long an untouched show-request stays pinned.
+pub const SHOW_REQUEST_TTL_DEFAULT_SECS: i64 = 30 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LocalStateRejection {
@@ -36,8 +40,15 @@ pub enum LocalStateRejection {
     IssueBoundElsewhere { issue: String, holder: String },
     #[error("{0}")]
     Missing(String),
-    #[error("show request {id} was already answered")]
-    ShowRequestAnswered { id: i64 },
+    #[error("show request {id} is no longer pending: it was {}", closed_as(*.outcome))]
+    ShowRequestAnswered {
+        id: i64,
+        outcome: Option<ShowOutcome>,
+    },
+}
+
+fn closed_as(outcome: Option<ShowOutcome>) -> &'static str {
+    outcome.map_or("answered", ShowOutcome::as_str)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,6 +116,28 @@ pub fn claimed_space(space: Option<&str>, claims: &ActivityClaims) -> Option<Str
         .or(claims.herdr_workspace_id.as_deref())
         .map(line)
         .filter(|s| !s.is_empty())
+}
+
+/// Blank claims are no claim, so an empty environment variable never
+/// makes a caller an owner.
+pub fn clean_owner(owner: &LinearOwner) -> LinearOwner {
+    let field = |value: &Option<String>| opt_line(value.as_deref()).filter(|v| !v.is_empty());
+    LinearOwner {
+        herdr_socket: field(&owner.herdr_socket),
+        herdr_pane_id: field(&owner.herdr_pane_id),
+        claude_session_id: field(&owner.claude_session_id),
+    }
+}
+
+fn require_owner(owner: &LinearOwner, what: &str) -> LsResult<LinearOwner> {
+    let owner = clean_owner(owner);
+    if owner.is_anonymous() {
+        Err(refused(format!(
+            "{what} needs the caller's herdr socket, pane or Claude session; a row written without them can only be cleared on the board"
+        )))
+    } else {
+        Ok(owner)
+    }
 }
 
 fn claimed_session(claims: &ActivityClaims) -> Option<String> {
@@ -267,7 +300,7 @@ impl From<StrictConfig> for GroupingConfig {
 }
 
 impl Db {
-    pub fn linear_state(&self, space: &str) -> crate::Result<LinearState> {
+    pub fn linear_state(&self, space: &str, now: i64) -> crate::Result<LinearState> {
         Ok(LinearState {
             space: space.to_owned(),
             space_bindings: self
@@ -279,7 +312,7 @@ impl Db {
             grouping: self.grouping_for_space(space)?,
             marks: self.list_marks(space)?,
             notes: self.list_notes(space, None)?,
-            show_requests: self.pending_show_requests(space)?,
+            show_requests: self.pending_show_requests(space, now)?,
         })
     }
 
@@ -322,7 +355,9 @@ impl Db {
             .optional()?)
     }
 
-    pub fn linear_bind(&self, p: &LinearBindParams) -> LsResult<LinearChange<WorktreeBinding>> {
+    /// Binding the worktree a suggestion names clears every suggestion on
+    /// the issue, in every space (R20).
+    pub fn linear_bind(&self, p: &LinearBindParams) -> LsResult<LinearBound> {
         check_issue(&p.issue)?;
         let path = resolve_worktree(&p.cwd)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -350,8 +385,34 @@ impl Db {
             carried: kept.map(|b| b.carried).unwrap_or_default(),
         })?;
         let after = self.worktree_binding(&path)?;
+        let cleared_suggestions = self.clear_suggestions_naming(&p.issue, &path)?;
         tx.commit()?;
-        Ok(LinearChange { before, after })
+        Ok(LinearBound {
+            change: LinearChange { before, after },
+            cleared_suggestions,
+        })
+    }
+
+    fn clear_suggestions_naming(&self, issue: &str, worktree: &str) -> crate::Result<Vec<Mark>> {
+        let suggestions: Vec<Mark> = self
+            .issue_marks(issue)?
+            .into_iter()
+            .filter(|m| m.kind == MarkKind::Suggestion)
+            .collect();
+        let named = suggestions.iter().any(|m| {
+            m.detail
+                .as_ref()
+                .and_then(|d| d.get("worktree_path"))
+                .and_then(Value::as_str)
+                == Some(worktree)
+        });
+        if !named {
+            return Ok(Vec::new());
+        }
+        for mark in &suggestions {
+            self.remove_mark(mark.id)?;
+        }
+        Ok(suggestions)
     }
 
     /// A worktree that no longer exists cannot be canonicalised, so its
@@ -450,7 +511,7 @@ impl Db {
         let before: Vec<Mark> = self
             .list_marks(mark.space)?
             .into_iter()
-            .filter(|m| m.issue == mark.issue && m.kind == mark.kind)
+            .filter(|m| m.issue == mark.issue && m.kind == mark.kind && m.owner() == *mark.owner)
             .collect();
         for old in &before {
             self.remove_mark(old.id)?;
@@ -460,16 +521,23 @@ impl Db {
         Ok(LinearReplace { before, after })
     }
 
-    /// Replaces the issue's mark of the same kind. `known_elsewhere` is the
-    /// caller's own knowledge of the issue, such as a cached snapshot.
+    /// Replaces the caller's own mark of the same kind on the issue; other
+    /// owners' marks stay (R9). `known_elsewhere` is the caller's own
+    /// knowledge of the issue, such as a cached snapshot.
     pub fn linear_mark_set(
         &self,
         p: &LinearMarkSetParams,
         known_elsewhere: bool,
     ) -> LsResult<LinearReplace<Mark>> {
+        if p.kind == MarkKind::Suggestion {
+            return Err(refused(
+                "mark kind suggestion is set only by the board, from a reported Linear write; a mark is attention, question or done".into(),
+            ));
+        }
         self.require_known(&p.space, &p.issue, known_elsewhere)?;
         let text = p.text.as_deref().map(strip_control_keep_lines);
         let created_by = opt_line(p.created_by.as_deref());
+        let owner = clean_owner(&p.owner);
         self.replace_mark(&NewMark {
             space: &p.space,
             issue: &p.issue,
@@ -477,7 +545,42 @@ impl Db {
             text: text.as_deref(),
             detail: None,
             created_by: created_by.as_deref(),
+            owner: &owner,
         })
+    }
+
+    pub fn linear_mark_unmark(&self, p: &LinearMarkUnmarkParams) -> LsResult<LinearRemoved<Mark>> {
+        check_space(&p.space)?;
+        check_issue(&p.issue)?;
+        let owner = require_owner(&p.owner, "unmark")?;
+        let tx = self.conn.unchecked_transaction()?;
+        let removed: Vec<Mark> = self
+            .list_marks(&p.space)?
+            .into_iter()
+            .filter(|m| {
+                m.issue == p.issue && p.kind.is_none_or(|k| k == m.kind) && m.owner() == owner
+            })
+            .collect();
+        for mark in &removed {
+            self.remove_mark(mark.id)?;
+        }
+        tx.commit()?;
+        Ok(LinearRemoved { removed })
+    }
+
+    /// Clears the marks a detail screen showed when it opened (KTD8). A mark
+    /// already gone is skipped, so a retried clear is not an error.
+    pub fn linear_mark_clear_ids(&self, ids: &[i64]) -> LsResult<LinearRemoved<Mark>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut removed = Vec::new();
+        for &id in ids {
+            if let Some(mark) = self.mark(id)? {
+                self.remove_mark(id)?;
+                removed.push(mark);
+            }
+        }
+        tx.commit()?;
+        Ok(LinearRemoved { removed })
     }
 
     pub fn linear_mark_clear(&self, id: i64) -> LsResult<LinearChange<Mark>> {
@@ -509,7 +612,7 @@ impl Db {
         for old in &before {
             self.remove_note(old.id)?;
         }
-        let after = self.add_note(&p.space, &p.issue, &body, &author)?;
+        let after = self.add_note(&p.space, &p.issue, &body, &author, &clean_owner(&p.owner))?;
         tx.commit()?;
         Ok(LinearReplace { before, after })
     }
@@ -525,38 +628,151 @@ impl Db {
         })
     }
 
+    /// A re-ask by the same owner for an issue it already has pending
+    /// refreshes that request instead of adding one (R31).
     pub fn linear_show_request(
         &self,
         p: &LinearShowRequestParams,
         known_elsewhere: bool,
+        now: i64,
+        ttl_secs: i64,
     ) -> LsResult<LinearChange<ShowRequest>> {
         self.require_known(&p.space, &p.issue, known_elsewhere)?;
         let reason = opt_line(p.reason.as_deref());
         let requested_by = opt_line(p.requested_by.as_deref());
-        let after = self.add_show_request(
-            &p.space,
-            &p.issue,
-            reason.as_deref(),
-            requested_by.as_deref(),
-        )?;
-        Ok(LinearChange {
-            before: None,
-            after: Some(after),
-        })
+        let owner = clean_owner(&p.owner);
+        let expires_at = now.saturating_add(ttl_secs);
+        let tx = self.conn.unchecked_transaction()?;
+        let existing = self
+            .pending_show_requests(&p.space, now)?
+            .into_iter()
+            .find(|r| r.issue == p.issue && r.owner() == owner);
+        let change = match existing {
+            Some(before) => {
+                self.refresh_show_request(
+                    before.id,
+                    reason.as_deref(),
+                    requested_by.as_deref(),
+                    expires_at,
+                )?;
+                let after = self.show_request(before.id)?;
+                LinearChange {
+                    before: Some(before),
+                    after,
+                }
+            }
+            None => LinearChange {
+                before: None,
+                after: Some(self.add_show_request(&NewShowRequest {
+                    space: &p.space,
+                    issue: &p.issue,
+                    reason: reason.as_deref(),
+                    requested_by: requested_by.as_deref(),
+                    owner: &owner,
+                    expires_at,
+                })?),
+            },
+        };
+        tx.commit()?;
+        Ok(change)
     }
 
-    /// Accept and dismiss both drain the request; neither answers it twice.
-    pub fn linear_show_answer(&self, id: i64) -> LsResult<LinearChange<ShowRequest>> {
+    pub fn linear_show_accept(&self, id: i64, now: i64) -> LsResult<LinearChange<ShowRequest>> {
+        self.close_pending(id, ShowOutcome::Accepted, now)
+    }
+
+    pub fn linear_show_dismiss(&self, id: i64, now: i64) -> LsResult<LinearChange<ShowRequest>> {
+        self.close_pending(id, ShowOutcome::Rejected, now)
+    }
+
+    pub fn linear_show_withdraw(
+        &self,
+        p: &LinearShowWithdrawParams,
+        now: i64,
+    ) -> LsResult<LinearChange<ShowRequest>> {
+        check_space(&p.space)?;
+        check_issue(&p.issue)?;
+        let owner = require_owner(&p.owner, "withdraw")?;
+        let request = self
+            .pending_show_requests(&p.space, now)?
+            .into_iter()
+            .find(|r| r.issue == p.issue && r.owner() == owner)
+            .ok_or_else(|| {
+                LocalStateRejection::Missing(format!(
+                    "no pending show request of this caller's for {} in space {}",
+                    p.issue, p.space
+                ))
+            })?;
+        self.close_pending(request.id, ShowOutcome::Withdrawn, now)
+    }
+
+    fn close_pending(
+        &self,
+        id: i64,
+        outcome: ShowOutcome,
+        now: i64,
+    ) -> LsResult<LinearChange<ShowRequest>> {
         let before = self.show_request(id)?.ok_or_else(|| {
             LocalStateRejection::Missing(format!("show request {id} does not exist"))
         })?;
-        if before.acknowledged_at.is_some() || !self.acknowledge_show_request(id)? {
-            return Err(LocalStateRejection::ShowRequestAnswered { id }.into());
+        if !before.is_pending(now) || !self.close_show_request(id, outcome)? {
+            let closed = before
+                .outcome
+                .or_else(|| before.is_overdue(now).then_some(ShowOutcome::Expired));
+            return Err(LocalStateRejection::ShowRequestAnswered {
+                id,
+                outcome: closed,
+            }
+            .into());
         }
         Ok(LinearChange {
             before: Some(before),
             after: self.show_request(id)?,
         })
+    }
+
+    /// The SQLite half of `linear.session.get` (KTD11). An unknown socket, a
+    /// space with no board, or a cwd outside any git worktree reads as
+    /// nothing to show, never an error: the status line prints the result.
+    pub fn linear_session_get(
+        &self,
+        p: &LinearSessionGetParams,
+        now: i64,
+    ) -> crate::Result<LinearSessionGetResult> {
+        let mut result = LinearSessionGetResult {
+            space: p.space.clone(),
+            ..LinearSessionGetResult::default()
+        };
+        let claims = ActivityClaims {
+            herdr_socket: p.herdr_socket.clone(),
+            ..ActivityClaims::default()
+        };
+        let Some(session) = claimed_session(&claims) else {
+            return Ok(result);
+        };
+        if self.space_binding(&session, &p.space)?.is_none() {
+            return Ok(result);
+        }
+        result.space_bound = true;
+        result.pending_requests =
+            u32::try_from(self.pending_show_requests(&p.space, now)?.len()).unwrap_or(u32::MAX);
+        let Some(worktree) = p.cwd.as_deref().and_then(|cwd| resolve_worktree(cwd).ok()) else {
+            return Ok(result);
+        };
+        let Some(binding) = self.worktree_binding(&worktree)? else {
+            return Ok(result);
+        };
+        result.marks = self
+            .list_marks(&p.space)?
+            .into_iter()
+            .filter(|m| m.issue == binding.issue)
+            .collect();
+        result.binding = Some(LinearSessionBinding {
+            bound_at: self.worktree_binding_since(&worktree)?,
+            worktree_path: binding.worktree_path,
+            issue: binding.issue,
+        });
+        Ok(result)
     }
 
     /// R13: a `save_issue` links the calling session only when its claims
@@ -607,7 +823,7 @@ impl Db {
                 return Ok(LinearActivityRecordResult {
                     activity,
                     outcome: LinearActivityOutcome::Linked,
-                    binding: Some(binding),
+                    binding: Some(binding.change),
                     mark: None,
                 });
             }
@@ -628,6 +844,7 @@ impl Db {
             text: None,
             detail: Some(detail),
             created_by: Some(&p.tool_name),
+            owner: &LinearOwner::default(),
         })?;
         Ok(LinearActivityRecordResult {
             activity,
