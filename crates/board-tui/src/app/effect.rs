@@ -134,6 +134,28 @@ pub enum Effect {
         issue: Option<String>,
         working_directory: Option<String>,
     },
+    /// Linear mode: `linear.mark.clear {ids}` in one request. `on_open` when
+    /// opening a card sent it: a failed clear then says nothing (KTD8).
+    LinearMarkClear {
+        ids: Vec<i64>,
+        on_open: bool,
+    },
+    /// Linear mode: `linear.show.accept`; `issue` is the request's target,
+    /// selected once the daemon confirms.
+    LinearShowAccept {
+        id: i64,
+        issue: String,
+    },
+    LinearShowDismiss {
+        id: i64,
+    },
+    /// Linear mode: `linear.bind` of `cwd`'s worktree to `issue`, accepting
+    /// the suggestion mark `mark`.
+    LinearBind {
+        mark: i64,
+        issue: String,
+        cwd: String,
+    },
     /// Linear mode: `pane.focus` on the origin session.
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.

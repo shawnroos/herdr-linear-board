@@ -17,7 +17,8 @@ use crate::widgets::{HitMap, Zone};
 use super::linear_strip::{draw_strip, strip_lines};
 use super::{centered_rect_abs, linear_help_keys, truncate};
 
-// Identifier, two title lines, assignee, then the blank separator row.
+// Identifier, two title lines, assignee, then the blank separator row; a
+// card with a note has one row more.
 const CARD_H: u16 = 5;
 const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
@@ -249,8 +250,13 @@ fn title_lines(title: &str, width: usize) -> [String; 2] {
     [first.to_string(), fit(rest.trim_start(), width)]
 }
 
+fn card_height(state: &LinearState, identifier: &str) -> u16 {
+    CARD_H + u16::from(state.latest_note(identifier).is_some())
+}
+
 fn card_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<String> {
-    let mut first = line(&issue.identifier);
+    let mut first = state.gutter(&issue.identifier);
+    first.push_str(&line(&issue.identifier));
     let running = issue
         .bindings
         .iter()
@@ -276,12 +282,12 @@ fn card_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<Str
         .map(|n| format!("@{}", line(n)))
         .unwrap_or_else(|| "unassigned".to_string());
     let [title_first, title_second] = title_lines(&line(&issue.title), width);
-    vec![
-        fit(&first, width),
-        title_first,
-        title_second,
-        fit(&assignee, width),
-    ]
+    let mut lines = vec![fit(&first, width), title_first, title_second];
+    if let Some(note) = state.latest_note(&issue.identifier) {
+        lines.push(fit(&format!("› {}", line(&note.body)), width));
+    }
+    lines.push(fit(&assignee, width));
+    lines
 }
 
 /// How many columns one page holds at `width` cells: at least one, so a
@@ -314,9 +320,13 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     };
     let strip = strip_lines(state, snapshot, area.width as usize);
     let strip_h = strip.len() as u16;
+    let pinned = pinned_line(state, area.width as usize);
+    let pinned_h = u16::from(pinned.is_some());
     let footer_h: u16 = 1;
     let mut y = area.y + HEADER_ROWS;
-    let mut body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
+    let mut body_h = area
+        .height
+        .saturating_sub(HEADER_ROWS + pinned_h + strip_h + footer_h);
     let per_page = linear_columns_per_page(area.width);
     let rows = [
         tab_row(state, area.width as usize),
@@ -339,7 +349,81 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         per_page,
         &mut app.hit_map.borrow_mut(),
     );
-    draw_strip(app, strip, f, area, body.bottom());
+    if let Some(pinned) = pinned {
+        if body.bottom() < area.bottom() {
+            f.render_widget(
+                Paragraph::new(pinned),
+                Rect::new(area.x, body.bottom(), area.width, 1),
+            );
+        }
+    }
+    draw_strip(app, strip, f, area, body.bottom() + pinned_h);
+}
+
+/// `a` and `x` act on the selected card's suggestion before any request, so
+/// while one is selected the request's keys dim and the footer names the
+/// suggestion's (R14).
+fn suggestion_selected(state: &LinearState) -> bool {
+    state.selected_suggestion().is_some()
+}
+
+const PINNED_KEYS: &str = "a show · x dismiss";
+
+/// The oldest pending show-request: who asked, the issue, its title, the keys
+/// and how many more wait. Only the title and then the head give way to a
+/// narrow pane; the keys and the count are never cut.
+fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
+    let requests = state.pending_requests();
+    let oldest = requests.first()?;
+    let more = match requests.len() - 1 {
+        0 => String::new(),
+        n => format!(" +{n}"),
+    };
+    let who = oldest
+        .requested_by
+        .as_deref()
+        .map(line)
+        .filter(|w| !w.trim().is_empty())
+        .unwrap_or_else(|| "an agent".to_string());
+    let title = state
+        .issue(&oldest.issue)
+        .map(|i| line(&i.title))
+        .or_else(|| oldest.reason.as_deref().map(line))
+        .unwrap_or_default();
+    let tail = PINNED_KEYS.width() + more.width();
+    let room = width.saturating_sub(tail + 2);
+    let head = fit(&format!("◉ {who} · {} ", line(&oldest.issue)), room);
+    let title = fit(&title, room.saturating_sub(head.width()));
+    let gap = width
+        .saturating_sub(head.width() + title.width() + tail)
+        .max(1);
+    let keys = if suggestion_selected(state) {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::LightCyan)
+    };
+    Some(Line::from(vec![
+        Span::styled(head, Style::default().fg(Color::LightMagenta)),
+        Span::raw(title),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(PINNED_KEYS, keys),
+        Span::styled(more, keys),
+    ]))
+}
+
+/// ` !N` for the cards among `identifiers` that need attention, or nothing.
+fn attention_count<'a>(
+    state: &LinearState,
+    identifiers: impl Iterator<Item = &'a String>,
+) -> String {
+    let needing: std::collections::BTreeSet<&str> = identifiers
+        .map(String::as_str)
+        .filter(|id| state.needs_attention(id))
+        .collect();
+    match needing.len() {
+        0 => String::new(),
+        n => format!(" !{n}"),
+    }
 }
 
 /// The tab row, the active tab in brackets. `None` for a document from
@@ -363,7 +447,8 @@ fn tab_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
             if at == state.sel_tab {
                 format!("[{label}]")
             } else {
-                format!(" {label} ")
+                let count = attention_count(state, tab.groups.iter().flat_map(|g| g.issues.iter()));
+                format!(" {label}{count} ")
             }
         })
         .collect();
@@ -403,13 +488,16 @@ fn pager_row(state: &LinearState, per_page: usize, width: usize) -> Line<'static
         let group = &groups[at];
         format!("{} {}", line(&group.label), group.issues.len())
     };
+    let hidden = |range: std::ops::Range<usize>| {
+        attention_count(state, groups[range].iter().flat_map(|g| g.issues.iter()))
+    };
     let left = if start > 0 {
-        format!("‹ {}", named(start - 1))
+        format!("‹ {}{}", named(start - 1), hidden(0..start))
     } else {
         String::new()
     };
     let right = if end < groups.len() {
-        format!("{} ›", named(end))
+        format!("{}{} ›", named(end), hidden(end..groups.len()))
     } else {
         String::new()
     };
@@ -467,8 +555,15 @@ fn visible_items(heights: &[u16], focus: usize, avail: u16) -> (usize, usize) {
 }
 
 enum ColumnItem<'a> {
-    Lane { label: &'a str, count: usize },
-    Card { lane: &'a str, identifier: &'a str },
+    Lane {
+        label: &'a str,
+        count: usize,
+    },
+    Card {
+        lane: &'a str,
+        identifier: &'a str,
+        height: u16,
+    },
 }
 
 fn draw_columns(
@@ -548,6 +643,7 @@ fn draw_columns(
                     .map(|identifier| ColumnItem::Card {
                         lane: section.key,
                         identifier,
+                        height: card_height(state, identifier),
                     }),
             );
         }
@@ -555,7 +651,7 @@ fn draw_columns(
             .iter()
             .map(|item| match item {
                 ColumnItem::Lane { .. } => 1,
-                ColumnItem::Card { .. } => CARD_H,
+                ColumnItem::Card { height, .. } => *height,
             })
             .collect();
         let focus = if focused {
@@ -592,12 +688,16 @@ fn draw_columns(
                     );
                     y += 1;
                 }
-                ColumnItem::Card { lane, identifier } => {
+                ColumnItem::Card {
+                    lane,
+                    identifier,
+                    height,
+                } => {
                     let card = Rect::new(
                         inner.x,
                         y,
                         inner.width,
-                        (CARD_H - 1).min(inner.bottom().saturating_sub(y)),
+                        (height - 1).min(inner.bottom().saturating_sub(y)),
                     );
                     let selected = focused && selected_slot == Some((lane, identifier));
                     let lines: Vec<Line> = match snapshot.issues.get(identifier) {
@@ -624,7 +724,7 @@ fn draw_columns(
                             identifier: identifier.to_string(),
                         },
                     );
-                    y += CARD_H;
+                    y += height;
                 }
             }
         }
@@ -885,13 +985,24 @@ fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
 }
 
 fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
-    let Some(toast) = &app.toast else {
-        return;
-    };
     if area.height == 0 {
         return;
     }
     let rect = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+    let Some(toast) = &app.toast else {
+        let cue = app.screen == Screen::LinearBoard
+            && app.linear.as_ref().is_some_and(suggestion_selected);
+        if cue {
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    fit(" a bind · x dismiss", area.width as usize),
+                    Style::default().fg(Color::LightCyan),
+                )),
+                rect,
+            );
+        }
+        return;
+    };
     let style = if toast.is_error {
         Style::default().fg(Color::White).bg(Color::Red)
     } else {

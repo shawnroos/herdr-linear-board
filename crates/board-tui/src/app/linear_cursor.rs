@@ -207,6 +207,79 @@ impl LinearState {
         self.refind_in_tab(&target);
     }
 
+    /// Selects `(tab, group, card)`. Leaving a tab stores its cursor, as `[`
+    /// and `]` do, so coming back lands where it was left.
+    pub(super) fn select_slot(&mut self, tab: usize, group: usize, card: usize) {
+        if tab != self.sel_tab {
+            let from = self.cursor();
+            self.tab_cursors.insert(from.tab.clone(), from);
+            self.sel_tab = tab;
+        }
+        self.sel_group = group;
+        self.sel_card = card;
+        self.clamp();
+    }
+
+    /// Selects `identifier` where the active tab draws it, else on the first
+    /// other tab that does. False when no tab draws it.
+    pub(super) fn select_identifier(&mut self, identifier: &str) -> bool {
+        let tabs = self.tabs().len();
+        let order = std::iter::once(self.sel_tab).chain((0..tabs).filter(|&t| t != self.sel_tab));
+        let found = order.filter(|&t| t < tabs).find_map(|t| {
+            self.tabs()[t]
+                .groups
+                .iter()
+                .enumerate()
+                .find_map(|(g, group)| {
+                    let card = column_cards(group)
+                        .iter()
+                        .position(|&(_, id)| id == identifier)?;
+                    Some((t, g, card))
+                })
+        });
+        match found {
+            Some((tab, group, card)) => {
+                self.select_slot(tab, group, card);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The next (`delta > 0`) or previous slot, across every tab, whose card
+    /// `wanted` accepts, wrapping at either end.
+    pub(super) fn next_slot(
+        &self,
+        delta: isize,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Option<(usize, usize, usize)> {
+        let mut slots = vec![];
+        for (t, tab) in self.tabs().iter().enumerate() {
+            for (g, group) in tab.groups.iter().enumerate() {
+                for (c, (_, id)) in column_cards(group).into_iter().enumerate() {
+                    if wanted(id) {
+                        slots.push((t, g, c));
+                    }
+                }
+            }
+        }
+        let at = (self.sel_tab, self.sel_group, self.sel_card);
+        if delta >= 0 {
+            slots
+                .iter()
+                .find(|&&slot| slot > at)
+                .or(slots.first())
+                .copied()
+        } else {
+            slots
+                .iter()
+                .rev()
+                .find(|&&slot| slot < at)
+                .or(slots.last())
+                .copied()
+        }
+    }
+
     /// `<` / `>`: the first column of the page `delta` pages away, with
     /// `per_page` columns to a page. Stops at the first and last page.
     pub(super) fn jump_page(&mut self, delta: isize, per_page: usize) {

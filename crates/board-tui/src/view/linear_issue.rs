@@ -454,6 +454,20 @@ fn sidebar_column(
         }
     }
 
+    // R32: what the card showed when it was opened, kept after it clears.
+    let marks = state.detail_marks();
+    if !marks.is_empty() {
+        out.push(Line::from(""));
+        out.push(heading("Marks", width));
+        for mark in marks {
+            let by = mark.created_by.as_deref().map(line).unwrap_or_default();
+            let text = mark.text.as_deref().map(line).unwrap_or_default();
+            out.push(Line::from(fit(
+                &format!("{} {by}  {text}", crate::app::mark_glyph(mark.kind)),
+                width,
+            )));
+        }
+    }
     out.push(Line::from(""));
     out.push(heading("Board", width));
     out.extend(board_block(state, issue.bindings(), width, rows, out.len()));

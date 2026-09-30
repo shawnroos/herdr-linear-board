@@ -1,16 +1,18 @@
 //! Linear mode: the state and reducer for a herdr space bound to a Linear
 //! project. The document is the work plugin's snapshot (`linear.snapshot`),
 //! overlaid by identifier with the space's local state (`linear.state.get`);
-//! nothing here reads `App::board`, and no effect emitted here writes to
-//! Linear, to the plugin's records, or to SQLite. The herdr writes it asks the
-//! daemon for are this pane's title, pane focus, and a bind handoff that opens
-//! one `bind` tab; the bind skill's confirmation in that tab gates every write.
+//! nothing here reads `App::board`. It writes local state only through boardd,
+//! never Linear and never the plugin's records: the mark clears, show-request
+//! answers and binds it emits are daemon requests on the Linear allow list
+//! (KTD7). The herdr writes it asks the daemon for are this pane's title, pane
+//! focus, and a bind handoff that opens one `bind` tab; the bind skill's
+//! confirmation in that tab gates every write made there.
 
 use board_core::protocol::LinearState as LocalState;
 use board_core::protocol::{
     LinearBindHandoffResult, LinearBinding, LinearIssue, LinearIssueDocument, LinearLinkedIssue,
     LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
-    LinearSpacesList, LinearTab, Mark, Note, ShowRequest,
+    LinearSpacesList, LinearTab, Mark, MarkKind, Note, ShowRequest,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -62,6 +64,50 @@ pub enum LinearArrival {
     },
     Handoff(Result<LinearBindHandoffResult, LinearFailure>),
     State(Box<Result<LocalState, LinearFailure>>),
+    Wrote {
+        write: LinearWrite,
+        result: Result<(), WriteFailure>,
+    },
+}
+
+/// A local-state write the board sent, named again when its answer lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinearWrite {
+    ClearMarks { ids: Vec<i64>, on_open: bool },
+    AcceptShow { id: i64, issue: String },
+    DismissShow { id: i64 },
+    Bind { mark: i64, issue: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteFailure {
+    /// Not found or no longer pending: another reader, the agent or the
+    /// expiry sweep closed it first.
+    Gone(String),
+    Failed(String),
+}
+
+/// The gutter glyph of a mark kind (R8).
+pub fn mark_glyph(kind: MarkKind) -> char {
+    match kind {
+        MarkKind::Attention => '!',
+        MarkKind::Question => '?',
+        MarkKind::Suggestion => '◇',
+        MarkKind::Done => '✓',
+    }
+}
+
+/// Where a suggestion's bind points: its worktree, else the cwd it was
+/// reported from.
+fn suggestion_cwd(mark: &Mark) -> Option<String> {
+    let detail = mark.detail.as_ref()?;
+    ["worktree_path", "cwd"].iter().find_map(|key| {
+        detail
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// One pane row of the detail screen: which binding it belongs to, its id,
@@ -203,6 +249,9 @@ pub struct LinearState {
     /// Local state changed again while a read was in flight; one more read is
     /// sent when it lands, however many changes arrived.
     pub local_queued: bool,
+    /// The marks the open card showed when it was opened (R32), by issue, so
+    /// the list outlives their clearing and a linked issue does not show it.
+    pub detail_marks: Option<(String, Vec<Mark>)>,
 }
 
 /// How many issues back Esc can walk. Each step holds a whole fetched
@@ -271,6 +320,7 @@ impl LinearState {
             local: None,
             local_in_flight: false,
             local_queued: false,
+            detail_marks: None,
         }
     }
 
@@ -342,6 +392,95 @@ impl LinearState {
             .iter()
             .flat_map(|l| &l.show_requests)
             .filter(move |r| r.issue == identifier)
+    }
+
+    /// Every pending show-request, oldest first: the pinned line's order.
+    pub fn pending_requests(&self) -> Vec<&ShowRequest> {
+        let mut requests: Vec<&ShowRequest> =
+            self.local.iter().flat_map(|l| &l.show_requests).collect();
+        requests.sort_by(|a, b| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)));
+        requests
+    }
+
+    pub fn latest_note<'a>(&'a self, identifier: &'a str) -> Option<&'a Note> {
+        self.notes_for(identifier)
+            .max_by(|a, b| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)))
+    }
+
+    fn has_mark(&self, identifier: &str, kind: MarkKind) -> bool {
+        self.marks_for(identifier).any(|m| m.kind == kind)
+    }
+
+    fn requested(&self, identifier: &str) -> bool {
+        self.show_requests_for(identifier).next().is_some()
+    }
+
+    /// The 2-cell gutter left of a card's identifier (R10): its glyphs in
+    /// priority order, the first plus `+` when more than two.
+    pub fn gutter(&self, identifier: &str) -> String {
+        let mut glyphs = vec![];
+        for kind in [
+            MarkKind::Attention,
+            MarkKind::Question,
+            MarkKind::Suggestion,
+        ] {
+            if self.has_mark(identifier, kind) {
+                glyphs.push(mark_glyph(kind));
+            }
+        }
+        if self.requested(identifier) {
+            glyphs.push('◉');
+        }
+        if self.has_mark(identifier, MarkKind::Done) {
+            glyphs.push(mark_glyph(MarkKind::Done));
+        }
+        match glyphs.as_slice() {
+            [] => "  ".to_string(),
+            [one] => format!("{one} "),
+            [one, two] => format!("{one}{two}"),
+            [first, ..] => format!("{first}+"),
+        }
+    }
+
+    /// What the attention counts count (R3, R4): a needs-you, question or
+    /// suggestion mark, or a show-request badge. Done is not a call to act.
+    pub fn needs_attention(&self, identifier: &str) -> bool {
+        self.marks_for(identifier).any(|m| m.kind != MarkKind::Done) || self.requested(identifier)
+    }
+
+    /// What `n` and `N` stop on (R13): any mark or badge, done included.
+    pub fn walkable(&self, identifier: &str) -> bool {
+        self.marks_for(identifier).next().is_some() || self.requested(identifier)
+    }
+
+    /// The selected card's oldest suggestion, which `a` and `x` act on first.
+    pub fn selected_suggestion(&self) -> Option<&Mark> {
+        let identifier = self.selected_identifier()?;
+        self.marks_for(identifier)
+            .filter(|m| m.kind == MarkKind::Suggestion)
+            .min_by_key(|m| m.id)
+    }
+
+    /// The marks R32 lists on the open issue page.
+    pub fn detail_marks(&self) -> &[Mark] {
+        match (&self.detail_marks, &self.detail) {
+            (Some((issue, marks)), Some(open)) if issue == open => marks,
+            _ => &[],
+        }
+    }
+
+    /// A write the daemon confirmed, applied without waiting for the read
+    /// its announcement will trigger.
+    fn forget_marks(&mut self, ids: &[i64]) {
+        if let Some(local) = self.local.as_mut() {
+            local.marks.retain(|m| !ids.contains(&m.id));
+        }
+    }
+
+    fn forget_request(&mut self, id: i64) {
+        if let Some(local) = self.local.as_mut() {
+            local.show_requests.retain(|r| r.id != id);
+        }
     }
 
     pub fn snapshot(&self) -> Option<&LinearSnapshot> {
@@ -526,6 +665,7 @@ impl LinearState {
                 .is_some_and(|id| self.issue(id).is_none())
         {
             self.detail = None;
+            self.detail_marks = None;
         }
         // A selection on a pane that the refresh removed falls back to the
         // first row rather than pointing at a pane that is no longer there.
@@ -603,6 +743,7 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
             }
             LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
             LinearArrival::State(result) => local_state_arrived(app, *result),
+            LinearArrival::Wrote { write, result } => write_arrived(app, write, result),
         },
         Msg::Key(k) => linear_key(app, k),
         Msg::LocalStateChanged(signals) => local_state_changed(app, &signals),
@@ -821,6 +962,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     state.in_flight = false;
     let follow_up = std::mem::take(&mut state.queued);
     let mut effects = vec![];
+    let mut read_local = false;
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
@@ -832,6 +974,11 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.error = None;
             state.stale_daemon = None;
             state.fetched_at = Some(now);
+            // Events only announce changes; what was already there when the
+            // board opened is read once, here.
+            if state.last_good.is_none() {
+                read_local = true;
+            }
             // Taken before the swap: the keys come from the document the
             // cursor was placed in.
             let cursor = state.cursor();
@@ -864,10 +1011,162 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
         Screen::Help => app.help_return_to = screen,
         _ => app.screen = screen,
     }
+    if read_local {
+        effects.extend(request_local_state(app));
+    }
     if follow_up {
         effects.extend(request_snapshot(app));
     }
     effects
+}
+
+/// A confirmed write is applied at once; a write someone else got to first
+/// re-reads the state it was drawn from.
+fn write_arrived(
+    app: &mut App,
+    write: LinearWrite,
+    result: Result<(), WriteFailure>,
+) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    match (write, result) {
+        (LinearWrite::ClearMarks { ids, .. }, Ok(())) => {
+            state.forget_marks(&ids);
+            vec![]
+        }
+        // KTD8: the marks stay and the next open retries.
+        (LinearWrite::ClearMarks { on_open: true, .. }, Err(_)) => vec![],
+        (LinearWrite::ClearMarks { .. }, Err(WriteFailure::Gone(_))) => request_local_state(app),
+        (LinearWrite::ClearMarks { .. }, Err(WriteFailure::Failed(text))) => {
+            app.set_toast(format!("dismiss failed: {}", sanitise(&text)), true);
+            vec![]
+        }
+        (LinearWrite::AcceptShow { id, issue }, Ok(())) => {
+            state.forget_request(id);
+            show_target(app, &issue)
+        }
+        (LinearWrite::DismissShow { id }, Ok(())) => {
+            state.forget_request(id);
+            vec![]
+        }
+        (
+            LinearWrite::AcceptShow { .. } | LinearWrite::DismissShow { .. },
+            Err(WriteFailure::Gone(_)),
+        ) => {
+            app.set_toast("request no longer pending", false);
+            request_local_state(app)
+        }
+        (
+            LinearWrite::AcceptShow { .. } | LinearWrite::DismissShow { .. },
+            Err(WriteFailure::Failed(text)),
+        ) => {
+            app.set_toast(format!("request failed: {}", sanitise(&text)), true);
+            vec![]
+        }
+        // The daemon clears the suggestion when the bound worktree is the one
+        // it names; the read shows whether it did, and a binding change in it
+        // queues the snapshot that moves the card.
+        (LinearWrite::Bind { issue, .. }, Ok(())) => {
+            app.set_toast(format!("bound {issue}"), false);
+            request_local_state(app)
+        }
+        (LinearWrite::Bind { .. }, Err(WriteFailure::Gone(text) | WriteFailure::Failed(text))) => {
+            app.set_toast(format!("bind failed: {}", sanitise(&text)), true);
+            vec![]
+        }
+    }
+}
+
+/// An accepted request's card: selected where it is drawn, switching tab and
+/// page, or opened as an issue page when no tab draws it. Neither clears its
+/// marks (R12).
+fn show_target(app: &mut App, issue: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    state.strip_focus = false;
+    if state.select_identifier(issue) {
+        return vec![];
+    }
+    let seed = LinearLinkedIssue {
+        identifier: issue.to_string(),
+        title: state
+            .issue(issue)
+            .map(|i| i.title.clone())
+            .unwrap_or_default(),
+        ..LinearLinkedIssue::default()
+    };
+    state.detail_marks = Some((issue.to_string(), state.marks_for(issue).cloned().collect()));
+    state.detail = Some(issue.to_string());
+    state.detail_stack.clear();
+    state.detail_selection = None;
+    state.detail_doc = None;
+    state.detail_error = None;
+    // Without a seed, `clamp` closes a page whose issue the snapshot lacks.
+    state.detail_seed = Some(seed);
+    app.screen = Screen::LinearDetail;
+    request_issue(app, issue)
+}
+
+/// `a` (accept) and `x` (reject): the selected card's oldest suggestion
+/// first, else the first drawn show-request, resolved now by id (R19, KTD6).
+fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
+    let Some(state) = app.linear.as_ref() else {
+        return vec![];
+    };
+    if let Some(mark) = state.selected_suggestion().cloned() {
+        if !accept {
+            return vec![Effect::LinearMarkClear {
+                ids: vec![mark.id],
+                on_open: false,
+            }];
+        }
+        let Some(cwd) = suggestion_cwd(&mark) else {
+            app.set_toast(
+                "this suggestion names no worktree to bind; x dismisses it",
+                true,
+            );
+            return vec![];
+        };
+        return vec![Effect::LinearBind {
+            mark: mark.id,
+            issue: mark.issue,
+            cwd,
+        }];
+    }
+    let Some((id, issue)) = state
+        .pending_requests()
+        .first()
+        .map(|r| (r.id, r.issue.clone()))
+    else {
+        app.set_toast(
+            if accept {
+                "nothing to accept"
+            } else {
+                "nothing to dismiss"
+            },
+            false,
+        );
+        return vec![];
+    };
+    if accept {
+        vec![Effect::LinearShowAccept { id, issue }]
+    } else {
+        vec![Effect::LinearShowDismiss { id }]
+    }
+}
+
+/// `n` / `N`: the next or previous card carrying a mark or badge, in tab,
+/// column, then lane order, wrapping (R13).
+fn walk(app: &mut App, delta: isize) {
+    let Some(state) = app.linear.as_mut() else {
+        return;
+    };
+    match state.next_slot(delta, |id| state.walkable(id)) {
+        Some((tab, group, card)) => state.select_slot(tab, group, card),
+        None => app.set_toast("no card carries a mark or a request", false),
+    }
 }
 
 pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
@@ -997,6 +1296,10 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     match k.code {
         KeyCode::Char('[') => state.cycle_tab(-1),
         KeyCode::Char(']') => state.cycle_tab(1),
+        KeyCode::Char('a') => return answer(app, true),
+        KeyCode::Char('x') => return answer(app, false),
+        KeyCode::Char('n') => walk(app, 1),
+        KeyCode::Char('N') => walk(app, -1),
         KeyCode::Char('<') => state.jump_page(-1, per_page),
         KeyCode::Char('>') => state.jump_page(1, per_page),
         KeyCode::Left | KeyCode::Char('h') => {
@@ -1020,8 +1323,22 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                     .iter()
                     .position(|row| row.status == "working")
                     .map(crate::view::IssueRowKind::Pane);
+                // R12, KTD8: the marks shown now clear, in one request; one
+                // set later stays. A suggestion clears only on `a` or `x`.
+                let shown: Vec<Mark> = state.marks_for(&id).cloned().collect();
+                let ids: Vec<i64> = shown
+                    .iter()
+                    .filter(|m| m.kind != MarkKind::Suggestion)
+                    .map(|m| m.id)
+                    .collect();
+                state.detail_marks = Some((id.clone(), shown));
                 app.screen = Screen::LinearDetail;
-                return request_issue(app, &id);
+                let mut effects = vec![];
+                if !ids.is_empty() {
+                    effects.push(Effect::LinearMarkClear { ids, on_open: true });
+                }
+                effects.extend(request_issue(app, &id));
+                return effects;
             }
         }
         KeyCode::Char('q') | KeyCode::Esc => return vec![Effect::Quit],
@@ -1305,6 +1622,7 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
         state.detail_in_flight = None;
         state.detail_selection = None;
         state.detail_seed = None;
+        state.detail_marks = None;
         app.screen = Screen::LinearBoard;
         return vec![];
     };

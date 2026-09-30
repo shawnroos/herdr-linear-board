@@ -6,7 +6,7 @@ expression: frame
 " Enter detail · r refresh · ? help · q quit                           "
 "                             1/5                              Todo 1 ›"
 "┌ Backlog (1) ───────────────────────────────────────────────────────┐"
-"│WEB-3308  P0                                                        │"
+"│  WEB-3308  P0                                                      │"
 "│Example issue: a panel is blank while an item is still loading      │"
 "│                                                                    │"
 "│@Example User                                                       │"

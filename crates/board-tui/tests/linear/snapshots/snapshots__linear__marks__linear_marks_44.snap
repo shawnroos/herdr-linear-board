@@ -1,11 +1,11 @@
 ---
-source: crates/board-tui/tests/linear/mod.rs
+source: crates/board-tui/tests/linear/marks.rs
 expression: frame
 ---
 " Linear  Frame Effects · view: project issue"
 " Enter detail · r refresh · ? help · q quit "
-" [Frontend]  Backend                        "
-"‹ Todo 4          2/4          In Review 1 ›"
+" [Frontend]  Backend !1                     "
+"‹ Todo 4 !1        2/4         In Review 1 ›"
 "┌ In Progress (2) ─────────────────────────┐"
 "│── Alpha 1 ───────────────────────────────│"
 "│  WEB-105 ▶  P3  ⧉1                       │"

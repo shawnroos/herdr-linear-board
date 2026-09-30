@@ -1,20 +1,24 @@
 //! Linear-mode effects: the snapshot fetch (worker thread in production,
-//! synchronous against a client with no reconnect path), `pane.focus`, the
-//! URL opener and the clipboard, plus the daemon-signal policy the runtime
-//! delegates to.
+//! synchronous against a client with no reconnect path), the local-state
+//! writes, `pane.focus`, the URL opener and the clipboard, plus the
+//! daemon-signal policy the runtime delegates to.
 
 use std::sync::mpsc;
 
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
-    LinearBindHandoffParams, LinearIssueParams, LinearListKind, LinearListParams,
+    LinearBindHandoffParams, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
     LinearSnapshotParams, LinearStateGetParams, PaneFocusParams,
     LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT, LINEAR_ISSUE_CLIENT_TIMEOUT,
     LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
-use crate::app::{BindTarget, LinearArrival, LinearFailure, LocalStateSignals, Mode, Msg};
+use crate::app::{
+    BindTarget, LinearArrival, LinearFailure, LinearWrite, LocalStateSignals, Mode, Msg,
+    WriteFailure,
+};
 use crate::Driver;
 
 /// `linear.state.get` reads SQLite only, never Linear or herdr, so a daemon
@@ -54,6 +58,10 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::CopyWorktreePath { .. }
             | Effect::SetLinearPaneTitle(_)
             | Effect::BindHandoff { .. }
+            | Effect::LinearMarkClear { .. }
+            | Effect::LinearShowAccept { .. }
+            | Effect::LinearShowDismiss { .. }
+            | Effect::LinearBind { .. }
             | Effect::Quit
     )
 }
@@ -75,6 +83,10 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::BindHandoff { .. }
+        | Effect::LinearMarkClear { .. }
+        | Effect::LinearShowAccept { .. }
+        | Effect::LinearShowDismiss { .. }
+        | Effect::LinearBind { .. }
         | Effect::Quit => false,
         Effect::LoadProjects
         | Effect::LoadProjectPicker
@@ -113,6 +125,54 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
     }
 }
 
+/// The protocol code and message of a failed request. A local client answers
+/// with `board_core::Error` itself rather than a wire error, so the code is
+/// read from whichever arrived. Keying only on the wire error left the whole
+/// in-process tier unable to see a code at all, which is where it is tested.
+fn code_and_message(error: &anyhow::Error) -> Option<(i32, String)> {
+    let rpc = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<RpcClientError>())
+        .map(|rpc| (rpc.code, rpc.message.clone()));
+    rpc.or_else(|| {
+        error.chain().find_map(|cause| {
+            if let Some(e) = cause.downcast_ref::<board_core::Error>() {
+                return Some((e.code(), e.to_string()));
+            }
+            let e = cause.downcast_ref::<LocalStateError>()?;
+            Some((local_state_code(e), e.to_string()))
+        })
+    })
+}
+
+/// The codes boardd's `ops/errors.rs` gives a local-state failure; an
+/// in-process client hands over the store's error before that mapping.
+fn local_state_code(error: &LocalStateError) -> i32 {
+    match error {
+        LocalStateError::Store(e) => e.code(),
+        LocalStateError::Rejected(LocalStateRejection::Refused(_)) => 1,
+        LocalStateError::Rejected(
+            LocalStateRejection::UnknownIssue { .. } | LocalStateRejection::Missing(_),
+        ) => 2,
+        LocalStateError::Rejected(
+            LocalStateRejection::IssueBoundElsewhere { .. }
+            | LocalStateRejection::ShowRequestAnswered { .. },
+        ) => 3,
+    }
+}
+
+/// A local-state write's failure. Not found (2) and invalid state (3) are
+/// how boardd answers a request or mark that someone else already closed.
+fn classify_write<T>(result: anyhow::Result<T>) -> Result<(), WriteFailure> {
+    result
+        .map(|_| ())
+        .map_err(|error| match code_and_message(&error) {
+            Some((2 | 3, message)) => WriteFailure::Gone(message),
+            Some((_, message)) => WriteFailure::Failed(message),
+            None => WriteFailure::Failed(format!("{error:#}")),
+        })
+}
+
 /// The daemon reports an unknown method as protocol code 1 with the message
 /// `bad request: unknown method: <name>`; code 1 alone also covers bad params.
 pub(crate) fn classify<T>(
@@ -135,18 +195,7 @@ pub(crate) fn classify<T>(
         if rpc.is_none() && timed_out {
             return LinearFailure::TimedOut(timeout);
         }
-        // A local client answers with `board_core::Error` itself rather than a
-        // wire error, so the code is read from whichever arrived. Keying only
-        // on the wire error left the whole in-process tier unable to see a
-        // code at all, which is where this distinction is tested.
-        let local_code = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<board_core::Error>())
-            .map(|e| (e.code(), e.to_string()));
-        let code_and_message = rpc
-            .map(|rpc| (rpc.code, rpc.message.clone()))
-            .or(local_code);
-        match code_and_message {
+        match code_and_message(&error) {
             Some((1, message)) if message.contains("unknown method") => {
                 LinearFailure::MethodNotFound
             }
@@ -450,6 +499,10 @@ impl Driver {
                     self.reconnect(&path);
                 }
                 self.handle(Msg::LinearRefresh);
+                // Changes made while the connection was down sent no event.
+                let mut any = LocalStateSignals::default();
+                any.add(None, false);
+                self.handle(Msg::LocalStateChanged(any));
             }
             return;
         }
@@ -463,6 +516,41 @@ impl Driver {
         if refreshed {
             self.handle(Msg::Refresh);
         }
+    }
+
+    fn wrote(&mut self, write: LinearWrite, result: Result<(), WriteFailure>) {
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::Wrote {
+            write,
+            result,
+        })));
+    }
+
+    pub(super) fn clear_marks(&mut self, ids: Vec<i64>, on_open: bool) {
+        let result = classify_write(self.client.linear_mark_clear_ids(&ids));
+        self.wrote(LinearWrite::ClearMarks { ids, on_open }, result);
+    }
+
+    pub(super) fn accept_show(&mut self, id: i64, issue: String) {
+        let result = classify_write(self.client.linear_show_accept(id));
+        self.wrote(LinearWrite::AcceptShow { id, issue }, result);
+    }
+
+    pub(super) fn dismiss_show(&mut self, id: i64) {
+        let result = classify_write(self.client.linear_show_dismiss(id));
+        self.wrote(LinearWrite::DismissShow { id }, result);
+    }
+
+    pub(super) fn bind_suggestion(&mut self, mark: i64, issue: String, cwd: String) {
+        let Some(space) = self.app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
+            return;
+        };
+        let result = classify_write(self.client.linear_bind(&LinearBindParams {
+            cwd,
+            issue: issue.clone(),
+            space: Some(space),
+            ..LinearBindParams::default()
+        }));
+        self.wrote(LinearWrite::Bind { mark, issue }, result);
     }
 
     pub(super) fn focus_pane(&mut self, pane_id: String) {
@@ -614,6 +702,17 @@ mod tests {
                 issue: None,
                 working_directory: None,
             },
+            Effect::LinearMarkClear {
+                ids: vec![1],
+                on_open: true,
+            },
+            Effect::LinearShowAccept { id: 1, issue: s() },
+            Effect::LinearShowDismiss { id: 1 },
+            Effect::LinearBind {
+                mark: 1,
+                issue: s(),
+                cwd: s(),
+            },
             Effect::FocusPane(s()),
             Effect::OpenIssueUrl(s()),
             Effect::CopyWorktreePath {
@@ -640,10 +739,11 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 11 since live local state: `linear.state.get` is the eleventh. The
-        // number is pinned so widening what this mode can do is a deliberate
-        // edit rather than a side effect of adding an effect.
-        assert_eq!(allowed, 11, "the allow set grew or shrank");
+        // 15 since the board acts on marks and show-requests: mark clear,
+        // show accept, show dismiss and bind joined `linear.state.get`'s 11.
+        // The number is pinned so widening what this mode can do is a
+        // deliberate edit rather than a side effect of adding an effect.
+        assert_eq!(allowed, 15, "the allow set grew or shrank");
     }
 
     #[cfg(feature = "fake-client")]

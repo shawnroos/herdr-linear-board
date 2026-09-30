@@ -171,7 +171,10 @@ fn unbound_space_shows_the_not_bound_screen_and_makes_one_snapshot_request() {
     let frame = draw(&d.app, W, H);
     assert!(frame.contains("Space Plugins (wA) is not bound"), "{frame}");
     assert!(frame.contains("/work:bind"), "{frame}");
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.state.get", "linear.list"]
+    );
     insta::assert_snapshot!("linear_unbound", frame);
 }
 
@@ -513,18 +516,15 @@ fn control_characters_never_reach_the_frame() {
 fn a_card_create_effect_is_refused_before_any_request_is_built() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    let opened = vec!["linear.snapshot", "linear.state.get", "linear.list"];
+    assert_eq!(methods(&log), opened);
     d.apply_effect(Effect::CardCreate(CardCreateParams {
         title: "smuggled".into(),
         ..Default::default()
     }));
     d.apply_effect(Effect::CardDelete(1));
     d.apply_effect(Effect::LoadProjects);
-    assert_eq!(
-        methods(&log),
-        vec!["linear.snapshot", "linear.list"],
-        "no request left"
-    );
+    assert_eq!(methods(&log), opened, "no request left");
     assert_eq!(toast(&d), "not available in Linear mode");
 }
 
@@ -554,6 +554,8 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
         vec![
             "linear.snapshot",
             "pane.set_title",
+            // The first snapshot is followed by one local-state read.
+            "linear.state.get",
             "linear.list",
             // Opening WEB-3302's page reads it; the point of this test is that
             // no `board.get` ever appears, not that the page reads nothing.
@@ -612,18 +614,20 @@ fn a_refresh_while_one_is_in_flight_is_dropped_with_a_toast() {
 fn board_changed_sends_nothing_local_state_reads_state_and_reconnect_sends_one_snapshot() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
-    assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
+    let opened = vec!["linear.snapshot", "linear.state.get", "linear.list"];
+    assert_eq!(methods(&log), opened);
     d.handle(Msg::Refresh);
     d.on_daemon_signals(true, false);
-    assert_eq!(
-        methods(&log),
-        vec!["linear.snapshot", "linear.list"],
-        "board_changed is ignored"
-    );
+    assert_eq!(methods(&log), opened, "board_changed is ignored");
     d.on_local_state_changed(local(&[(Some("wA"), false)]));
     assert_eq!(
         methods(&log),
-        vec!["linear.snapshot", "linear.list", "linear.state.get"],
+        vec![
+            "linear.snapshot",
+            "linear.state.get",
+            "linear.list",
+            "linear.state.get"
+        ],
         "a local-state change for this space reads local state and no snapshot"
     );
     assert_eq!(
@@ -635,10 +639,14 @@ fn board_changed_sends_nothing_local_state_reads_state_and_reconnect_sends_one_s
         methods(&log),
         vec![
             "linear.snapshot",
+            "linear.state.get",
             "linear.list",
             "linear.state.get",
+            // A reconnect also re-reads local state: changes made while the
+            // connection was down announced nothing.
             "linear.snapshot",
-            "linear.list"
+            "linear.list",
+            "linear.state.get"
         ]
     );
 }
@@ -1077,7 +1085,12 @@ fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     // test pins is that `o` with no socket sends nothing MORE than that.
     assert_eq!(
         methods(&log),
-        vec!["linear.snapshot", "linear.list", "linear.issue"]
+        vec![
+            "linear.snapshot",
+            "linear.state.get",
+            "linear.list",
+            "linear.issue"
+        ]
     );
 }
 
@@ -1175,7 +1188,12 @@ fn a_card_without_bindings_explains_instead_of_acting() {
     assert!(copied.lock().unwrap().is_empty());
     assert_eq!(
         methods(&log),
-        vec!["linear.snapshot", "linear.list", "linear.issue"]
+        vec![
+            "linear.snapshot",
+            "linear.state.get",
+            "linear.list",
+            "linear.issue"
+        ]
     );
 }
 
@@ -1372,7 +1390,7 @@ const NINETY: &str =
 fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellipsis() {
     assert_eq!(NINETY.chars().count(), 90);
     let rows = narrow_rows(NINETY, Some("Example User"));
-    assert!(cell(&rows, 3).starts_with("WEB-3308"), "{rows:#?}");
+    assert!(cell(&rows, 3).starts_with("  WEB-3308"), "{rows:#?}");
     let first = cell(&rows, 4);
     let second = cell(&rows, 5);
     assert!(
@@ -1428,7 +1446,7 @@ fn cards_in_a_column_are_separated_by_a_blank_row() {
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
     assert_eq!(cell(&rows, 7), "", "{rows:#?}");
-    assert!(cell(&rows, 8).starts_with("WEB-3307"), "{rows:#?}");
+    assert!(cell(&rows, 8).starts_with("  WEB-3307"), "{rows:#?}");
 }
 
 #[test]
@@ -4449,3 +4467,5 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
     assert_eq!(selected_lane(&d), "ln-beta");
 }
+
+mod marks;
