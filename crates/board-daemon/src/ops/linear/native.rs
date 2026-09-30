@@ -125,8 +125,10 @@ fn mapping_doc(config: Option<&GroupingConfig>, label: &str) -> LinearMapping {
 
 pub(in crate::ops) fn snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Result<LinearSnapshot> {
     let space = checked_workspace_id(&p)?.to_string();
+    // The raw path, as `linear.activity.record` reads its claim: a cache key
+    // built from a rewritten path would never meet the reporter's.
+    let session = session_of(p.origin_socket.as_deref());
     let origin = normalized_origin(p.origin_socket.as_deref());
-    let session = session_of(origin.as_deref());
     let herdr = herdr_snapshot(origin.as_deref());
     let local = read_local(d, &session, &space)?;
     let label = space_label(herdr.as_ref(), local.binding.as_ref(), &space);
@@ -485,9 +487,7 @@ fn refetch(d: &Arc<Daemon>, key: &SpaceKey) {
 pub(in crate::ops) fn list(d: &Arc<Daemon>, p: LinearListParams) -> Result<LinearListResult> {
     let id = checked_list_id(&p)?.map(str::to_string);
     Ok(match p.kind {
-        LinearListKind::Spaces => {
-            LinearListResult::Spaces(spaces(d, normalized_origin(p.origin_socket.as_deref()))?)
-        }
+        LinearListKind::Spaces => LinearListResult::Spaces(spaces(d, p.origin_socket.as_deref())?),
         LinearListKind::Projects => LinearListResult::Projects(projects(d)),
         LinearListKind::Views => LinearListResult::Views(views(d, &id.unwrap_or_default())),
     })
@@ -505,8 +505,9 @@ fn envelope<R>(
     }
 }
 
-fn spaces(d: &Arc<Daemon>, origin: Option<String>) -> Result<LinearSpacesList> {
-    let Some(socket) = origin else {
+fn spaces(d: &Arc<Daemon>, raw_origin: Option<&str>) -> Result<LinearSpacesList> {
+    let session = session_of(raw_origin);
+    let Some(socket) = normalized_origin(raw_origin) else {
         return Ok(envelope(
             LinearListStatus::Unavailable,
             Some("no herdr session to list: the request named no origin socket".into()),
@@ -525,7 +526,6 @@ fn spaces(d: &Arc<Daemon>, origin: Option<String>) -> Result<LinearSpacesList> {
             ))
         }
     };
-    let session = session_of(Some(&socket));
     let bindings: BTreeMap<String, SpaceBinding> = d
         .store
         .lock()

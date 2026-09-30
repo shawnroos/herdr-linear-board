@@ -70,21 +70,20 @@ fn a_plugin_below_the_floor_is_refused_naming_both_versions() {
     );
 }
 
-/// (c) With no env, no TOML key, and no installed_plugins.json under the
-/// daemon's HOME, the error names all three sources.
+/// The native read of `wA` on a fresh daemon: unbound, and Linear not called.
+fn assert_native_unbound(out: &Output) {
+    let doc = json_output(out);
+    assert_eq!(doc["workspace"]["id"], "wA");
+    assert_eq!(doc["record"]["state"], "unbound");
+    assert_eq!(doc["linear"]["status"], "unknown");
+}
+
+/// (c) With no plugin root named anywhere, the daemon reads natively, and no
+/// plugin error is raised.
 #[test]
-fn no_root_anywhere_names_every_source() {
+fn no_root_anywhere_reads_the_snapshot_natively() {
     let td = TestDaemon::start(&[]);
-    let out = td.board(&["linear", "snapshot", "wA", "--json"]);
-    let message = plugin_error(&out);
-    let installed = td
-        ._dir
-        .path()
-        .join(".claude/plugins/installed_plugins.json");
-    assert!(!installed.exists());
-    assert!(message.contains("BOARD_WORK_PLUGIN_ROOT"), "{message}");
-    assert!(message.contains("[daemon] work_plugin_root"), "{message}");
-    assert!(message.contains(installed.to_str().unwrap()), "{message}");
+    assert_native_unbound(&snapshot(&td));
 }
 
 /// (d) Exit 3 from the script is the "no such space" answer.
@@ -167,13 +166,17 @@ fn snapshot_without_json_prints_the_document() {
 #[test]
 fn the_callers_plugin_root_is_used_by_a_daemon_started_without_one() {
     let td = TestDaemon::start(&[]);
-    plugin_error(&snapshot(&td));
+    assert_native_unbound(&snapshot(&td));
     let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let out = td.board_with_env(
         &["linear", "snapshot", "wA", "--json"],
         &[("BOARD_WORK_PLUGIN_ROOT", root.path().to_str().unwrap())],
     );
-    assert_eq!(json_output(&out)["schema"], 1);
+    assert_eq!(
+        json_output(&out)["record"]["state"],
+        "bound",
+        "the script ran"
+    );
 }
 
 /// `[daemon] work_plugin_root` written after the daemon started is read on
@@ -181,7 +184,7 @@ fn the_callers_plugin_root_is_used_by_a_daemon_started_without_one() {
 #[test]
 fn a_toml_key_added_after_start_is_read_without_a_restart() {
     let td = TestDaemon::start(&[]);
-    plugin_error(&snapshot(&td));
+    assert_native_unbound(&snapshot(&td));
     let root = fake_plugin_root(board_core::PLUGIN_VERSION_FLOOR, &[]);
     let cfg = td._dir.path().join("config.toml");
     let mut text = std::fs::read_to_string(&cfg).unwrap();
@@ -190,7 +193,11 @@ fn a_toml_key_added_after_start_is_read_without_a_restart() {
         root.path().display()
     ));
     std::fs::write(&cfg, text).unwrap();
-    assert_eq!(json_output(&snapshot(&td))["schema"], 1);
+    assert_eq!(
+        json_output(&snapshot(&td))["record"]["state"],
+        "bound",
+        "the script ran"
+    );
 }
 
 fn pid_gone(pid: i32) -> bool {
