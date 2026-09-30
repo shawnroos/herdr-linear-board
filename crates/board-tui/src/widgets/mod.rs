@@ -158,6 +158,7 @@ pub enum Zone {
     /// can change between the draw and the click.
     LinearCard {
         group: String,
+        lane: String,
         identifier: String,
     },
     LinearGroup(String),

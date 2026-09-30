@@ -4,7 +4,7 @@
 //! the vendored plugin fixtures in `board-core/tests/fixtures/linear-snapshot`.
 
 use board_core::client::{BoardClient, FakeBoardClient};
-use board_core::protocol::{CardCreateParams, Event, LinearSnapshot, PaneFocusResult};
+use board_core::protocol::{CardCreateParams, Event, LinearGroup, LinearSnapshot, PaneFocusResult};
 use board_tui::app::{Effect, Mode, Msg, Screen};
 use board_tui::testkit::left_down;
 use board_tui::testkit::{
@@ -1025,10 +1025,11 @@ fn the_board_sends_its_plugin_root_with_every_snapshot_request() {
 
 // -- card and column geometry ------------------------------------------------
 
-/// A 36-cell frame is one column; rows come back without the quotes the
-/// backend wraps each row in.
+/// A 36-cell frame of the Backlog column alone, so no pager row sits above
+/// it; rows come back without the quotes the backend wraps each row in.
 fn narrow_rows(title: &str, assignee: Option<&str>) -> Vec<String> {
     let mut snapshot = bound_with_view();
+    snapshot.groups.truncate(1);
     let issue = snapshot.issues.get_mut("WEB-3308").unwrap();
     issue.title = title.into();
     issue.assignee = assignee.map(|name| board_core::protocol::LinearAssignee {
@@ -1119,6 +1120,7 @@ fn an_empty_title_and_a_missing_assignee_render_placeholders() {
 #[test]
 fn cards_in_a_column_are_separated_by_a_blank_row() {
     let mut snapshot = bound_with_view();
+    snapshot.groups.truncate(1);
     snapshot.groups[0].issues = vec!["WEB-3308".into(), "WEB-3307".into()];
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
@@ -1129,11 +1131,8 @@ fn cards_in_a_column_are_separated_by_a_blank_row() {
 #[test]
 fn a_column_of_zero_cards_renders_its_header_and_nothing_else() {
     let mut snapshot = bound_with_view();
-    // Every group, because an empty one now sorts behind the columns that have
-    // cards and would not be the column drawn at this width.
-    for group in &mut snapshot.groups {
-        group.issues.clear();
-    }
+    snapshot.groups.truncate(1);
+    snapshot.groups[0].issues.clear();
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
     assert!(rows[2].contains("Backlog (0)"), "{rows:#?}");
@@ -1148,38 +1147,66 @@ fn a_body_36_cells_wide_draws_one_column_and_72_draws_two() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     for (width, columns) in [(36u16, 1usize), (71, 1), (72, 2)] {
         let frame = render_at(&mut d, width, 20);
-        let top = frame.lines().nth(2).unwrap();
+        let top = column_tops(&frame);
         assert_eq!(top.matches('┌').count(), columns, "{width}:\n{frame}");
     }
 }
 
-// -- stacked narrow layout ---------------------------------------------------
+// -- paged narrow layout -----------------------------------------------------
 
-/// The frame's third row: the top border of every drawn column.
+/// The top border of every drawn column: the first row holding one.
 fn column_tops(frame: &str) -> String {
-    frame.lines().nth(2).unwrap_or_default().to_string()
+    frame
+        .lines()
+        .find(|row| row.contains('┌'))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The pager row: the one row naming a hidden column with an arrow.
+fn pager(frame: &str) -> String {
+    frame
+        .lines()
+        .map(backend_row)
+        .find(|row| row.starts_with('‹') || row.trim_end().ends_with('›'))
+        .unwrap_or_default()
 }
 
 #[test]
-fn a_70_cell_body_shows_one_group_with_its_position_and_the_right_key_moves_on() {
+fn a_70_cell_body_shows_one_column_a_page_and_the_pager_names_its_neighbours() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 70, 20);
     let tops = column_tops(&frame);
     assert_eq!(tops.matches('┌').count(), 1, "{frame}");
-    assert!(tops.contains("Backlog (1) · 1/5"), "{frame}");
+    assert!(tops.contains("Backlog (1)"), "{frame}");
+    assert!(
+        !tops.contains("1/5"),
+        "the pager carries the position:\n{frame}"
+    );
     assert!(
         tops.trim_end_matches('"').ends_with('┐'),
         "fills the width:\n{frame}"
     );
     assert!(!frame.contains("Todo (1)"), "{frame}");
+    let row = pager(&frame);
+    assert!(!row.contains('‹'), "{frame}");
+    assert!(
+        row.contains("1/5") && row.trim_end().ends_with("Todo 1 ›"),
+        "{frame}"
+    );
     insta::assert_snapshot!("linear_stacked_70", frame);
     press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Todo (1) · 2/5"), "{frame}");
+    assert!(column_tops(&frame).contains("Todo (1)"), "{frame}");
+    assert!(pager(&frame).starts_with("‹ Backlog 1"), "{frame}");
+    assert!(
+        pager(&frame).trim_end().ends_with("In Progress 1 ›"),
+        "{frame}"
+    );
     assert!(!frame.contains("Backlog (1)"), "{frame}");
     press(&mut d, KeyCode::Left);
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Backlog (1) · 1/5"), "{frame}");
+    assert!(column_tops(&frame).contains("Backlog (1)"), "{frame}");
 }
 
 #[test]
@@ -1188,10 +1215,15 @@ fn two_columns_at_100_and_all_five_groups_at_200_carry_no_position() {
     let frame = render_at(&mut d, 100, 20);
     assert_eq!(column_tops(&frame).matches('┌').count(), 2, "{frame}");
     assert!(!column_tops(&frame).contains("/5"), "{frame}");
+    assert!(
+        pager(&frame).trim_end().ends_with("In Progress 1 ›"),
+        "{frame}"
+    );
     insta::assert_snapshot!("linear_two_column_100", frame);
     let frame = render_at(&mut d, 200, 20);
     assert_eq!(column_tops(&frame).matches('┌').count(), 5, "{frame}");
     assert!(!column_tops(&frame).contains("/5"), "{frame}");
+    assert_eq!(pager(&frame), "", "every column fits:\n{frame}");
     insta::assert_snapshot!("linear_five_column_200", frame);
 }
 
@@ -1212,7 +1244,8 @@ fn resizing_from_200_to_70_keeps_the_selected_group() {
     press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 70, 20);
     assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 1);
-    assert!(column_tops(&frame).contains("Todo (1) · 2/5"), "{frame}");
+    assert!(column_tops(&frame).contains("Todo (1)"), "{frame}");
+    assert!(pager(&frame).contains("2/5"), "{frame}");
 }
 
 #[test]
@@ -1221,7 +1254,7 @@ fn resizing_from_70_to_200_keeps_the_same_group_in_view() {
     render_at(&mut d, 70, 20);
     press(&mut d, KeyCode::Char('l'));
     press(&mut d, KeyCode::Char('l'));
-    assert!(column_tops(&render_at(&mut d, 70, 20)).contains("In Progress (1) · 3/5"));
+    assert!(column_tops(&render_at(&mut d, 70, 20)).contains("In Progress (1)"));
     let frame = render_at(&mut d, 200, 20);
     assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 2);
     assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
@@ -1232,15 +1265,13 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     d.app.linear.as_mut().unwrap().sel_group = 9;
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Done (0) · 5/5"), "{frame}");
+    assert!(column_tops(&frame).contains("Done (0)"), "{frame}");
+    assert!(pager(&frame).starts_with("‹ Dev Done 0"), "{frame}");
     let state = d.app.linear.as_mut().unwrap();
     state.sel_group = 2;
     state.sel_card = 9;
     let frame = render_at(&mut d, 70, 20);
-    assert!(
-        column_tops(&frame).contains("In Progress (1) · 3/5"),
-        "{frame}"
-    );
+    assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
     assert!(
         frame.contains("WEB-3302"),
         "scrolled past the only card:\n{frame}"
@@ -1253,14 +1284,15 @@ fn a_body_two_rows_tall_renders_the_header_and_says_the_body_is_too_short() {
         fake_with(bound_with_view()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
-    // Header 2, body 2, the all-bound strip 2, footer 1.
-    let frame = render_at(&mut d, 70, 7);
+    // Header 2, pager 1, body 2, footer 1; with every space bound the strip
+    // takes no rows.
+    let frame = render_at(&mut d, 70, 6);
     let rows: Vec<&str> = frame.lines().collect();
     assert!(
         rows[0].contains(" Linear ") && rows[0].contains("view: Canvas board"),
         "{frame}"
     );
-    assert!(rows[2].contains("too short"), "{frame}");
+    assert!(rows[3].contains("too short"), "{frame}");
     assert!(!frame.contains("no columns"), "{frame}");
     insta::assert_snapshot!("linear_body_too_short", frame);
 }
@@ -1847,16 +1879,20 @@ fn frame_row(frame: &str, row: usize) -> String {
     backend_row(frame.lines().nth(row).unwrap_or_default())
 }
 
-/// The In Progress column at `W`×`H`: x 80..120, title row 2, first card rows
-/// 3..=6, separator row 7, second card rows 8..=11.
+/// The In Progress column at `W`×`H`, under the pager row: x 80..120, title
+/// row 3, first card rows 4..=7, separator row 8, second card rows 9..=12.
 fn assert_in_progress_geometry(frame: &str) {
-    let title: String = frame_row(frame, 2).chars().skip(80).collect();
+    assert!(
+        frame_row(frame, 2).trim_end().ends_with("Dev Done 0 ›"),
+        "{frame}"
+    );
+    let title: String = frame_row(frame, 3).chars().skip(80).collect();
     assert!(title.contains("In Progress (4)"), "{frame}");
-    let first: String = frame_row(frame, 3).chars().skip(80).collect();
+    let first: String = frame_row(frame, 4).chars().skip(80).collect();
     assert!(first.contains("WEB-3302"), "{frame}");
-    let gap: String = frame_row(frame, 7).chars().skip(81).take(38).collect();
+    let gap: String = frame_row(frame, 8).chars().skip(81).take(38).collect();
     assert!(gap.trim().is_empty(), "{frame}");
-    let second: String = frame_row(frame, 8).chars().skip(80).collect();
+    let second: String = frame_row(frame, 9).chars().skip(80).collect();
     assert!(second.contains("WEB-9001"), "{frame}");
 }
 
@@ -1865,7 +1901,7 @@ fn a_click_on_a_card_selects_it_and_opens_its_detail() {
     let mut d = mouse_driver();
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
-    d.handle(left_down(90, 9));
+    d.handle(left_down(90, 10));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
 }
@@ -1875,7 +1911,7 @@ fn a_click_on_a_column_header_selects_that_group_without_opening_anything() {
     let mut d = mouse_driver();
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
-    d.handle(left_down(95, 2));
+    d.handle(left_down(95, 3));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(selection(&d), (2, 0, None));
 }
@@ -1885,7 +1921,7 @@ fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
     let mut d = mouse_driver();
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
-    for (x, y) in [(90, 7), (90, 25), (10, 0), (80, 5)] {
+    for (x, y) in [(90, 8), (90, 25), (10, 0), (80, 6)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearBoard, "click at {x},{y}");
         assert_eq!(selection(&d), (0, 0, None), "click at {x},{y}");
@@ -1896,8 +1932,8 @@ fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
 fn a_card_click_in_the_stacked_layout_opens_that_card() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 70, 20);
-    assert!(frame_row(&frame, 3).contains("WEB-3308"), "{frame}");
-    d.handle(left_down(10, 4));
+    assert!(frame_row(&frame, 4).contains("WEB-3308"), "{frame}");
+    d.handle(left_down(10, 5));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (0, 0, Some("WEB-3308".into())));
 }
@@ -1908,13 +1944,13 @@ fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
-    let group = snapshot
+    let group = snapshot.tabs[0]
         .groups
         .iter_mut()
         .find(|g| g.key == "st-prog")
         .unwrap();
     group.issues.retain(|id| id != "WEB-3302");
-    d.handle(left_down(90, 9));
+    d.handle(left_down(90, 10));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 0, Some("WEB-9001".into())));
 }
@@ -1925,16 +1961,16 @@ fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
-    for group in snapshot.groups.iter_mut() {
+    for group in snapshot.tabs[0].groups.iter_mut() {
         group.issues.retain(|id| id != "WEB-9001");
     }
-    let todo = snapshot
+    let todo = snapshot.tabs[0]
         .groups
         .iter_mut()
         .find(|g| g.key == "st-todo")
         .unwrap();
     todo.issues.push("WEB-9001".into());
-    d.handle(left_down(90, 9));
+    d.handle(left_down(90, 10));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (1, 1, Some("WEB-9001".into())));
 }
@@ -1945,11 +1981,11 @@ fn a_click_on_a_card_that_left_the_snapshot_since_the_draw_does_nothing() {
     let frame = render_at(&mut d, W, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
-    for group in snapshot.groups.iter_mut() {
+    for group in snapshot.tabs[0].groups.iter_mut() {
         group.issues.retain(|id| id != "WEB-9001");
     }
     snapshot.issues.remove("WEB-9001");
-    d.handle(left_down(90, 9));
+    d.handle(left_down(90, 10));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(selection(&d), (0, 0, None));
 }
@@ -2118,22 +2154,23 @@ fn a_failed_space_read_says_the_list_is_unavailable_not_that_every_space_is_boun
 }
 
 #[test]
-fn an_empty_space_list_says_every_space_is_bound() {
+fn an_empty_space_list_leaves_the_strip_off_the_board() {
     let client = fake_with(bound_with_view()).with_linear_list(spaces(vec![]));
     let (mut d, _, _) = linear_driver(client, linear_start());
     let frame = render_at(&mut d, W, H);
-    assert!(frame.contains("every space is bound"), "{frame}");
+    assert!(!frame.contains("Spaces with no project"), "{frame}");
+    assert!(!frame.contains("every space is bound"), "{frame}");
     assert!(!frame.contains("unavailable"), "{frame}");
 }
 
 #[test]
-fn before_the_first_space_read_lands_the_strip_shows_a_loading_line() {
+fn before_the_first_space_read_lands_the_board_draws_no_strip() {
     let mut d = linear_driver_deferred(strip_client(), linear_start());
     assert!(d.deliver_pending_linear_snapshot());
     let loading = render_at(&mut d, W, H);
-    assert!(loading.contains("loading spaces…"), "{loading}");
+    assert!(!loading.contains("Spaces with no project"), "{loading}");
     assert!(
-        !loading.contains("every space is bound") && !loading.contains("unavailable"),
+        !loading.contains("loading spaces") && !loading.contains("unavailable"),
         "{loading}"
     );
     assert!(d.deliver_pending_linear_list());
@@ -2249,7 +2286,7 @@ fn a_click_on_a_card_while_the_strip_has_focus_opens_the_card() {
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Down);
     render_at(&mut d, W, H);
-    d.handle(left_down(90, 9));
+    d.handle(left_down(90, 10));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
     assert!(d.app.picker.is_none());
@@ -3790,4 +3827,322 @@ fn empty_columns_move_to_the_end_in_view_order() {
         keys,
         ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done"]
     );
+}
+
+// -- tabs, paged columns, lanes and the card cursor (U8) ---------------------
+
+/// Two tabs. Frontend: Todo 4 (lanes Alpha 3, Beta 1), In Progress 2, In
+/// Review 1 (Alpha empty there), Done 1. Backend: Todo 1, In Progress 1, both
+/// in lane Gamma. WEB-105's pane is working.
+fn tabs_lanes() -> LinearSnapshot {
+    let mut snapshot = linear_fixture("bound-tabs-lanes");
+    snapshot
+        .pane_status
+        .insert("wA:p1".into(), "working".into());
+    snapshot
+}
+
+fn tabs_driver() -> Driver {
+    let (d, _, _) = linear_driver(
+        fake_with(tabs_lanes()).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
+    d
+}
+
+/// Applies `edit` to the first tab's columns and to the legacy `groups` copy
+/// of them, the way the daemon's `fill_snapshot` keeps the two equal.
+fn edit_first_tab(snapshot: &mut LinearSnapshot, edit: impl Fn(&mut Vec<LinearGroup>)) {
+    edit(&mut snapshot.tabs[0].groups);
+    edit(&mut snapshot.groups);
+}
+
+fn arrive(d: &mut Driver, snapshot: LinearSnapshot) {
+    d.handle(Msg::LinearArrived(Box::new(
+        board_tui::app::LinearArrival::Snapshot(Box::new(Ok(snapshot))),
+    )));
+}
+
+fn selected_id(d: &Driver) -> Option<String> {
+    d.app
+        .linear
+        .as_ref()
+        .unwrap()
+        .selected_identifier()
+        .map(str::to_string)
+}
+
+fn selected_column(d: &Driver) -> String {
+    let state = d.app.linear.as_ref().unwrap();
+    state.groups()[state.sel_group].key.clone()
+}
+
+#[test]
+fn a_snapshot_that_reorders_the_selected_column_keeps_the_cursor_on_the_same_identifier() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('j'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        let todo = &mut groups[0];
+        todo.issues.reverse();
+        todo.lanes.reverse();
+        for lane in &mut todo.lanes {
+            lane.issues.reverse();
+        }
+    });
+    arrive(&mut d, snapshot);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    assert_eq!(selected_column(&d), "st-todo");
+}
+
+#[test]
+fn a_selected_card_that_moved_columns_is_followed() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('j'));
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        groups[0].issues.retain(|id| id != "WEB-103");
+        groups[0].lanes[0].issues.retain(|id| id != "WEB-103");
+        groups[1].issues.push("WEB-103".into());
+        groups[1].lanes[0].issues.push("WEB-103".into());
+    });
+    arrive(&mut d, snapshot);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    assert_eq!(selected_column(&d), "st-prog");
+}
+
+#[test]
+fn a_selected_card_that_left_the_snapshot_leaves_the_cursor_in_the_same_column() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('j'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        groups[0].issues.retain(|id| id != "WEB-104");
+        for lane in &mut groups[0].lanes {
+            lane.issues.retain(|id| id != "WEB-104");
+        }
+    });
+    snapshot.issues.remove("WEB-104");
+    arrive(&mut d, snapshot);
+    assert_eq!(selected_column(&d), "st-todo");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
+
+#[test]
+fn right_bracket_then_left_bracket_returns_to_the_first_tab_on_the_same_card() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char(']'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-201"));
+    let backend = render_at(&mut d, 140, 30);
+    assert!(backend.contains("WEB-202"), "{backend}");
+    assert!(!backend.contains("WEB-101"), "{backend}");
+    press(&mut d, KeyCode::Char('['));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    // Two tabs, so a further `]` and `]` also come back round.
+    press(&mut d, KeyCode::Char(']'));
+    press(&mut d, KeyCode::Char(']'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
+
+#[test]
+fn the_strip_takes_no_rows_when_no_space_is_unbound_and_no_tab_is_unmapped() {
+    let mut snapshot = bound_with_view();
+    snapshot.unmapped.clear();
+    let (mut d, _, _) = linear_driver(
+        fake_with(snapshot).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
+    for view in ["spaces", "tabs"] {
+        let frame = render_at(&mut d, W, H);
+        assert!(
+            !frame.contains("Spaces with no project"),
+            "{view}:\n{frame}"
+        );
+        assert!(!frame.contains("every space is bound"), "{view}:\n{frame}");
+        assert!(!frame.contains("Unmapped tabs"), "{view}:\n{frame}");
+        let bottom = frame.lines().nth(H as usize - 2).unwrap_or_default();
+        assert!(
+            bottom.contains('└'),
+            "the columns reach the footer:\n{frame}"
+        );
+        press(&mut d, KeyCode::Char('t'));
+    }
+}
+
+#[test]
+fn a_sidebar_board_on_in_progress_names_the_hidden_neighbour_on_each_side() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('l'));
+    let frame = render_at(&mut d, 44, 30);
+    let pager = frame
+        .lines()
+        .map(backend_row)
+        .find(|row| row.contains('‹'))
+        .unwrap_or_else(|| panic!("no pager row:\n{frame}"));
+    assert!(pager.starts_with("‹ Todo 4"), "{frame}");
+    assert!(pager.trim_end().ends_with("In Review 1 ›"), "{frame}");
+    assert!(frame.contains("In Progress (2)"), "{frame}");
+    insta::assert_snapshot!("linear_lanes_44", frame);
+}
+
+#[test]
+fn two_lanes_render_inside_each_column_at_140_80_and_44_cells() {
+    let mut d = tabs_driver();
+    for (width, columns) in [(140u16, 3usize), (80, 2), (44, 1)] {
+        let frame = render_at(&mut d, width, 30);
+        assert_eq!(
+            column_tops(&frame).matches('┌').count(),
+            columns,
+            "{width}:\n{frame}"
+        );
+        assert!(frame.contains("│── Alpha 3 "), "{width}:\n{frame}");
+        assert!(frame.contains("│── Beta 1 "), "{width}:\n{frame}");
+        let alpha = frame.find("── Alpha 3").unwrap();
+        let beta = frame.find("── Beta 1").unwrap();
+        let web_104 = frame.find("WEB-104").unwrap();
+        assert!(alpha < beta && beta < web_104, "{width}:\n{frame}");
+        if width == 140 {
+            insta::assert_snapshot!("linear_lanes_140", frame);
+        } else if width == 80 {
+            insta::assert_snapshot!("linear_lanes_80", frame);
+        }
+    }
+}
+
+#[test]
+fn a_lane_with_no_cards_in_a_column_has_no_sub_header_there() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('>'));
+    let frame = render_at(&mut d, 80, 30);
+    let review = frame
+        .lines()
+        .map(backend_row)
+        .find(|row| row.contains("In Review (1)"))
+        .map(|_| ())
+        .is_some();
+    assert!(review, "{frame}");
+    assert!(frame.contains("── Beta 1"), "{frame}");
+    assert_eq!(frame.matches("── Alpha").count(), 1, "Done only:\n{frame}");
+}
+
+#[test]
+fn without_lane_grouping_columns_have_no_sub_headers() {
+    let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let frame = render_at(&mut d, W, H);
+    assert!(!frame.contains("│── "), "{frame}");
+}
+
+#[test]
+fn the_tab_row_marks_the_active_tab_and_a_document_without_tabs_has_none() {
+    let mut d = tabs_driver();
+    let frame = render_at(&mut d, 140, 30);
+    let row = frame_row(&frame, 2);
+    assert!(
+        row.contains("[Frontend]") && row.contains(" Backend "),
+        "{frame}"
+    );
+    press(&mut d, KeyCode::Char(']'));
+    let row = frame_row(&render_at(&mut d, 140, 30), 2);
+    assert!(
+        row.contains(" Frontend ") && row.contains("[Backend]"),
+        "{row}"
+    );
+    let (mut legacy, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
+    let frame = render_at(&mut legacy, W, H);
+    assert!(!frame_row(&frame, 2).contains('['), "{frame}");
+}
+
+#[test]
+fn angle_brackets_jump_a_page_and_h_l_flip_it_at_the_edge() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 80, 30);
+    press(&mut d, KeyCode::Char('>'));
+    assert_eq!(selected_column(&d), "st-review");
+    let frame = render_at(&mut d, 80, 30);
+    assert!(pager(&frame).starts_with("‹ In Progress 2"), "{frame}");
+    assert!(!pager(&frame).contains('›'), "{frame}");
+    press(&mut d, KeyCode::Char('>'));
+    assert_eq!(selected_column(&d), "st-review", "the last page stays");
+    press(&mut d, KeyCode::Char('<'));
+    assert_eq!(selected_column(&d), "st-todo");
+    press(&mut d, KeyCode::Char('<'));
+    assert_eq!(selected_column(&d), "st-todo", "the first page stays");
+    press(&mut d, KeyCode::Char('l'));
+    press(&mut d, KeyCode::Char('l'));
+    assert_eq!(selected_column(&d), "st-review");
+    let frame = render_at(&mut d, 80, 30);
+    assert!(column_tops(&frame).contains("In Review (1)"), "{frame}");
+    assert!(!column_tops(&frame).contains("Todo (4)"), "{frame}");
+    press(&mut d, KeyCode::Char('h'));
+    let frame = render_at(&mut d, 80, 30);
+    assert!(column_tops(&frame).contains("Todo (4)"), "{frame}");
+}
+
+/// WEB-104 listed in both lanes of Todo, as a label grouping can list it.
+fn web_104_in_two_lanes() -> LinearSnapshot {
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        groups[0].lanes[0].issues.push("WEB-104".into());
+    });
+    snapshot
+}
+
+fn selected_lane(d: &Driver) -> String {
+    let state = d.app.linear.as_ref().unwrap();
+    state.selected_slot().unwrap().0.to_string()
+}
+
+#[test]
+fn an_issue_in_two_lanes_keeps_the_lane_it_was_selected_in() {
+    let (mut d, _, _) = linear_driver(
+        fake_with(web_104_in_two_lanes()).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
+    for _ in 0..4 {
+        press(&mut d, KeyCode::Char('j'));
+    }
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+    assert_eq!(selected_lane(&d), "ln-beta");
+    arrive(&mut d, web_104_in_two_lanes());
+    assert_eq!(selected_lane(&d), "ln-beta");
+    let frame = render_at(&mut d, 140, 40);
+    let highlighted = frame.matches("WEB-104").count();
+    assert_eq!(highlighted, 2, "drawn once per lane:\n{frame}");
+    // Its lane gone, the card is found again in the first lane that lists it.
+    let mut snapshot = web_104_in_two_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        groups[0].lanes[1].issues.clear();
+    });
+    arrive(&mut d, snapshot);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+    assert_eq!(selected_lane(&d), "ln-alpha");
+}
+
+#[test]
+fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
+    let (mut d, _, _) = linear_driver(
+        fake_with(web_104_in_two_lanes()).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
+    let frame = render_at(&mut d, 140, 40);
+    let rows: Vec<String> = frame.lines().map(backend_row).collect();
+    let second = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.chars().take(46).collect::<String>().contains("WEB-104"))
+        .nth(1)
+        .map(|(at, _)| at)
+        .unwrap_or_else(|| panic!("WEB-104 twice in Todo:\n{frame}"));
+    d.handle(left_down(5, second as u16));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+    assert_eq!(selected_lane(&d), "ln-beta");
 }

@@ -632,7 +632,7 @@ fn old_snapshot_fixtures_still_parse_against_the_new_dtos() {
         assert!(doc.linear.message.is_none());
         parsed += 1;
     }
-    assert_eq!(parsed, 8);
+    assert_eq!(parsed, 9);
 
     let null_message: LinearSource =
         serde_json::from_value(json!({"status": "ok", "message": null})).unwrap();

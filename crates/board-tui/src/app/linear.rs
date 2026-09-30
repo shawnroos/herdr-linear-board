@@ -6,12 +6,13 @@
 //! one `bind` tab; the bind skill's confirmation in that tab gates every write.
 
 use board_core::protocol::{
-    LinearBindHandoffResult, LinearBinding, LinearGroup, LinearIssue, LinearIssueDocument,
-    LinearLinkedIssue, LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot,
-    LinearSpaceRow, LinearSpacesList,
+    LinearBindHandoffResult, LinearBinding, LinearIssue, LinearIssueDocument, LinearLinkedIssue,
+    LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
+    LinearSpacesList, LinearTab,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::linear_cursor::CardCursor;
 use super::nav::{nav_delta, step_clamped};
 use super::{App, Effect, Msg, Screen};
 
@@ -93,8 +94,12 @@ pub struct LinearState {
     /// The last document that arrived, sanitised. Stays on screen when a
     /// later refresh fails (R19).
     pub last_good: Option<LinearSnapshot>,
+    pub sel_tab: usize,
     pub sel_group: usize,
+    /// Index into the selected column's card slots (`column_cards`).
     pub sel_card: usize,
+    /// The cursor each tab had when it was left, by tab key.
+    pub tab_cursors: std::collections::BTreeMap<String, CardCursor>,
     /// The identifier open on `Screen::LinearDetail`.
     pub detail: Option<String>,
     pub in_flight: bool,
@@ -196,8 +201,10 @@ impl LinearState {
             board_version,
             daemon_version,
             last_good: None,
+            sel_tab: 0,
             sel_group: 0,
             sel_card: 0,
+            tab_cursors: Default::default(),
             detail: None,
             in_flight: false,
             queued: false,
@@ -281,20 +288,8 @@ impl LinearState {
             .is_some_and(|s| s.record.state.as_deref() == Some("bound"))
     }
 
-    pub fn groups(&self) -> &[LinearGroup] {
-        self.snapshot().map(|s| s.groups.as_slice()).unwrap_or(&[])
-    }
-
     pub fn issue(&self, identifier: &str) -> Option<&LinearIssue> {
         self.snapshot()?.issues.get(identifier)
-    }
-
-    pub fn selected_identifier(&self) -> Option<&str> {
-        self.groups()
-            .get(self.sel_group)?
-            .issues
-            .get(self.sel_card)
-            .map(String::as_str)
     }
 
     pub fn selected_issue(&self) -> Option<&LinearIssue> {
@@ -444,15 +439,13 @@ impl LinearState {
         out
     }
 
-    fn clamp(&mut self) {
+    pub(super) fn clamp(&mut self) {
+        self.sel_tab = self.sel_tab.min(self.tabs().len().saturating_sub(1));
         let n = self.groups().len();
         if self.sel_group >= n {
             self.sel_group = n.saturating_sub(1);
         }
-        let cards = self
-            .groups()
-            .get(self.sel_group)
-            .map_or(0, |g| g.issues.len());
+        let cards = self.selected_column_len();
         if self.sel_card >= cards {
             self.sel_card = cards.saturating_sub(1);
         }
@@ -501,10 +494,24 @@ fn state_kind_rank(kind: Option<&str>) -> u8 {
     }
 }
 
-fn order_groups(snapshot: &mut LinearSnapshot) {
-    snapshot
-        .groups
-        .sort_by_key(|g| (g.issues.is_empty(), state_kind_rank(g.kind.as_deref())));
+/// A document from before `tabs` becomes one unlabelled tab of its `groups`,
+/// and `groups` stays equal to the first tab, as the daemon sends it.
+fn order_tabs(snapshot: &mut LinearSnapshot) {
+    if snapshot.tabs.is_empty() && !snapshot.groups.is_empty() {
+        snapshot.tabs = vec![LinearTab {
+            groups: std::mem::take(&mut snapshot.groups),
+            ..LinearTab::default()
+        }];
+    }
+    for tab in &mut snapshot.tabs {
+        tab.groups
+            .sort_by_key(|g| (g.issues.is_empty(), state_kind_rank(g.kind.as_deref())));
+    }
+    snapshot.groups = snapshot
+        .tabs
+        .first()
+        .map(|t| t.groups.clone())
+        .unwrap_or_default();
 }
 
 pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
@@ -693,7 +700,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
-            order_groups(&mut snapshot);
+            order_tabs(&mut snapshot);
             effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
                 &snapshot,
                 &state.workspace_id,
@@ -701,8 +708,11 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.error = None;
             state.stale_daemon = None;
             state.fetched_at = Some(now);
+            // Taken before the swap: the keys come from the document the
+            // cursor was placed in.
+            let cursor = state.cursor();
             state.last_good = Some(snapshot);
-            state.clamp();
+            state.refind(&cursor);
             state.clamp_strip();
             state.home_screen()
         }
@@ -855,14 +865,16 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     };
     if let Some(delta) = nav_delta(k.code) {
-        let cards = state
-            .groups()
-            .get(state.sel_group)
-            .map_or(0, |g| g.issues.len());
+        let cards = state.selected_column_len();
         state.sel_card = step_clamped(state.sel_card, delta, cards.saturating_sub(1));
         return vec![];
     }
+    let per_page = crate::view::linear_columns_per_page(app.last_area.width);
     match k.code {
+        KeyCode::Char('[') => state.cycle_tab(-1),
+        KeyCode::Char(']') => state.cycle_tab(1),
+        KeyCode::Char('<') => state.jump_page(-1, per_page),
+        KeyCode::Char('>') => state.jump_page(1, per_page),
         KeyCode::Left | KeyCode::Char('h') => {
             state.sel_group = step_clamped(state.sel_group, -1, 0);
             state.clamp();
@@ -967,18 +979,11 @@ pub(super) fn click_strip_row(app: &mut App, space_id: &str) -> Vec<Effect> {
 /// Selects the card drawn under the click, found again by identifier because
 /// the snapshot may have changed since that frame, then opens it the way
 /// `Enter` does. A card no longer in the snapshot is left alone.
-pub(super) fn click_card(app: &mut App, group: &str, identifier: &str) -> Vec<Effect> {
+pub(super) fn click_card(app: &mut App, group: &str, lane: &str, identifier: &str) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
-    let position = |g: &LinearGroup| g.issues.iter().position(|id| id == identifier);
-    let groups = state.groups();
-    let found = groups
-        .iter()
-        .position(|g| g.key == group && position(g).is_some())
-        .or_else(|| groups.iter().position(|g| position(g).is_some()))
-        .and_then(|g| Some((g, position(&groups[g])?)));
-    let Some((sel_group, sel_card)) = found else {
+    let Some((sel_group, sel_card)) = state.locate(group, lane, identifier) else {
         return vec![];
     };
     state.sel_group = sel_group;

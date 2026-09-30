@@ -37,7 +37,7 @@ pub(super) fn draw_strip(
 const STRIP_ROWS: usize = 3;
 
 /// The strip's rows, each with the space id a click on it opens. Empty when
-/// the tabs view has no unmapped tabs, as before the spaces view existed.
+/// the view has nothing to list: no unmapped tabs, or no unbound space.
 pub(super) fn strip_lines(
     state: &LinearState,
     snapshot: &LinearSnapshot,
@@ -90,6 +90,36 @@ pub(super) fn strip_lines(
         Some(text) if !text.is_empty() => format!("  {label}: {}", line(text)),
         _ => format!("  {label}"),
     };
+    let rows = state.unbound_spaces();
+    // Off a bound space the rows always hold that space, so they draw beside
+    // any note about the list.
+    let mut show_rows = !state.bound();
+    // A list that is loading or holds no unbound space is nothing to show on
+    // its own (R5); a failed read is, so it is never mistaken for "all bound".
+    let status = match &state.spaces {
+        SpaceList::NotRead => show_rows.then(|| note("  loading spaces…".to_string(), dim)),
+        SpaceList::Failed(text) => Some(note(
+            format!("  space list unavailable: {}", line(text)),
+            error,
+        )),
+        SpaceList::Read(list) if list.status == LinearListStatus::Unavailable => Some(note(
+            with_message("space list unavailable", &list.message),
+            error,
+        )),
+        SpaceList::Read(list) if list.status == LinearListStatus::Unknown && rows.is_empty() => {
+            Some(note(
+                with_message("space list status unknown", &list.message),
+                warn,
+            ))
+        }
+        SpaceList::Read(_) => {
+            show_rows = true;
+            None
+        }
+    };
+    if status.is_none() && !(show_rows && !rows.is_empty()) {
+        return vec![];
+    }
     let mut header = " Spaces with no project".to_string();
     if let SpaceList::Read(list) = &state.spaces {
         if list.status == LinearListStatus::Partial {
@@ -98,31 +128,7 @@ pub(super) fn strip_lines(
     }
     header.push_str(" · s select · t unmapped tabs");
     let mut lines = vec![(Line::from(Span::styled(fit(&header, width), bold)), None)];
-    let rows = state.unbound_spaces();
-    // Off a bound space the rows always hold that space, so they draw beside
-    // any note about the list.
-    let mut show_rows = !state.bound();
-    match &state.spaces {
-        SpaceList::NotRead => lines.push(note("  loading spaces…".to_string(), dim)),
-        SpaceList::Failed(text) => lines.push(note(
-            format!("  space list unavailable: {}", line(text)),
-            error,
-        )),
-        SpaceList::Read(list) if list.status == LinearListStatus::Unavailable => lines.push(note(
-            with_message("space list unavailable", &list.message),
-            error,
-        )),
-        SpaceList::Read(list) if list.status == LinearListStatus::Unknown && rows.is_empty() => {
-            lines.push(note(
-                with_message("space list status unknown", &list.message),
-                warn,
-            ))
-        }
-        SpaceList::Read(_) if rows.is_empty() => {
-            lines.push(note("  every space is bound".to_string(), dim))
-        }
-        SpaceList::Read(_) => show_rows = true,
-    }
+    lines.extend(status);
     if show_rows && !rows.is_empty() {
         let heights = vec![1u16; rows.len()];
         let sel = state.strip_sel.min(rows.len() - 1);

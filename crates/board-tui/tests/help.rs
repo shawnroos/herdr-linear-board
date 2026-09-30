@@ -105,9 +105,9 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         // binds nothing of its own, so its literals are documented wherever the
         // real handler lives.
         "mouse.rs" => return None,
-        // Pure state, effect, and drag-lifecycle modules: no key handling at
-        // all, so there is nothing here to document.
-        "state.rs" | "effect.rs" | "drag.rs" => return None,
+        // Pure state, effect, drag-lifecycle and Linear cursor modules: no key
+        // handling at all, so there is nothing here to document.
+        "state.rs" | "effect.rs" | "drag.rs" | "linear_cursor.rs" => return None,
         other => panic!(
             "src/app/{other} is a new key handler with no help section mapped — \
              add it to `sections_for` and give it rows in view::HELP_KEYS"

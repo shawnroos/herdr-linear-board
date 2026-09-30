@@ -39,6 +39,7 @@ mod effect;
 mod forms;
 mod help;
 mod linear;
+mod linear_cursor;
 mod linear_picker;
 mod mouse;
 mod move_column;
@@ -53,6 +54,7 @@ pub use linear::{
     sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState, PaneRow,
     SpaceList, StripView,
 };
+pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
 pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};
 pub use nav::clamp_selection;
 pub use state::{
