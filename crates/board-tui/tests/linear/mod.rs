@@ -3,14 +3,20 @@
 //! card actions. Every test runs against `FakeBoardClient` (or a wrapper) and
 //! the vendored plugin fixtures in `board-core/tests/fixtures/linear-snapshot`.
 
-use board_core::client::{BoardClient, FakeBoardClient};
-use board_core::protocol::{CardCreateParams, Event, LinearGroup, LinearSnapshot, PaneFocusResult};
-use board_tui::app::{Effect, Mode, Msg, Screen};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use board_core::client::{BoardClient, FakeBoardClient, RpcClientError};
+use board_core::protocol::{
+    CardCreateParams, Event, LinearActivityRecordParams, LinearBindParams, LinearGroup,
+    LinearMarkSetParams, LinearSnapshot, MarkKind, PaneFocusResult,
+};
+use board_tui::app::{Effect, LocalStateSignals, Mode, Msg, Screen};
 use board_tui::testkit::left_down;
 use board_tui::testkit::{
     draw, hostile_origin, key, linear_driver, linear_driver_deferred,
     linear_driver_failing_platform, linear_fixture, linear_start, methods, render_at,
-    MethodNotFoundClient, RecordingClient,
+    MethodNotFoundClient, RecordingClient, RequestLog,
 };
 use board_tui::widgets::Zone;
 use board_tui::{Driver, LinearStart, OriginContext};
@@ -603,7 +609,7 @@ fn a_refresh_while_one_is_in_flight_is_dropped_with_a_toast() {
 }
 
 #[test]
-fn board_changed_sends_nothing_and_reconnect_sends_exactly_one_snapshot() {
+fn board_changed_sends_nothing_local_state_reads_state_and_reconnect_sends_one_snapshot() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
     assert_eq!(methods(&log), vec!["linear.snapshot", "linear.list"]);
@@ -614,15 +620,312 @@ fn board_changed_sends_nothing_and_reconnect_sends_exactly_one_snapshot() {
         vec!["linear.snapshot", "linear.list"],
         "board_changed is ignored"
     );
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(
+        methods(&log),
+        vec!["linear.snapshot", "linear.list", "linear.state.get"],
+        "a local-state change for this space reads local state and no snapshot"
+    );
+    assert_eq!(
+        log.lock().unwrap().last().unwrap().1,
+        serde_json::json!({"space": "wA"})
+    );
     d.on_daemon_signals(true, true);
     assert_eq!(
         methods(&log),
         vec![
             "linear.snapshot",
             "linear.list",
+            "linear.state.get",
             "linear.snapshot",
             "linear.list"
         ]
+    );
+}
+
+// -- live local state (R22, KTD5) --------------------------------------------
+
+/// One event-loop tick's `local_state_changed` events.
+fn local(events: &[(Option<&str>, bool)]) -> LocalStateSignals {
+    let mut signals = LocalStateSignals::default();
+    for (space, snapshot) in events {
+        signals.add(space.map(str::to_string), *snapshot);
+    }
+    signals
+}
+
+fn count(log: &RequestLog, method: &str) -> usize {
+    methods(log).iter().filter(|m| *m == method).count()
+}
+
+/// A fake whose served snapshot, local state and state-read failure a test
+/// changes after the driver owns it, as an agent would behind the board.
+#[derive(Clone)]
+struct SharedFake {
+    inner: Arc<Mutex<FakeBoardClient>>,
+    snapshot: Arc<Mutex<LinearSnapshot>>,
+    state_unknown: Arc<AtomicBool>,
+}
+
+impl SharedFake {
+    fn new(snapshot: LinearSnapshot) -> SharedFake {
+        SharedFake {
+            inner: Arc::new(Mutex::new(fake_with(snapshot.clone()))),
+            snapshot: Arc::new(Mutex::new(snapshot)),
+            state_unknown: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn serve(&self, snapshot: LinearSnapshot) {
+        *self.snapshot.lock().unwrap() = snapshot;
+    }
+
+    fn mark(&self, issue: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        // The store refuses a mark on an issue it has no local record of.
+        inner
+            .linear_activity_record(&LinearActivityRecordParams {
+                tool_name: "mcp__linear__save_comment".into(),
+                issue: Some(issue.into()),
+                space: Some("wA".into()),
+                ..LinearActivityRecordParams::default()
+            })
+            .unwrap();
+        inner
+            .linear_mark_set(&LinearMarkSetParams {
+                space: "wA".into(),
+                issue: issue.into(),
+                kind: MarkKind::Attention,
+                text: Some("look".into()),
+                created_by: Some("agent-a".into()),
+                owner: Default::default(),
+            })
+            .unwrap();
+    }
+
+    fn bind(&self, cwd: &std::path::Path, issue: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .linear_bind(&LinearBindParams {
+                cwd: cwd.to_str().unwrap().into(),
+                issue: issue.into(),
+                space: Some("wA".into()),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+    }
+}
+
+impl BoardClient for SharedFake {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        match method {
+            "linear.snapshot" => Ok(serde_json::to_value(&*self.snapshot.lock().unwrap())?),
+            "linear.state.get" if self.state_unknown.load(Ordering::SeqCst) => {
+                Err(anyhow::Error::new(RpcClientError::new(
+                    1,
+                    None,
+                    "bad request: unknown method: linear.state.get".into(),
+                    None,
+                )))
+            }
+            _ => self.inner.lock().unwrap().call(method, params),
+        }
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.inner.lock().unwrap().subscribe()
+    }
+}
+
+/// A git worktree root the fake's `linear.bind` accepts, removed on drop.
+struct Worktree(std::path::PathBuf);
+
+impl Worktree {
+    fn new(name: &str) -> Worktree {
+        let dir = std::env::temp_dir().join(format!("hb-u7-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        Worktree(std::fs::canonicalize(dir).unwrap())
+    }
+}
+
+impl Drop for Worktree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// `bound_with_view` with `issue` moved to the `to` column.
+fn with_issue_in(mut snapshot: LinearSnapshot, issue: &str, to: &str) -> LinearSnapshot {
+    let groups = snapshot
+        .tabs
+        .iter_mut()
+        .flat_map(|t| t.groups.iter_mut())
+        .chain(snapshot.groups.iter_mut());
+    for group in groups {
+        group.issues.retain(|i| i != issue);
+        if group.key == to {
+            group.issues.push(issue.to_string());
+        }
+    }
+    snapshot
+}
+
+fn column_of<'a>(d: &'a Driver, issue: &str) -> Option<&'a str> {
+    let snapshot = d.app.linear.as_ref()?.snapshot()?;
+    snapshot
+        .groups
+        .iter()
+        .find(|g| g.issues.iter().any(|i| i == issue))
+        .map(|g| g.key.as_str())
+}
+
+#[test]
+fn a_local_state_change_for_this_space_reads_state_once_and_no_snapshot() {
+    let shared = SharedFake::new(bound_with_view());
+    shared.mark("WEB-3302");
+    let (client, log) = RecordingClient::new(shared.clone());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(methods(&log), vec!["linear.state.get"]);
+    let state = d.app.linear.as_ref().unwrap();
+    let marks: Vec<_> = state.marks_for("WEB-3302").collect();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].text.as_deref(), Some("look"));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn a_local_state_change_with_the_snapshot_flag_reads_one_cached_snapshot_and_moves_the_card() {
+    let shared = SharedFake::new(bound_with_view());
+    let (client, log) = RecordingClient::new(shared.clone());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    assert_eq!(column_of(&d, "WEB-3302"), Some("st-prog"));
+    shared.serve(with_issue_in(bound_with_view(), "WEB-3302", "st-devdone"));
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some("wA"), true), (None, false)]));
+    assert_eq!(count(&log, "linear.snapshot"), 1);
+    assert_eq!(
+        count(&log, "linear.state.get"),
+        0,
+        "the snapshot replaces the state read"
+    );
+    let sent = log.lock().unwrap();
+    let (_, params) = sent.iter().find(|(m, _)| m == "linear.snapshot").unwrap();
+    assert!(params.get("force").is_none(), "never forced: {params}");
+    drop(sent);
+    assert_eq!(column_of(&d, "WEB-3302"), Some("st-devdone"));
+    let frame = draw(&d.app, 200, H);
+    assert!(frame.contains("Dev Done (1)"), "{frame}");
+}
+
+#[test]
+fn three_local_state_changes_during_a_state_read_send_exactly_one_follow_up() {
+    let shared = SharedFake::new(bound_with_view());
+    let (client, log) = RecordingClient::new(shared.clone());
+    let mut d = linear_driver_deferred(client, linear_start());
+    assert!(d.deliver_pending_linear_snapshot());
+    log.lock().unwrap().clear();
+    for _ in 0..3 {
+        d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    }
+    assert!(methods(&log).is_empty(), "held, not sent");
+    assert!(d.deliver_pending_linear_state());
+    shared.mark("WEB-3307");
+    assert!(d.deliver_pending_linear_state(), "one follow-up read");
+    assert!(!d.deliver_pending_linear_state(), "and only one");
+    assert_eq!(methods(&log), vec!["linear.state.get", "linear.state.get"]);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().marks_for("WEB-3307").count(),
+        1,
+        "the follow-up's answer is the one kept"
+    );
+}
+
+#[test]
+fn a_local_state_change_for_another_space_triggers_nothing() {
+    let (client, log) = RecordingClient::new(SharedFake::new(bound_with_view()));
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some("wB"), false), (Some("wC"), true)]));
+    assert!(methods(&log).is_empty(), "{:?}", methods(&log));
+    d.on_local_state_changed(local(&[(None, false), (Some("wB"), true)]));
+    assert_eq!(
+        methods(&log),
+        vec!["linear.state.get"],
+        "an any-space event reads; another space's snapshot flag does not apply here"
+    );
+}
+
+#[test]
+fn a_state_read_whose_bindings_changed_queues_one_snapshot() {
+    let shared = SharedFake::new(bound_with_view());
+    let (client, log) = RecordingClient::new(shared.clone());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    let worktree = Worktree::new("bindings");
+    shared.bind(&worktree.0, "WEB-3307");
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(count(&log, "linear.state.get"), 1);
+    assert_eq!(count(&log, "linear.snapshot"), 1, "{:?}", methods(&log));
+    log.lock().unwrap().clear();
+    shared.mark("WEB-3307");
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(
+        methods(&log),
+        vec!["linear.state.get"],
+        "a mark alone changes no column"
+    );
+}
+
+#[test]
+fn marks_for_an_issue_off_the_board_are_kept_until_a_snapshot_brings_the_card() {
+    let shared = SharedFake::new(bound_with_view());
+    shared.mark("WEB-9999");
+    let (client, _log) = RecordingClient::new(shared.clone());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    d.on_local_state_changed(local(&[(Some("wA"), true)]));
+    let state = d.app.linear.as_ref().unwrap();
+    assert!(state.issue("WEB-9999").is_none());
+    assert_eq!(state.marks_for("WEB-9999").count(), 1, "kept off the board");
+
+    let mut arrived = bound_with_view();
+    let mut issue = arrived.issues["WEB-3307"].clone();
+    issue.identifier = "WEB-9999".into();
+    arrived.issues.insert("WEB-9999".into(), issue);
+    shared.serve(with_issue_in(arrived, "WEB-9999", "st-todo"));
+    d.on_local_state_changed(local(&[(Some("wA"), true)]));
+    let state = d.app.linear.as_ref().unwrap();
+    assert!(state.issue("WEB-9999").is_some());
+    assert_eq!(column_of(&d, "WEB-9999"), Some("st-todo"));
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().marks_for("WEB-9999").count(),
+        1
+    );
+}
+
+#[test]
+fn a_daemon_without_the_state_read_leaves_the_board_as_it_was() {
+    let shared = SharedFake::new(bound_with_view());
+    shared.state_unknown.store(true, Ordering::SeqCst);
+    let (client, log) = RecordingClient::new(shared.clone());
+    let (mut d, _, _) = linear_driver(client, linear_start());
+    let before = draw(&d.app, W, H);
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(methods(&log), vec!["linear.state.get"]);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(d.app.toast.is_none());
+    assert_eq!(draw(&d.app, W, H), before);
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(
+        count(&log, "linear.state.get"),
+        2,
+        "a failed read is not left in flight"
     );
 }
 

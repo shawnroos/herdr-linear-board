@@ -1,14 +1,16 @@
 //! Linear mode: the state and reducer for a herdr space bound to a Linear
-//! project. The document is the work plugin's snapshot (`linear.snapshot`);
+//! project. The document is the work plugin's snapshot (`linear.snapshot`),
+//! overlaid by identifier with the space's local state (`linear.state.get`);
 //! nothing here reads `App::board`, and no effect emitted here writes to
 //! Linear, to the plugin's records, or to SQLite. The herdr writes it asks the
 //! daemon for are this pane's title, pane focus, and a bind handoff that opens
 //! one `bind` tab; the bind skill's confirmation in that tab gates every write.
 
+use board_core::protocol::LinearState as LocalState;
 use board_core::protocol::{
     LinearBindHandoffResult, LinearBinding, LinearIssue, LinearIssueDocument, LinearLinkedIssue,
     LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
-    LinearSpacesList, LinearTab,
+    LinearSpacesList, LinearTab, Mark, Note, ShowRequest,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -59,6 +61,7 @@ pub enum LinearArrival {
         result: Result<LinearListResult, LinearFailure>,
     },
     Handoff(Result<LinearBindHandoffResult, LinearFailure>),
+    State(Box<Result<LocalState, LinearFailure>>),
 }
 
 /// One pane row of the detail screen: which binding it belongs to, its id,
@@ -78,6 +81,32 @@ pub enum SpaceList {
     NotRead,
     Read(LinearSpacesList),
     Failed(String),
+}
+
+/// The `local_state_changed` events the runtime drained in one tick, by the
+/// space each named (`None` is any space), with whether any of them carried
+/// the daemon's post-refetch `snapshot` flag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalStateSignals(std::collections::BTreeMap<Option<String>, bool>);
+
+impl LocalStateSignals {
+    pub fn add(&mut self, space: Option<String>, snapshot: bool) {
+        *self.0.entry(space).or_default() |= snapshot;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// `None` when no event concerns `space`; otherwise whether one that does
+    /// carried the snapshot flag.
+    pub fn for_space(&self, space: &str) -> Option<bool> {
+        self.0
+            .iter()
+            .filter(|(named, _)| named.as_deref().is_none_or(|named| named == space))
+            .map(|(_, snapshot)| *snapshot)
+            .reduce(|a, b| a || b)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -164,6 +193,16 @@ pub struct LinearState {
     /// keeps what its page last showed, so stepping back re-renders it while
     /// its own fresh read runs rather than emptying to loading markers (R17).
     pub detail_stack: Vec<DetailStep>,
+    /// The last local-state read that succeeded, sanitised. Kept whole rather
+    /// than pruned to the snapshot's issues, so a mark on a card the board has
+    /// not fetched yet shows once a snapshot brings the card.
+    pub local: Option<LocalState>,
+    /// A `linear.state.get` is on the way. Separate from `in_flight`: the two
+    /// reads answer different events and neither waits for the other.
+    pub local_in_flight: bool,
+    /// Local state changed again while a read was in flight; one more read is
+    /// sent when it lands, however many changes arrived.
+    pub local_queued: bool,
 }
 
 /// How many issues back Esc can walk. Each step holds a whole fetched
@@ -229,6 +268,9 @@ impl LinearState {
             detail_error: None,
             detail_selection: None,
             detail_stack: vec![],
+            local: None,
+            local_in_flight: false,
+            local_queued: false,
         }
     }
 
@@ -275,6 +317,31 @@ impl LinearState {
         self.lists_in_flight
             .iter()
             .any(|(k, i)| *k == kind && i.as_deref() == id)
+    }
+
+    pub fn marks_for<'a>(&'a self, identifier: &'a str) -> impl Iterator<Item = &'a Mark> + 'a {
+        self.local
+            .iter()
+            .flat_map(|l| &l.marks)
+            .filter(move |m| m.issue == identifier)
+    }
+
+    pub fn notes_for<'a>(&'a self, identifier: &'a str) -> impl Iterator<Item = &'a Note> + 'a {
+        self.local
+            .iter()
+            .flat_map(|l| &l.notes)
+            .filter(move |n| n.issue == identifier)
+    }
+
+    /// Pending requests only: the daemon filters expired ones on its own clock.
+    pub fn show_requests_for<'a>(
+        &'a self,
+        identifier: &'a str,
+    ) -> impl Iterator<Item = &'a ShowRequest> + 'a {
+        self.local
+            .iter()
+            .flat_map(|l| &l.show_requests)
+            .filter(move |r| r.issue == identifier)
     }
 
     pub fn snapshot(&self) -> Option<&LinearSnapshot> {
@@ -535,8 +602,10 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
                 vec![]
             }
             LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
+            LinearArrival::State(result) => local_state_arrived(app, *result),
         },
         Msg::Key(k) => linear_key(app, k),
+        Msg::LocalStateChanged(signals) => local_state_changed(app, &signals),
     }
 }
 
@@ -687,6 +756,61 @@ fn request_or_queue(app: &mut App) -> Vec<Effect> {
         Some(_) => request_snapshot(app),
         None => vec![],
     }
+}
+
+fn local_state_changed(app: &mut App, signals: &LocalStateSignals) -> Vec<Effect> {
+    let Some(state) = app.linear.as_ref() else {
+        return vec![];
+    };
+    match signals.for_space(&state.workspace_id) {
+        None => vec![],
+        // The daemon already refetched Linear; its cached snapshot is the
+        // news, so this is a plain read and never a forced one (KTD5).
+        Some(true) => request_or_queue(app),
+        Some(false) => request_local_state(app),
+    }
+}
+
+fn request_local_state(app: &mut App) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    if state.local_in_flight {
+        state.local_queued = true;
+        return vec![];
+    }
+    state.local_in_flight = true;
+    vec![Effect::LinearStateGet]
+}
+
+/// A failed read keeps the last local state and says nothing: it is a
+/// background read, and a daemon that predates it must not cost the board
+/// its screen.
+fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    state.local_in_flight = false;
+    let follow_up = std::mem::take(&mut state.local_queued);
+    let mut bindings_changed = false;
+    if let Ok(local) = result {
+        let local = sanitise_local(local);
+        // The first read has nothing to compare with; the snapshot on screen
+        // was read with whatever bindings existed then.
+        bindings_changed = state.local.as_ref().is_some_and(|last| {
+            last.space_bindings != local.space_bindings
+                || last.worktree_bindings != local.worktree_bindings
+        });
+        state.local = Some(local);
+    }
+    let mut effects = vec![];
+    if bindings_changed {
+        effects.extend(request_or_queue(app));
+    }
+    if follow_up {
+        effects.extend(request_local_state(app));
+    }
+    effects
 }
 
 fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<Effect> {
@@ -1253,6 +1377,23 @@ pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
         // happen; if it did, nothing unsanitised may reach the screen.
         Err(_) => *snapshot = LinearSnapshot::default(),
     }
+}
+
+/// The same walk over local state: mark text and note bodies are agent text.
+fn sanitise_local(local: LocalState) -> LocalState {
+    let space = local.space.clone();
+    serde_json::to_value(&local)
+        .map(board_core::text::sanitise_json)
+        .and_then(serde_json::from_value::<LocalState>)
+        .unwrap_or(LocalState {
+            space,
+            space_bindings: vec![],
+            worktree_bindings: vec![],
+            grouping: None,
+            marks: vec![],
+            notes: vec![],
+            show_requests: vec![],
+        })
 }
 
 /// The same walk over a list envelope.

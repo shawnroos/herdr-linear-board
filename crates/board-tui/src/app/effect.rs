@@ -106,6 +106,9 @@ pub enum Effect {
     /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
     /// production, synchronous against the fake).
     LinearSnapshot,
+    /// Linear mode: fetch `linear.state.get` for the space. The reducer marks
+    /// the read in flight before emitting it.
+    LinearStateGet,
     /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
     /// project id). The reducer marks the read in flight before emitting it.
     LinearList {

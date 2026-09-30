@@ -8,18 +8,24 @@ use std::sync::mpsc;
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::protocol::{
     LinearBindHandoffParams, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, PaneFocusParams, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearSnapshotParams, LinearStateGetParams, PaneFocusParams,
+    LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT, LINEAR_ISSUE_CLIENT_TIMEOUT,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
-use crate::app::{BindTarget, LinearArrival, LinearFailure, Mode, Msg};
+use crate::app::{BindTarget, LinearArrival, LinearFailure, LocalStateSignals, Mode, Msg};
 use crate::Driver;
+
+/// `linear.state.get` reads SQLite only, never Linear or herdr, so a daemon
+/// that has not answered by now is wedged rather than slow.
+const LINEAR_STATE_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A read held by the test hook instead of running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pending {
     Snapshot,
+    State,
     Issue {
         issue: String,
         generation: u64,
@@ -40,6 +46,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
         eff,
         Effect::Refetch
             | Effect::LinearSnapshot
+            | Effect::LinearStateGet
             | Effect::LinearList { .. }
             | Effect::LinearIssue { .. }
             | Effect::FocusPane(_)
@@ -60,6 +67,7 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
     match eff {
         Effect::Refetch
         | Effect::LinearSnapshot
+        | Effect::LinearStateGet
         | Effect::LinearList { .. }
         | Effect::LinearIssue { .. }
         | Effect::FocusPane(_)
@@ -199,6 +207,21 @@ impl Driver {
         );
     }
 
+    pub(super) fn fetch_linear_state(&mut self) {
+        if let Some(pending) = self.deferred_linear.as_mut() {
+            pending.push_back(Pending::State);
+            return;
+        }
+        let Some(params) = self.state_params() else {
+            return;
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.linear_state_get(&params),
+            |result| LinearArrival::State(Box::new(result)),
+        );
+    }
+
     pub(super) fn fetch_linear_issue(&mut self, issue: String, generation: u64) {
         if let Some(pending) = self.deferred_linear.as_mut() {
             pending.push_back(Pending::Issue { issue, generation });
@@ -279,6 +302,11 @@ impl Driver {
             plugin_root: self.origin.plugin_root.clone(),
             force: false,
         })
+    }
+
+    fn state_params(&self) -> Option<LinearStateGetParams> {
+        let space = self.app.linear.as_ref()?.workspace_id.clone();
+        Some(LinearStateGetParams { space })
     }
 
     fn list_params(&self, kind: LinearListKind, id: Option<String>) -> LinearListParams {
@@ -389,10 +417,32 @@ impl Driver {
         true
     }
 
+    /// The runtime's coalesced `local_state_changed` events for one loop
+    /// iteration; the reducer decides whether any concern this space.
+    pub fn on_local_state_changed(&mut self, signals: LocalStateSignals) {
+        self.handle(Msg::LocalStateChanged(signals));
+    }
+
     /// The runtime's coalesced subscription signals for one loop iteration.
     /// Upstream mode: a reconnect installs a fresh request client and forces
-    /// one refetch; a change refetches. Linear mode: a change is ignored and
-    /// a reconnect is the one automatic snapshot request (R21).
+    /// one refetch; a change refetches. Linear mode: a board change is
+    /// ignored and a reconnect requests one snapshot.
+    /// Run the oldest held local-state read synchronously and feed its
+    /// arrival. Returns whether one was pending.
+    pub fn deliver_pending_linear_state(&mut self) -> bool {
+        if self.take_pending(|p| matches!(p, Pending::State)).is_none() {
+            return false;
+        }
+        let Some(params) = self.state_params() else {
+            return false;
+        };
+        let result = self.client.linear_state_get(&params);
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::State(
+            Box::new(classify(result, LINEAR_STATE_CLIENT_TIMEOUT)),
+        ))));
+        true
+    }
+
     pub fn on_daemon_signals(&mut self, changed: bool, reconnected: bool) {
         if self.app.mode == Mode::Linear {
             if reconnected {
@@ -548,6 +598,7 @@ mod tests {
             Effect::ReloadPickers,
             Effect::Quit,
             Effect::LinearSnapshot,
+            Effect::LinearStateGet,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
                 id: None,
@@ -589,10 +640,10 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 10 since the issue page: `linear.issue` is the tenth read Linear mode
-        // may make. The number is pinned so widening what this mode can do is a
-        // deliberate edit rather than a side effect of adding an effect.
-        assert_eq!(allowed, 10, "the allow set grew or shrank");
+        // 11 since live local state: `linear.state.get` is the eleventh. The
+        // number is pinned so widening what this mode can do is a deliberate
+        // edit rather than a side effect of adding an effect.
+        assert_eq!(allowed, 11, "the allow set grew or shrank");
     }
 
     #[cfg(feature = "fake-client")]

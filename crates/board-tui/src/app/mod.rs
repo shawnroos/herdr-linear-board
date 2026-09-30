@@ -51,8 +51,8 @@ mod switcher;
 
 pub use effect::Effect;
 pub use linear::{
-    sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState, PaneRow,
-    SpaceList, StripView,
+    sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure, LinearState,
+    LocalStateSignals, PaneRow, SpaceList, StripView,
 };
 pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
 pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};
@@ -175,6 +175,8 @@ pub enum Msg {
     LinearRefresh,
     /// Linear mode: a snapshot or list worker's answer.
     LinearArrived(Box<LinearArrival>),
+    /// Linear mode: the `local_state_changed` events of one event-loop tick.
+    LocalStateChanged(LocalStateSignals),
 }
 
 /// The whole TUI state.
@@ -507,7 +509,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Refresh => vec![Effect::Refetch],
         Msg::Key(k) => on_key(app, k),
         Msg::Mouse(m) => mouse::on_mouse(app, m),
-        Msg::LinearRefresh | Msg::LinearArrived(_) => vec![],
+        Msg::LinearRefresh | Msg::LinearArrived(_) | Msg::LocalStateChanged(_) => vec![],
     }
 }
 
