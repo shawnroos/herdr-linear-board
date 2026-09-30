@@ -28,7 +28,7 @@ use crate::app::{App, Msg};
 use crate::editor::FakeEditor;
 use crate::forms::{Field, FieldId, FieldKind, Form};
 use crate::view::view;
-use crate::{Driver, LinearStart, OriginContext, PlatformActions};
+use crate::{Driver, LinearStart, OriginContext, PlatformActions, ShowContext};
 
 // -- form introspection ------------------------------------------------------
 
@@ -660,6 +660,7 @@ pub fn linear_start() -> LinearStart {
         board_version: "0.17.0".to_string(),
         daemon_version: Some("0.17.0".to_string()),
         herdr_keys: Vec::new(),
+        show: ShowContext::default(),
     }
 }
 

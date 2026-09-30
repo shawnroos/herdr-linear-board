@@ -763,10 +763,31 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
             state.workspace_id
         )),
         Line::from(record),
+    ];
+    // R24: the daemon's own words, which name the import command.
+    if let Some(message) = state
+        .snapshot()
+        .filter(|s| s.linear.status == "not_imported")
+        .map(|s| {
+            s.linear
+                .message
+                .as_deref()
+                .unwrap_or("the work store has not been imported; run `board import work-store`")
+        })
+    {
+        lines.push(Line::from(""));
+        lines.extend(message.lines().map(|text| {
+            Line::from(Span::styled(
+                text.to_string(),
+                Style::default().fg(Color::LightYellow),
+            ))
+        }));
+    }
+    lines.extend([
         Line::from(""),
         Line::from("Press s (or click a space below) to pick a project for it,"),
         Line::from("or run /work:bind in this space; then press r to refresh."),
-    ];
+    ]);
     if let Some(note) = &state.bind_note {
         lines.push(Line::from(Span::styled(
             note.clone(),

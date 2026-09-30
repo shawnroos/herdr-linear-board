@@ -28,8 +28,9 @@ use crate::editor::{EditorLauncher, RealEditor};
 use crate::OriginContext;
 
 /// What the CLI hands the TUI to start in Linear mode: the herdr space id
-/// (`space_identity`), the invoking context, and the two versions the R25
-/// screen shows when the daemon predates `linear.snapshot`.
+/// (`space_identity`), the invoking context, the two versions the stale-daemon
+/// screen shows when the daemon predates `linear.snapshot`, and what an
+/// agent-opened board lands on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinearStart {
     pub workspace_id: String,
@@ -37,6 +38,7 @@ pub struct LinearStart {
     pub board_version: String,
     pub daemon_version: Option<String>,
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub show: crate::ShowContext,
 }
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
@@ -90,6 +92,7 @@ impl Driver {
             start.daemon_version,
         );
         state.herdr_keys = start.herdr_keys;
+        state.landing = Some(start.show);
         let mut driver = Driver {
             app: App::linear(state, start.origin.clone()),
             client,

@@ -12,7 +12,7 @@ expression: frame
 "│@Example User │  a            accept: ◇ bind, else show                                               █│              │"
 "│              │  x            dismiss: ◇, else request                                                █│              │"
 "│              │  n / N        next / prev marked card                                                 █│              │"
-"│              │  r / R        refresh snapshot                                                        █│              │"
+"│              │  r / R        refresh; R skips cache                                                  █│              │"
 "│              │  ?            this help (any screen)                                                  ││              │"
 "│              │  ↑/↓ k/j      scroll this help                                                        ││              │"
 "│              │  q / Esc      quit                                                                    ││              │"

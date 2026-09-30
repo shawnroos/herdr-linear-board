@@ -394,6 +394,27 @@ fn a_on_a_suggestion_with_no_worktree_refuses_and_sends_nothing() {
 }
 
 #[test]
+fn accepting_a_suggestion_that_named_only_its_cwd_also_clears_it() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let dir = Worktree::new("cwd-only");
+    std::fs::remove_dir_all(dir.0.join(".git")).unwrap();
+    // Reported from outside any worktree, so the mark names only its cwd and
+    // the daemon's bind cannot match it to the worktree it binds.
+    let id = shared.suggest("WEB-101", Some(&dir.0));
+    std::fs::create_dir_all(dir.0.join(".git")).unwrap();
+    let (mut d, log) = board(&shared);
+    press(&mut d, KeyCode::Char('a'));
+    assert_eq!(params(&log, "linear.bind").len(), 1, "{:?}", methods(&log));
+    assert_eq!(toast(&d), "bound WEB-101");
+    assert_eq!(
+        params(&log, "linear.mark.clear"),
+        vec![serde_json::json!({ "ids": [id] })]
+    );
+    let frame = render_at(&mut d, 140, 40);
+    assert!(!frame.contains('◇'), "{frame}");
+}
+
+#[test]
 fn x_on_a_selected_suggestion_clears_that_mark() {
     let shared = SharedFake::quiet(tabs_lanes());
     let worktree = Worktree::new("x-sugg");

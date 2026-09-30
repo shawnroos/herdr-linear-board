@@ -104,8 +104,11 @@ pub enum Effect {
     ReloadPickers,
     Quit,
     /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
-    /// production, synchronous against the fake).
-    LinearSnapshot,
+    /// production, synchronous against the fake). `force` asks the daemon to
+    /// skip its read cache (`R`).
+    LinearSnapshot {
+        force: bool,
+    },
     /// Linear mode: fetch `linear.state.get` for the space. The reducer marks
     /// the read in flight before emitting it.
     LinearStateGet,
@@ -149,10 +152,10 @@ pub enum Effect {
     LinearShowDismiss {
         id: i64,
     },
-    /// Linear mode: `linear.bind` of `cwd`'s worktree to `issue`, accepting
-    /// the suggestion mark `mark`.
+    /// Linear mode: `linear.bind` of `cwd`'s worktree to `issue`: accepting
+    /// the suggestion mark `mark`, or `b` on the issue page (no mark).
     LinearBind {
-        mark: i64,
+        mark: Option<i64>,
         issue: String,
         cwd: String,
     },

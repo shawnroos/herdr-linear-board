@@ -102,7 +102,9 @@ fn dispatch(cli: Cli) -> Result<()> {
             None => run_daemon(foreground),
         },
         Cmd::Tui => {
-            let herdr_workspace_id = std::env::var("HERDR_WORKSPACE_ID").ok();
+            let show = board_tui::ShowContext::from_environment();
+            let herdr_workspace_id =
+                show.workspace(std::env::var("HERDR_WORKSPACE_ID").ok().as_deref());
             let plugin_context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok();
             match scope::tui_mode(herdr_workspace_id.as_deref(), plugin_context.as_deref()) {
                 scope::TuiMode::Linear { workspace_id } => {
@@ -119,6 +121,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                             board_version: env!("CARGO_PKG_VERSION").to_string(),
                             daemon_version,
                             herdr_keys: board_tui::herdr_keys::from_environment(),
+                            show,
                         },
                     )
                 }

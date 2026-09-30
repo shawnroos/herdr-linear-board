@@ -12,7 +12,7 @@ expression: frame
 "│@Example User │  Esc          strip: unfocus, else quit                                               ││              │"
 "│              │  q            quit                                                                    ││              │"
 "│              │snapshot failed                                                                        ││              │"
-"│              │  r / R        retry the snapshot                                                      ││              │"
+"│              │  r / R        retry; R skips cache                                                    ││              │"
 "│              │  Esc          dismiss, keep last good                                                 ││              │"
 "│              │  q            quit                                                                    █│              │"
 "│              │daemon older than board                                                                █│              │"

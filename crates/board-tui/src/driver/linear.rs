@@ -28,7 +28,9 @@ const LINEAR_STATE_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A read held by the test hook instead of running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pending {
-    Snapshot,
+    Snapshot {
+        force: bool,
+    },
     State,
     Issue {
         issue: String,
@@ -49,7 +51,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
     matches!(
         eff,
         Effect::Refetch
-            | Effect::LinearSnapshot
+            | Effect::LinearSnapshot { .. }
             | Effect::LinearStateGet
             | Effect::LinearList { .. }
             | Effect::LinearIssue { .. }
@@ -74,7 +76,7 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
     use crate::app::Effect;
     match eff {
         Effect::Refetch
-        | Effect::LinearSnapshot
+        | Effect::LinearSnapshot { .. }
         | Effect::LinearStateGet
         | Effect::LinearList { .. }
         | Effect::LinearIssue { .. }
@@ -241,12 +243,12 @@ impl Driver {
         }
     }
 
-    pub(super) fn fetch_linear_snapshot(&mut self) {
+    pub(super) fn fetch_linear_snapshot(&mut self, force: bool) {
         if let Some(pending) = self.deferred_linear.as_mut() {
-            pending.push_back(Pending::Snapshot);
+            pending.push_back(Pending::Snapshot { force });
             return;
         }
-        let Some(params) = self.linear_params() else {
+        let Some(params) = self.linear_params(force) else {
             return;
         };
         self.run_linear_read(
@@ -343,13 +345,13 @@ impl Driver {
         }
     }
 
-    fn linear_params(&self) -> Option<LinearSnapshotParams> {
+    fn linear_params(&self, force: bool) -> Option<LinearSnapshotParams> {
         let workspace_id = self.app.linear.as_ref()?.workspace_id.clone();
         Some(LinearSnapshotParams {
             workspace_id,
             origin_socket: self.origin.origin_socket.clone(),
             plugin_root: self.origin.plugin_root.clone(),
-            force: false,
+            force,
         })
     }
 
@@ -395,13 +397,12 @@ impl Driver {
     /// Run the oldest held snapshot fetch synchronously and feed its arrival.
     /// Returns whether one was pending.
     pub fn deliver_pending_linear_snapshot(&mut self) -> bool {
-        if self
-            .take_pending(|p| matches!(p, Pending::Snapshot))
-            .is_none()
-        {
+        let Some(Pending::Snapshot { force }) =
+            self.take_pending(|p| matches!(p, Pending::Snapshot { .. }))
+        else {
             return false;
-        }
-        let Some(params) = self.linear_params() else {
+        };
+        let Some(params) = self.linear_params(force) else {
             return false;
         };
         let result = self.client.linear_snapshot(&params);
@@ -540,7 +541,7 @@ impl Driver {
         self.wrote(LinearWrite::DismissShow { id }, result);
     }
 
-    pub(super) fn bind_suggestion(&mut self, mark: i64, issue: String, cwd: String) {
+    pub(super) fn bind_worktree(&mut self, mark: Option<i64>, issue: String, cwd: String) {
         let Some(space) = self.app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
             return;
         };
@@ -685,7 +686,7 @@ mod tests {
             Effect::SetLinearPaneTitle(s()),
             Effect::ReloadPickers,
             Effect::Quit,
-            Effect::LinearSnapshot,
+            Effect::LinearSnapshot { force: false },
             Effect::LinearStateGet,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
@@ -709,7 +710,7 @@ mod tests {
             Effect::LinearShowAccept { id: 1, issue: s() },
             Effect::LinearShowDismiss { id: 1 },
             Effect::LinearBind {
-                mark: 1,
+                mark: Some(1),
                 issue: s(),
                 cwd: s(),
             },

@@ -76,7 +76,7 @@ pub enum LinearWrite {
     ClearMarks { ids: Vec<i64>, on_open: bool },
     AcceptShow { id: i64, issue: String },
     DismissShow { id: i64 },
-    Bind { mark: i64, issue: String },
+    Bind { mark: Option<i64>, issue: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +181,8 @@ pub struct LinearState {
     /// An automatic refresh (a reconnect) asked for while one was in flight;
     /// it is sent when that one lands, so it is not lost.
     pub queued: bool,
+    /// `R` pressed while a read was in flight: the queued read is forced.
+    pub queued_force: bool,
     pub error: Option<String>,
     /// `(board_version, daemon_version)` once the daemon answered that it has
     /// no `linear.snapshot` (R25).
@@ -252,6 +254,8 @@ pub struct LinearState {
     /// The marks the open card showed when it was opened (R32), by issue, so
     /// the list outlives their clearing and a linked issue does not show it.
     pub detail_marks: Option<(String, Vec<Mark>)>,
+    /// Where an agent-opened board lands, taken by the first good snapshot.
+    pub landing: Option<crate::ShowContext>,
 }
 
 /// How many issues back Esc can walk. Each step holds a whole fetched
@@ -296,6 +300,7 @@ impl LinearState {
             detail: None,
             in_flight: false,
             queued: false,
+            queued_force: false,
             error: None,
             stale_daemon: None,
             fetched_at: None,
@@ -321,6 +326,7 @@ impl LinearState {
             local_in_flight: false,
             local_queued: false,
             detail_marks: None,
+            landing: None,
         }
     }
 
@@ -616,6 +622,8 @@ impl LinearState {
             "ok" | "unknown" => {}
             "unavailable" => out.push("Linear unavailable".to_string()),
             "truncated" => out.push("Linear listing truncated".to_string()),
+            // The not-bound screen prints the daemon's message for it instead.
+            "not_imported" => {}
             other => out.push(format!("Linear {other}")),
         }
         // An empty status is a section the document left out, not a failure.
@@ -863,7 +871,7 @@ fn detail_failure(issue: &str, failure: LinearFailure) -> DetailError {
     }
 }
 
-fn request_snapshot(app: &mut App) -> Vec<Effect> {
+fn request_snapshot(app: &mut App, force: bool) -> Vec<Effect> {
     let Some(in_flight) = app.linear.as_ref().map(|s| s.in_flight) else {
         return vec![];
     };
@@ -876,7 +884,7 @@ fn request_snapshot(app: &mut App) -> Vec<Effect> {
     };
     state.in_flight = true;
     state.bind_note = None;
-    let mut effects = vec![Effect::LinearSnapshot];
+    let mut effects = vec![Effect::LinearSnapshot { force }];
     // The strip's space list is read with every snapshot.
     if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
         effects.push(Effect::LinearList {
@@ -894,7 +902,22 @@ fn request_or_queue(app: &mut App) -> Vec<Effect> {
             state.queued = true;
             vec![]
         }
-        Some(_) => request_snapshot(app),
+        Some(_) => request_snapshot(app, false),
+        None => vec![],
+    }
+}
+
+/// `R`: a read past the daemon's cache (KTD9). Pressed during a read, it is
+/// queued behind it rather than dropped, since the read in flight may be the
+/// cached copy `R` is there to skip.
+fn force_refresh(app: &mut App) -> Vec<Effect> {
+    match app.linear.as_mut() {
+        Some(state) if state.in_flight => {
+            state.queued = true;
+            state.queued_force = true;
+            vec![]
+        }
+        Some(_) => request_snapshot(app, true),
         None => vec![],
     }
 }
@@ -961,8 +984,10 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     };
     state.in_flight = false;
     let follow_up = std::mem::take(&mut state.queued);
+    let follow_up_force = std::mem::take(&mut state.queued_force);
     let mut effects = vec![];
     let mut read_local = false;
+    let mut landing = None;
     let screen = match result {
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
@@ -978,6 +1003,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             // board opened is read once, here.
             if state.last_good.is_none() {
                 read_local = true;
+                landing = state.landing.take();
             }
             // Taken before the swap: the keys come from the document the
             // cursor was placed in.
@@ -1011,13 +1037,35 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
         Screen::Help => app.help_return_to = screen,
         _ => app.screen = screen,
     }
+    // After the screen is set, or the board screen would replace a detail
+    // the landing opened.
+    if let Some(show) = landing {
+        effects.extend(land(app, &show));
+    }
     if read_local {
         effects.extend(request_local_state(app));
     }
     if follow_up {
-        effects.extend(request_snapshot(app));
+        effects.extend(request_snapshot(app, follow_up_force));
     }
     effects
+}
+
+/// R25: the first target the view can place, selected like an accepted
+/// request and never clearing marks. Only a bound board has cards to land on.
+fn land(app: &mut App, show: &crate::ShowContext) -> Vec<Effect> {
+    if !app.linear.as_ref().is_some_and(LinearState::bound) {
+        return vec![];
+    }
+    for target in show.targets() {
+        match target {
+            // A card id names a card of the kanban board; a Linear snapshot
+            // carries none, so here it places nothing and the issue stands in.
+            crate::Landing::Card(_) => {}
+            crate::Landing::Issue(issue) => return show_target(app, &issue),
+        }
+    }
+    vec![]
 }
 
 /// A confirmed write is applied at once; a write someone else got to first
@@ -1064,12 +1112,21 @@ fn write_arrived(
             app.set_toast(format!("request failed: {}", sanitise(&text)), true);
             vec![]
         }
-        // The daemon clears the suggestion when the bound worktree is the one
-        // it names; the read shows whether it did, and a binding change in it
-        // queues the snapshot that moves the card.
-        (LinearWrite::Bind { issue, .. }, Ok(())) => {
+        // The daemon clears a suggestion only when its `worktree_path` is the
+        // bound worktree; one reported from a bare cwd names none, so the
+        // accepted mark is cleared by id as well (a mark already gone is
+        // skipped). The read after it moves the card through its binding.
+        (LinearWrite::Bind { mark, issue }, Ok(())) => {
             app.set_toast(format!("bound {issue}"), false);
-            request_local_state(app)
+            let mut effects: Vec<Effect> = mark
+                .map(|id| Effect::LinearMarkClear {
+                    ids: vec![id],
+                    on_open: false,
+                })
+                .into_iter()
+                .collect();
+            effects.extend(request_local_state(app));
+            effects
         }
         (LinearWrite::Bind { .. }, Err(WriteFailure::Gone(text) | WriteFailure::Failed(text))) => {
             app.set_toast(format!("bind failed: {}", sanitise(&text)), true);
@@ -1130,7 +1187,7 @@ fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
             return vec![];
         };
         return vec![Effect::LinearBind {
-            mark: mark.id,
+            mark: Some(mark.id),
             issue: mark.issue,
             cwd,
         }];
@@ -1192,7 +1249,7 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         app.screen = Screen::Help;
         return vec![];
     }
-    if matches!(k.code, KeyCode::Char('r') | KeyCode::Char('R')) && app.screen != Screen::Help {
+    if let (KeyCode::Char(c @ ('r' | 'R')), false) = (k.code, app.screen == Screen::Help) {
         if app.screen == Screen::LinearDetail {
             let retry = app.linear.as_ref().and_then(|state| {
                 let open = state.detail.clone()?;
@@ -1208,7 +1265,11 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                 return request_issue(app, &issue);
             }
         }
-        return request_snapshot(app);
+        return if c == 'R' {
+            force_refresh(app)
+        } else {
+            request_snapshot(app, false)
+        };
     }
     match app.screen {
         Screen::Help => {
@@ -1636,9 +1697,9 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
     request_issue(app, &step.issue)
 }
 
-/// `b` in the card detail: a bind for the selected binding, in its worktree.
-/// Only a state the plugin can confirm or repair is sent; every other
-/// state is refused by name.
+/// `b` in the card detail: `linear.bind` of the selected binding's worktree
+/// to this issue. Only a state a bind can confirm or repair is sent; every
+/// other state is refused by name.
 fn bind_detail_card(app: &mut App) -> Vec<Effect> {
     let Some(state) = app.linear.as_ref() else {
         return vec![];
@@ -1659,18 +1720,11 @@ fn bind_detail_card(app: &mut App) -> Vec<Effect> {
         app.set_toast(text, true);
         return vec![];
     }
-    let Some(project) = state.bound_project_id() else {
-        app.set_toast("this space has no bound project", true);
-        return vec![];
-    };
-    let target = super::BindTarget {
-        space: state.workspace_id.clone(),
-        project: project.to_string(),
-        issue: Some(issue.identifier.clone()),
-        working_directory: Some(binding.worktree_path.clone()),
-        ..Default::default()
-    };
-    super::linear_picker::start_bind_handoff(app, target)
+    vec![Effect::LinearBind {
+        mark: None,
+        issue: issue.identifier.clone(),
+        cwd: binding.worktree_path.clone(),
+    }]
 }
 
 // -- sanitising -------------------------------------------------------------

@@ -3105,6 +3105,15 @@ fn binding(state: &str, path: &str, pane: &str) -> LinearBinding {
     }
 }
 
+fn binds(log: &RequestLog) -> Vec<Value> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.bind")
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
 /// `bound_with_view` with WEB-3302's bindings replaced.
 fn card_client(bindings: Vec<LinearBinding>) -> FakeBoardClient {
     let mut snapshot = bound_with_view();
@@ -3113,7 +3122,7 @@ fn card_client(bindings: Vec<LinearBinding>) -> FakeBoardClient {
 }
 
 #[test]
-fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
+fn b_on_a_proposed_binding_sends_a_bind_with_its_directory_and_the_issue() {
     let client = card_client(vec![binding(
         "proposed",
         "$SANDBOX/worktrees/web-3302",
@@ -3123,16 +3132,12 @@ fn b_on_a_proposed_binding_sends_a_handoff_with_its_directory_and_the_issue() {
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('b'));
-    assert_eq!(
-        handoffs(&log),
-        vec![serde_json::json!({
-            "space": "wA",
-            "project": BOUND_PROJECT,
-            "issue": "WEB-3302",
-            "working_directory": "$SANDBOX/worktrees/web-3302",
-            "origin_socket": "/tmp/herdr-test.sock",
-        })]
-    );
+    let sent = binds(&log);
+    assert_eq!(sent.len(), 1, "{:?}", methods(&log));
+    assert_eq!(sent[0]["cwd"], "$SANDBOX/worktrees/web-3302");
+    assert_eq!(sent[0]["issue"], "WEB-3302");
+    assert_eq!(sent[0]["space"], "wA");
+    assert!(handoffs(&log).is_empty(), "no bind tab opens");
 }
 
 #[test]
@@ -3143,7 +3148,7 @@ fn b_acts_on_stale_and_misplaced_bindings_too() {
         let (mut d, _, _) = linear_driver(client, start_with_socket());
         open_web_3302(&mut d);
         press(&mut d, KeyCode::Char('b'));
-        assert_eq!(handoffs(&log).len(), 1, "{state}");
+        assert_eq!(binds(&log).len(), 1, "{state}");
     }
 }
 
@@ -3159,15 +3164,12 @@ fn b_on_a_card_with_two_bindings_uses_the_selected_one_and_refuses_a_bound_one()
     press(&mut d, KeyCode::Char('k'));
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("already bound"), "{}", toast(&d));
-    assert!(handoffs(&log).is_empty(), "a bound binding sends nothing");
+    assert!(binds(&log).is_empty(), "a bound binding sends nothing");
     press(&mut d, KeyCode::Char('j'));
     press(&mut d, KeyCode::Char('b'));
-    let sent = handoffs(&log);
+    let sent = binds(&log);
     assert_eq!(sent.len(), 1);
-    assert_eq!(
-        sent[0]["working_directory"],
-        "$SANDBOX/worktrees/web-3302-retry"
-    );
+    assert_eq!(sent[0]["cwd"], "$SANDBOX/worktrees/web-3302-retry");
     assert_eq!(sent[0]["issue"], "WEB-3302");
 }
 
@@ -3181,7 +3183,7 @@ fn b_on_a_bound_binding_toasts_that_it_is_already_bound_and_sends_nothing() {
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("already bound"), "{}", toast(&d));
     assert!(d.app.toast.as_ref().unwrap().is_error);
-    assert!(handoffs(&log).is_empty());
+    assert!(binds(&log).is_empty());
     assert!(!d.app.linear.as_ref().unwrap().handoff_in_flight);
 }
 
@@ -3198,7 +3200,7 @@ fn b_on_a_card_with_no_binding_toasts_and_sends_nothing() {
     );
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("no worktree binding"), "{}", toast(&d));
-    assert!(handoffs(&log).is_empty());
+    assert!(binds(&log).is_empty());
 }
 
 #[test]
@@ -3210,7 +3212,7 @@ fn b_on_a_worktree_missing_binding_toasts_and_sends_nothing() {
     open_web_3302(&mut d);
     press(&mut d, KeyCode::Char('b'));
     assert!(toast(&d).contains("worktree is missing"), "{}", toast(&d));
-    assert!(handoffs(&log).is_empty());
+    assert!(binds(&log).is_empty());
 }
 
 #[test]
@@ -4468,4 +4470,5 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
     assert_eq!(selected_lane(&d), "ln-beta");
 }
 
+mod landing;
 mod marks;
