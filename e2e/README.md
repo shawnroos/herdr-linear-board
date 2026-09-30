@@ -8,7 +8,7 @@ exercises the herdr wire integration end to end.
 
 For the layers below this one (unit, daemon+CLI integration, TUI snapshots), the
 isolation/safety design, and the **how-to-write-a-scenario** guide, see
-[`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v15:
+[`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v16:
 every numbered scenario from **01 through 42** must appear here and in `run-all.sh`. Scenario 41 is the one
 exception to the provider-free rule: it starts the person's real `claude` and skips without it, and `e2e/ci.sh` leaves it out with `run-all.sh --provider-free`. The provider-free
 safe boundary is `fake-agent.sh`,

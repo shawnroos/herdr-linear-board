@@ -22,7 +22,7 @@ in root Cargo.toml. Never edit another crate. Phase A creates all five crates co
 
 ## Contract versions and source ownership
 
-The final compatibility matrix is: board protocol **v1**, SQLite schema **v15**, and exactly
+The final compatibility matrix is: board protocol **v1**, SQLite schema **v16**, and exactly
 Herdr **0.9.0 / socket protocol 22**. The versioned source of truth is `schema.sql` for fresh
 SQLite databases and `board-core::db` migrations for upgrades; `board-core::protocol` owns the
 board wire DTOs; `board-herdr` owns only the verified Herdr socket surface; and `docs/design.md`
@@ -104,7 +104,8 @@ pub(crate) fn rescue_run_pane(plan: &RescuePlan<'_>) -> Result<RescueOutcome>;
 ## Semantics source of truth
 
 `docs/protocol.md` + `docs/design.md` §5–§8. `schema.sql` at repo root is the current fresh schema
-(embedded and versioned with `PRAGMA user_version`). Schema v15 is current. v8 adds the partial
+(embedded and versioned with `PRAGMA user_version`). Schema v16 is current; it adds the Linear-mode
+local-state tables. v8 adds the partial
 unique index `idx_runs_one_open_per_card` and transactional enqueue/promotion/finalization units of
 work. v9 adds nullable durable timeout deadline/pause timestamps. Promotion writes the deadline in
 its transaction; awaiting pause/resume updates the card and timeout atomically and idempotently,

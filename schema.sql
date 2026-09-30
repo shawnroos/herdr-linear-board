@@ -1,6 +1,6 @@
 -- herdr-board SQLite schema (WAL mode; boardd is the only writer).
--- This file is the CURRENT (schema v15) shape: a fresh DB is created directly
--- from it and stamped `PRAGMA user_version = 15`. Existing databases are upgraded
+-- This file is the CURRENT (schema v16) shape: a fresh DB is created directly
+-- from it and stamped `PRAGMA user_version = 16`. Existing databases are upgraded
 -- by migrations in board-core/src/db/migrations.rs (kept in sync with this file).
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -182,3 +182,121 @@ CREATE INDEX idx_runs_card      ON runs(card_id, started_at);
 CREATE UNIQUE INDEX idx_runs_one_open_per_card ON runs(card_id) WHERE ended_at IS NULL;
 CREATE INDEX idx_runs_queued_fifo ON runs(id) WHERE started_at IS NULL AND ended_at IS NULL;
 CREATE INDEX idx_runs_active_open ON runs(id) WHERE started_at IS NOT NULL AND ended_at IS NULL;
+
+-- Linear-mode local state (v16). Keys are Linear and herdr identifiers, never
+-- board rows, so no foreign key reaches the tables above: an older binary opens
+-- a v16 file and ignores these tables.
+CREATE TABLE linear_space_bindings (
+  herdr_session TEXT NOT NULL,
+  space         TEXT NOT NULL,
+  project_id    TEXT NOT NULL,
+  display_name  TEXT,
+  team_ids_json TEXT NOT NULL DEFAULT '[]',
+  view_json     TEXT,
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (herdr_session, space)
+);
+
+CREATE TABLE linear_worktree_bindings (
+  worktree_path    TEXT PRIMARY KEY,
+  issue_identifier TEXT NOT NULL,
+  state            TEXT NOT NULL DEFAULT 'bound'
+                     CHECK (state IN ('bound','misplaced','stale')),
+  branch           TEXT,
+  tab              TEXT,
+  display_name     TEXT,
+  team_ids_json    TEXT NOT NULL DEFAULT '[]',
+  view_json        TEXT,
+  carried_json     TEXT NOT NULL DEFAULT '{}',
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE linear_session_scopes (
+  session_id TEXT PRIMARY KEY,
+  team_id    TEXT NOT NULL,
+  team_key   TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE linear_scope_repos (
+  scope_key TEXT NOT NULL,
+  repo_path TEXT NOT NULL,
+  position  INTEGER NOT NULL,
+  PRIMARY KEY (scope_key, repo_path)
+);
+
+-- space NULL is the global mapping. A space row replaces it whole; position
+-- orders the space rows because the first matching space takes a ticket.
+CREATE TABLE linear_grouping (
+  id          INTEGER PRIMARY KEY,
+  space       TEXT,
+  position    INTEGER NOT NULL,
+  levels_json TEXT NOT NULL,
+  filter_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX idx_linear_grouping_space ON linear_grouping(space) WHERE space IS NOT NULL;
+CREATE UNIQUE INDEX idx_linear_grouping_global ON linear_grouping((space IS NULL)) WHERE space IS NULL;
+CREATE UNIQUE INDEX idx_linear_grouping_position ON linear_grouping(position) WHERE space IS NOT NULL;
+
+CREATE TABLE linear_marks (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  text             TEXT,
+  detail_json      TEXT,
+  created_by       TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE linear_notes (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  body             TEXT NOT NULL,
+  author           TEXT NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE linear_show_requests (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  reason           TEXT,
+  requested_by     TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged_at  TEXT
+);
+
+-- Never the raw hook payload: the tool, the issue and who claimed the call.
+CREATE TABLE linear_activity (
+  id                 INTEGER PRIMARY KEY,
+  space              TEXT,
+  tool_name          TEXT NOT NULL,
+  issue_identifier   TEXT,
+  herdr_socket       TEXT,
+  herdr_pane_id      TEXT,
+  herdr_workspace_id TEXT,
+  card_id            INTEGER,
+  run_id             INTEGER,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE linear_board_panes (
+  herdr_socket   TEXT NOT NULL,
+  pane_id        TEXT NOT NULL,
+  context_key    TEXT NOT NULL,
+  placement      TEXT NOT NULL CHECK (placement IN ('tab','split')),
+  workspace_id   TEXT,
+  origin_pane_id TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (herdr_socket, pane_id)
+);
+
+CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
+CREATE INDEX idx_linear_notes_space ON linear_notes(space, issue_identifier);
+CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+CREATE INDEX idx_linear_activity_space ON linear_activity(space, id);
+CREATE INDEX idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);

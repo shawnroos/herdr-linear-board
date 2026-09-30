@@ -5,10 +5,19 @@
 mod boards_columns;
 mod cards_comments;
 mod constraints;
+mod linear_state;
 mod migrations;
 mod projects;
 mod rows;
 mod runs;
+
+pub use linear_state::{
+    is_issue_identifier, Activity, ActivityClaims, BoardPane, BoardPanePlacement, GroupingConfig,
+    GroupingMapping, Mark, MarkKind, NewActivity, NewBoardPane, NewMark, Note, ResolvedGrouping,
+    SessionScope, ShowRequest, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
+    GROUPING_FIELD_KINDS, GROUPING_FILTER_KEYS, GROUPING_LEVELS, LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    LINEAR_STATE_TYPES,
+};
 
 use std::path::Path;
 

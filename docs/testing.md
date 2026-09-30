@@ -1,7 +1,7 @@
 # Testing
 
 How herdr-board is tested, and how to add tests for a change. The final contract is board
-protocol v1, SQLite schema v15, and Herdr 0.9.0 / protocol 22. Four layers, cheap and hermetic
+protocol v1, SQLite schema v16, and Herdr 0.9.0 / protocol 22. Four layers, cheap and hermetic
 first, expensive and live last:
 
 ```
