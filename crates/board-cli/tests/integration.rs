@@ -26,6 +26,8 @@ mod import;
 mod lifecycle;
 #[path = "integration/linear.rs"]
 mod linear;
+#[path = "integration/mcp.rs"]
+mod mcp;
 #[path = "integration/meta.rs"]
 mod meta;
 #[path = "integration/projects.rs"]

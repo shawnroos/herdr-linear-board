@@ -66,6 +66,8 @@ pub(crate) enum Cmd {
     Version,
     /// Print the exact operational skill document.
     Skill,
+    /// Serve the board's agent tools as an MCP server over stdio.
+    Mcp,
     /// Board operations.
     Board {
         #[command(subcommand)]
