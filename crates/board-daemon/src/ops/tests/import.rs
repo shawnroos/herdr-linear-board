@@ -505,7 +505,7 @@ fn a_real_import_announces_each_affected_space_once_and_a_rerun_announces_nothin
     assert_eq!(spaces.len(), distinct.len(), "{spaces:?}");
     assert_eq!(
         distinct,
-        [None, Some("alpha"), Some("wF"), Some("wL"), Some("zeta")]
+        [None, Some("wF"), Some("wL")]
             .into_iter()
             .map(|s| s.map(str::to_string))
             .collect()

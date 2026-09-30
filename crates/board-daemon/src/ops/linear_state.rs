@@ -5,7 +5,7 @@
 
 use super::*;
 
-use board_core::db::{claimed_space, clean_claims, LocalStateError};
+use board_core::db::{claimed_space, clean_claims, ActivityClaims, LocalStateError};
 
 use super::errors::local_state_error;
 
@@ -17,16 +17,22 @@ fn announce(d: &Arc<Daemon>, space: Option<String>) {
     d.emit(Event::LocalStateChanged { space });
 }
 
-/// Seam for the per-space snapshot cache (KTD11): whether the cached snapshot
-/// lists `issue`. There is no cache yet, so only local state makes an issue
-/// known.
-fn snapshot_lists_issue(_d: &Arc<Daemon>, _space: &str, _issue: &str) -> bool {
-    false
+/// A card listed in a reader's cached read of the space is known (KTD11).
+fn snapshot_lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> bool {
+    super::linear::native::lists_issue(d, space, issue)
 }
 
-/// Seam for the per-space snapshot cache (KTD11): invalidate the space and
-/// schedule its debounced refetch. There is no cache yet.
-fn activity_recorded(_d: &Arc<Daemon>, _space: Option<&str>) {}
+/// A reported Linear write makes the space's cached read out of date. Returns
+/// whether a debounced refetch was scheduled; that refetch announces the space
+/// once it lands, so the write must not announce it as well.
+fn activity_recorded(d: &Arc<Daemon>, claims: &ActivityClaims, space: Option<&str>) -> bool {
+    let Some(space) = space else {
+        return false;
+    };
+    let session = board_core::paths::session_name_from_socket(claims.herdr_socket.as_deref())
+        .unwrap_or_else(|| "default".into());
+    super::linear::native::schedule_refetch(d, session, space.to_string())
+}
 
 pub(super) fn state_get(d: &Arc<Daemon>, p: LinearStateGetParams) -> Result<Value> {
     Ok(json!(d.store.lock().linear_state(&p.space)?))
@@ -56,7 +62,9 @@ pub(super) fn grouping_set(d: &Arc<Daemon>, p: LinearGroupingSetParams) -> Resul
         .lock()
         .linear_grouping_change(&p, true)
         .map_err(ls)?;
-    announce(d, p.space);
+    // A grouping space is a workspace label, which any workspace may carry,
+    // so the change is announced for every space.
+    announce(d, None);
     Ok(json!(change))
 }
 
@@ -109,8 +117,13 @@ pub(super) fn show_answer(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
 
 pub(super) fn activity_record(d: &Arc<Daemon>, p: LinearActivityRecordParams) -> Result<Value> {
     let result = d.store.lock().linear_activity_record(&p).map_err(ls)?;
-    activity_recorded(d, result.activity.space.as_deref());
-    announce(d, result.activity.space.clone());
+    if !activity_recorded(
+        d,
+        &clean_claims(&p.claims),
+        result.activity.space.as_deref(),
+    ) {
+        announce(d, result.activity.space.clone());
+    }
     Ok(json!(result))
 }
 

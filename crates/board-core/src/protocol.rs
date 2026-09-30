@@ -1817,6 +1817,9 @@ pub struct LinearSource {
     pub cache_age_seconds: Option<i64>,
     #[serde(default)]
     pub truncated: bool,
+    /// Why `status` is not `ok`, for a reader to show beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

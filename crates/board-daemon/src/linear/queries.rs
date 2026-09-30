@@ -4,19 +4,21 @@ use super::client::{LinearClient, LinearError, Page};
 
 const ISSUE_FIELDS: &str = "id identifier title url branchName updatedAt priority \
     state { id name type } parent { id identifier title } project { id name } \
-    team { id key name } assignee { id name } labels(first: 10) { nodes { id name } }";
+    projectMilestone { id name } cycle { id number name } \
+    team { id key name } assignee { id name } \
+    labels(first: 10) { nodes { id name parent { id name } } }";
 
 // One call per issue page: each connection is read once at 50 and its
 // `hasNextPage` reported, never drained (the plugin's `fetch_issue_detail`).
 const ISSUE_DETAIL_FIELDS: &str = "description dueDate estimate \
     parent { state { id name type } } \
-    projectMilestone { id name } \
-    cycle { id number name } \
     children(first: 50) { nodes { id identifier title state { id name type } } pageInfo { hasNextPage } } \
     relations(first: 50) { nodes { id type relatedIssue { id identifier title state { id name type } } } pageInfo { hasNextPage } } \
     inverseRelations(first: 50) { nodes { id type issue { id identifier title state { id name type } } } pageInfo { hasNextPage } } \
     comments(first: 50) { nodes { id body createdAt user { id name } parent { id } } pageInfo { hasNextPage } } \
     history(first: 50) { nodes { id createdAt actor { id name } fromState { name } toState { name } fromAssignee { name } toAssignee { name } fromPriority toPriority addedLabels { name } removedLabels { name } } pageInfo { hasNextPage } }";
+
+const STATES: &str = "states(first: 100) { nodes { id name type } }";
 
 const VIEW_FIELDS: &str = "id name modelName archivedAt filterData \
     viewPreferencesValues { layout issueGrouping issueSubGrouping issueNesting \
@@ -50,11 +52,24 @@ impl LinearClient {
     pub fn view_issues(&self, view_id: &str) -> Result<Page, LinearError> {
         let key = self.key()?;
         let view = self.view_with(&key, view_id)?;
-        let filter = match &view["filterData"] {
-            Value::Object(_) => view["filterData"].clone(),
-            _ => json!({}),
-        };
-        self.paged(&key, &issues_query(), "issues", json!({"filter": filter}))
+        self.paged(&key, &issues_query(), "issues", view_filter(&view))
+    }
+
+    /// Issues in a view already read, so its `filterData` is not fetched twice.
+    pub fn issues_in_view(&self, view: &Value) -> Result<Page, LinearError> {
+        let key = self.key()?;
+        self.paged(&key, &issues_query(), "issues", view_filter(view))
+    }
+
+    /// One project with every team's workflow states, in Linear's order.
+    pub fn project(&self, project_id: &str) -> Result<Value, LinearError> {
+        let key = self.key()?;
+        let query = format!(
+            "query($id:String!){{project(id:$id){{id name url \
+             teams(first:50){{nodes{{id key name {STATES}}}}}}}}}"
+        );
+        let data = self.execute(&key, &query, json!({"id": project_id}))?;
+        found(&data["project"])
     }
 
     /// Projects the key's owner is a member of.
@@ -82,9 +97,11 @@ impl LinearClient {
 
     pub fn teams(&self) -> Result<Page, LinearError> {
         let key = self.key()?;
-        let query = "query($n:Int,$after:String){teams(first:$n,after:$after)\
-            {nodes{id key name} pageInfo{hasNextPage endCursor}}}";
-        self.paged(&key, query, "teams", json!({}))
+        let query = format!(
+            "query($n:Int,$after:String){{teams(first:$n,after:$after)\
+             {{nodes{{id key name {STATES}}} pageInfo{{hasNextPage endCursor}}}}}}"
+        );
+        self.paged(&key, &query, "teams", json!({}))
     }
 
     /// One issue by id or identifier, with the fields the issue page shows.
@@ -101,6 +118,14 @@ impl LinearClient {
         let data = self.execute(key, &query, json!({"id": view_id}))?;
         found(&data["customView"])
     }
+}
+
+fn view_filter(view: &Value) -> Value {
+    let filter = match &view["filterData"] {
+        Value::Object(_) => view["filterData"].clone(),
+        _ => json!({}),
+    };
+    json!({ "filter": filter })
 }
 
 fn found(value: &Value) -> Result<Value, LinearError> {

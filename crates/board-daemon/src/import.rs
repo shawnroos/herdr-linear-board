@@ -372,7 +372,9 @@ impl Import<'_> {
                 continue;
             }
             let space = entry.space.clone();
-            if self.insert(KIND, source, key, vec![], Some(space.clone()), |db| {
+            // Announced for every space: a grouping space is a workspace
+            // label, not the workspace id `local_state_changed` carries.
+            if self.insert(KIND, source, key, vec![], None, |db| {
                 db.set_grouping_space(&entry.space, &entry.mapping)
             }) {
                 self.planned.spaces.insert(space);

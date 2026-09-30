@@ -725,6 +725,7 @@ mod discovery;
 mod import;
 mod lifecycle;
 mod linear;
+mod linear_native;
 mod linear_state;
 mod panes;
 mod parity;

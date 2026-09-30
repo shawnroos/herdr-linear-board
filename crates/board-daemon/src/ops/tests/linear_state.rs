@@ -402,7 +402,7 @@ fn each_write_emits_exactly_one_local_state_changed_for_its_space() {
         &mut fx,
         "linear.grouping.set",
         json!({"space": SPACE, "text": r#"{"levels": {"column": "assignee"}, "filter": {"team": "ENG"}}"#}),
-        space,
+        None,
     );
     expect_one(
         &mut fx,

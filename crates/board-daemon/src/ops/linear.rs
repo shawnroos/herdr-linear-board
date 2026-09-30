@@ -1,11 +1,15 @@
-//! `linear.snapshot` and `linear.list`: run one of the work plugin's `bin/`
-//! scripts and return what it printed. The snapshot gets live pane status
-//! attached; a list comes back as the plugin's envelope, sanitised.
+//! `linear.snapshot`, `linear.list` and `linear.issue`. They run natively
+//! (`native`) unless a plugin root is named outright, in which case they run
+//! one of the work plugin's `bin/` scripts and return what it printed. The
+//! snapshot gets live pane status attached; a list comes back as the plugin's
+//! envelope, sanitised.
 //!
 //! Nothing here logs the child's argv or environment: the environment carries
 //! the Linear credential settings the plugin reads.
 
 use super::*;
+
+pub(super) mod native;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -162,24 +166,42 @@ fn fresh_config_root(settings: &crate::settings::DaemonSettings) -> Option<PathB
     }
 }
 
+/// The script path runs only when a plugin root is named outright: by the
+/// caller, the daemon's `BOARD_WORK_PLUGIN_ROOT`, or `[daemon]
+/// work_plugin_root`. The installed-plugins record does not count, or every
+/// machine with the plugin installed would never reach the native path.
+fn script_root_named(d: &Arc<Daemon>, requested: Option<&str>) -> bool {
+    let named = |s: &str| !s.trim().is_empty();
+    requested.is_some_and(named)
+        || std::env::var(PLUGIN_ROOT_ENV).is_ok_and(|s| named(&s))
+        || fresh_config_root(&d.settings).is_some()
+}
+
 pub(super) fn linear_snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Result<Value> {
+    if !script_root_named(d, p.plugin_root.as_deref()) {
+        return Ok(json!(native::snapshot(d, p)?));
+    }
     let runner = ScriptRunner::from_daemon(d, SCRIPT_DEADLINE);
     Ok(json!(snapshot(&runner, p)?))
 }
 
 pub(super) fn linear_list(d: &Arc<Daemon>, p: LinearListParams) -> Result<Value> {
+    if !script_root_named(d, p.plugin_root.as_deref()) {
+        return Ok(json!(native::list(d, p)?));
+    }
     let runner = ScriptRunner::from_daemon(d, LIST_SCRIPT_DEADLINE);
     Ok(json!(list(&runner, p)?))
 }
 
 pub(super) fn linear_issue(d: &Arc<Daemon>, p: LinearIssueParams) -> Result<Value> {
+    if !script_root_named(d, p.plugin_root.as_deref()) {
+        return Ok(json!(native::issue(d, p)?));
+    }
     let runner = ScriptRunner::from_daemon(d, ISSUE_SCRIPT_DEADLINE);
     Ok(json!(issue(&runner, p)?))
 }
 
-/// One issue, read whole. The identifier is checked before any process starts,
-/// so a value that could read as an option to the script never reaches it.
-pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<LinearIssueDocument> {
+pub(super) fn checked_issue_id(p: &LinearIssueParams) -> Result<&str> {
     let id = p.issue.trim();
     if !is_list_identifier(id) {
         return Err(Error::BadRequest(
@@ -188,6 +210,43 @@ pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<Linea
                 .into(),
         ));
     }
+    Ok(id)
+}
+
+pub(super) fn checked_workspace_id(p: &LinearSnapshotParams) -> Result<&str> {
+    let id = p.workspace_id.trim();
+    if id.is_empty() {
+        return Err(Error::BadRequest(
+            "linear.snapshot requires a non-empty workspace_id".into(),
+        ));
+    }
+    Ok(id)
+}
+
+/// The list's one id, refused before anything runs when the kind forbids or
+/// requires it or its shape is wrong.
+pub(super) fn checked_list_id(p: &LinearListParams) -> Result<Option<&str>> {
+    let id = p.id.as_deref().filter(|id| !id.is_empty());
+    match (p.kind, id) {
+        (LinearListKind::Views, None) => Err(Error::BadRequest(
+            "linear.list kind views requires a project id".into(),
+        )),
+        (LinearListKind::Views, Some(id)) if !is_list_identifier(id) => Err(Error::BadRequest(
+            "linear.list project id must be 1 to 64 ASCII letters, digits, `_` or `-`, \
+             starting with a letter or digit"
+                .into(),
+        )),
+        (LinearListKind::Spaces | LinearListKind::Projects, Some(_)) => Err(Error::BadRequest(
+            format!("linear.list kind {} takes no id", kind_name(p.kind)),
+        )),
+        (_, id) => Ok(id),
+    }
+}
+
+/// One issue, read whole. The identifier is checked before any process starts,
+/// so a value that could read as an option to the script never reaches it.
+pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<LinearIssueDocument> {
+    let id = checked_issue_id(&p)?;
     let origin_socket = normalized_origin(p.origin_socket.as_deref());
     let run = ScriptRun {
         relative: ISSUE_SCRIPT_RELATIVE,
@@ -220,11 +279,7 @@ pub(crate) fn issue(runner: &ScriptRunner, p: LinearIssueParams) -> Result<Linea
 }
 
 pub(crate) fn snapshot(runner: &ScriptRunner, p: LinearSnapshotParams) -> Result<LinearSnapshot> {
-    if p.workspace_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "linear.snapshot requires a non-empty workspace_id".into(),
-        ));
-    }
+    checked_workspace_id(&p)?;
     let origin_socket = normalized_origin(p.origin_socket.as_deref());
     let run = ScriptRun {
         relative: SNAPSHOT_SCRIPT_RELATIVE,
@@ -251,29 +306,11 @@ pub(crate) fn snapshot(runner: &ScriptRunner, p: LinearSnapshotParams) -> Result
 }
 
 pub(crate) fn list(runner: &ScriptRunner, p: LinearListParams) -> Result<LinearListResult> {
-    let id = p.id.as_deref().filter(|id| !id.is_empty());
-    let relative = match (p.kind, id) {
-        (LinearListKind::Views, None) => {
-            return Err(Error::BadRequest(
-                "linear.list kind views requires a project id".into(),
-            ))
-        }
-        (LinearListKind::Views, Some(id)) if !is_list_identifier(id) => {
-            return Err(Error::BadRequest(
-                "linear.list project id must be 1 to 64 ASCII letters, digits, `_` or `-`, \
-                 starting with a letter or digit"
-                    .into(),
-            ))
-        }
-        (LinearListKind::Views, Some(_)) => VIEWS_SCRIPT_RELATIVE,
-        (LinearListKind::Spaces | LinearListKind::Projects, Some(_)) => {
-            return Err(Error::BadRequest(format!(
-                "linear.list kind {} takes no id",
-                kind_name(p.kind)
-            )))
-        }
-        (LinearListKind::Spaces, None) => SPACES_SCRIPT_RELATIVE,
-        (LinearListKind::Projects, None) => PROJECTS_SCRIPT_RELATIVE,
+    let id = checked_list_id(&p)?;
+    let relative = match p.kind {
+        LinearListKind::Views => VIEWS_SCRIPT_RELATIVE,
+        LinearListKind::Spaces => SPACES_SCRIPT_RELATIVE,
+        LinearListKind::Projects => PROJECTS_SCRIPT_RELATIVE,
     };
     let origin_socket = normalized_origin(p.origin_socket.as_deref());
     let run = ScriptRun {

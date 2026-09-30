@@ -545,6 +545,51 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
 
 ### linear
 
+`linear.snapshot`, `linear.list` and `linear.issue` run **natively** unless a plugin root is
+named outright — `plugin_root` in the request, the daemon's `BOARD_WORK_PLUGIN_ROOT`, or
+`[daemon] work_plugin_root` — in which case each runs its script as described in its entry below
+(the installed-plugins record alone does not select the script path). The native path keeps each
+method's name, params and result shape, reading local state from SQLite, Linear through boardd's
+read-only GraphQL client (`https://api.linear.app/graphql`, overridable with
+`BOARD_LINEAR_API_URL`; the key from the macOS Keychain, then `LINEAR_API_KEY` in boardd's own
+startup environment, then `~/.secrets`), and herdr through one `session.snapshot` (the snapshot)
+or `workspace.list` (the spaces list) on `origin_socket`.
+
+- **Native `linear.snapshot`.** The session is the one `origin_socket` names
+  (`…/sessions/<name>/herdr.sock`, else `default`); the space binding is `(session,
+  workspace_id)`. The space name — the herdr workspace label, else the binding's `display_name`,
+  else the id — selects a grouping space override and the global mapping's `space` level.
+  - Unbound: `record {status: "missing", state: "unbound"}`, `linear.status: "unknown"`, and no
+    Linear call. When the board holds no space or worktree binding at all and the work plugin's
+    store directory exists, `linear.status` is `not_imported` and `linear.message` names
+    `board import work-store`.
+  - Bound: `record {status: "ok", state: "bound", project_id}`. With a grouping config the issues
+    are the config's compiled filter; with none, the binding's custom view (its own filter and
+    grouping, `view.status` as the script names it, `not_in_project` when its filter no longer
+    names the project) or the project's issues grouped by the first team's workflow states (R8).
+    `tabs`, `groups` and `issues` come from the grouping engine; `issues` holds only issues the
+    board shows. Worktree bindings, `unmapped` tabs and `pane_status` come from the one herdr read;
+    without it `herdr.status` is `unavailable` and every pane status `unknown`.
+  - **Shared read (KTD11).** The Linear half is cached per `(session, workspace_id)` and shared by
+    every reader for 15 s; concurrent readers of one space wait for one fetch. A changed binding or
+    grouping is a new read. When Linear cannot be read, the last good read is returned with
+    `linear.status: "unavailable"`, `linear.message` (why), `cache_age_seconds`, and every issue
+    `stale: true`; with no earlier read the board is empty, never an error.
+  - A `linear.activity.record` for a space that has a cached read marks it out of date and
+    schedules one refetch 500 ms later; reports that land meanwhile fold into it. When it lands,
+    boardd emits one `local_state_changed {space}`, and a `linear.snapshot` inside the TTL returns
+    the refetched read without another Linear call.
+  - Additive: `linear.message` (string, omitted when there is nothing to say).
+- **Native `linear.list`.** `spaces`: the live workspaces of `origin_socket`'s session
+  (`workspace.list`) and then this session's bound workspaces that are not live, each with its
+  binding's `state` (`bound` or `unbound`), `project_id` and `display_name` as `project_name`;
+  without an origin socket or a herdr answer the status is `unavailable` with no rows. `projects`:
+  the key owner's projects, `team_key` from the first team. `views`: the custom views whose filter
+  names the project, archived ones left out. A Linear failure is `unavailable` with a message; a
+  listing cut at the page cap is `partial`.
+- **Native `linear.issue`.** One GraphQL request. Every Linear failure, no such issue included, is
+  a document with `status: "unavailable"`, `message` and `issue: null`.
+
 - `linear.snapshot {workspace_id, origin_socket?, plugin_root?}` → the work plugin's space snapshot document
   (`plugins/work/docs/snapshot.md` in the plugin repo; board types `LinearSnapshot` in
   `board-core::protocol`) plus a daemon-attached `pane_status: {pane_id: status}` for every pane id
@@ -647,11 +692,14 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
 ### linear local state
 
 boardd is the only writer of Linear-mode local state (schema v16 `linear_*` tables). A *space* is a
-herdr workspace id, the same id `linear.snapshot` takes. A *card* is a Linear issue identifier,
+herdr workspace id, the same id `linear.snapshot` takes. The grouping config is the exception: it
+names a space by the work plugin's *space name*, which is the herdr workspace label, so
+`linear.grouping.*`'s `space` is a label. A *card* is a Linear issue identifier,
 accepted only as a Linear key (`WEB-123`) or a hyphenated issue UUID; any other shape is error 1.
 
 Every write returns what it changed, and every successful write emits exactly one
-`local_state_changed` event (see Events); a refused write and a preview emit none. Two result
+`local_state_changed` event (see Events) — a `linear.activity.record` for a space a reader has
+read emits it when its refetch lands; a refused write and a preview emit none. Two result
 shapes carry the change:
 
 - `{before, after}` — the row before and after; `null` means it did not exist then.
@@ -669,8 +717,8 @@ not cleaned, when they carry control characters.
 verified. The session a claim names is the herdr session of `herdr_socket`
 (`…/sessions/<name>/herdr.sock`, else `default`).
 
-A card is *known* in a space when a worktree binding holds it or activity was recorded for it in
-that space. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
+A card is *known* in a space when a worktree binding holds it, activity was recorded for it in
+that space, or the space's shared Linear read (see `linear.snapshot`) lists it. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
 
 - `linear.state.get {space}` → `{space, space_bindings, worktree_bindings, grouping, marks, notes,
   show_requests}`: the space's bindings, every worktree binding (they are not keyed by space), the
@@ -722,8 +770,9 @@ that space. `mark.set`, `note.set` and `show.request` on a card that is not know
   reads the store from its own environment — `HERDR_LINEAR_STORE_DIR`, else `$HOME/.claude/work`;
   the request names no path. It only reads the store. Insert-only by natural key: a row the board
   already holds is listed in `skipped` ("already in the board") and never overwritten, so running
-  it again adds only what is new. A real run emits one `local_state_changed` per affected space
-  (none for a dry run or when nothing was inserted). No store directory is `present: false` with
+  it again adds only what is new. A real run emits one `local_state_changed` per affected space,
+  with no `space` for grouping and for rows not keyed by a space (none for a dry run or when
+  nothing was inserted). No store directory is `present: false` with
   empty lists, not an error.
   - Each `imported`/`skipped` item is `{kind, key, source, reason?, dropped?}`; `kind` is
     `grouping`, `space_binding`, `worktree_binding`, `session_scope` or `scope_repo`; `key` is the
@@ -809,12 +858,15 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
 - `{"event":"board_changed","reason":"card_moved|card_created|card_updated|card_deleted|card_archived|column_changed|comment_added|run_started|run_ended|run_blocked","board_id"?:N,"card_id"?:N,"column_id"?:N}` — `board_id` scopes the change to a specific board; a same-board move reports the destination `column_id`, while a cross-board transfer emits a source-board event with the source column and a destination-board event with the destination column. Omitted `board_id` means a coarse, board-agnostic refresh.
 - `{"event":"run_ended","card_id":N,"run_id":N,"outcome":"ok|fail|cancelled|lost"}` (also emitted as board_changed; `lost` is legacy — no longer produced, see Card statuses)
 - `{"event":"local_state_changed","space"?:"<space>"}` — one per successful Linear local-state
-  write (see Methods → linear local state); an omitted `space` means any space (a global grouping
-  change, or a binding change with no space claimed). It is a new event rather than a
-  `board_changed` reason because a client skips an event line it cannot parse, while an unknown
-  reason would make it drop the whole `board_changed` line. Unlike `board_changed`, these do not
-  coalesce: a burst of writes is a burst of events, and a subscriber whose outbox fills is
-  disconnected.
+  write (see Methods → linear local state). `space` is always a herdr workspace id; an omitted
+  `space` means any space: every grouping change (a grouping space is a workspace *label*, which
+  any workspace may carry), or a binding change with no space claimed. A `linear.activity.record`
+  for a space a reader has read is announced by its debounced refetch instead (see
+  `linear.snapshot`): one event when the refetch lands, however many reports it folded. It is a
+  new event rather than a `board_changed` reason because a client skips an event line it cannot
+  parse, while an unknown reason would make it drop the whole `board_changed` line. Unlike
+  `board_changed`, the server does not coalesce these: a burst of other writes is a burst of
+  events, and a subscriber whose outbox fills is disconnected.
 
 ## Dispatch semantics (column engine — lives in board-core, pure; daemon executes effects)
 
