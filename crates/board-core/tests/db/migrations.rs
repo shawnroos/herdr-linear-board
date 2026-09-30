@@ -1,5 +1,5 @@
 use super::{create_file_db, enqueue, mem};
-use board_core::db::{Db, EnqueueRun, FinalizeRun, BOARD_ID};
+use board_core::db::{Db, EnqueueRun, FinalizeRun, MarkKind, ShowOutcome, BOARD_ID};
 use board_core::protocol::{
     AwaitingReason, CardCreateParams, CardStatus, ColumnCreateParams, Effort, RunOutcome,
     SpaceKind, Trigger,
@@ -441,6 +441,361 @@ fn v16_migration_keeps_v15_rows_and_replays_over_a_stale_stamp() {
         body, "kept note",
         "a replayed v16 step must not recreate a table"
     );
+}
+
+const PRE_OWNER_V16_SQL: &str = "
+DROP TABLE linear_marks;
+DROP TABLE linear_notes;
+DROP TABLE linear_show_requests;
+CREATE TABLE linear_marks (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  text             TEXT,
+  detail_json      TEXT,
+  created_by       TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE linear_notes (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  body             TEXT NOT NULL,
+  author           TEXT NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE linear_show_requests (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  reason           TEXT,
+  requested_by     TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged_at  TEXT
+);
+CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
+CREATE INDEX idx_linear_notes_space ON linear_notes(space, issue_identifier);
+CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+PRAGMA user_version = 16;
+";
+
+const OWNER_COLUMNS: [&str; 3] = [
+    "owner_herdr_socket",
+    "owner_herdr_pane_id",
+    "owner_claude_session_id",
+];
+
+fn rewind_to_pre_owner_v16(path: &std::path::Path) {
+    Connection::open(path)
+        .unwrap()
+        .execute_batch(PRE_OWNER_V16_SQL)
+        .unwrap();
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
+        [column],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn selected(conn: &Connection, table: &str, columns: &str) -> Vec<Vec<Value>> {
+    let mut statement = conn
+        .prepare(&format!("SELECT {columns} FROM {table} ORDER BY id"))
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| {
+            (0..width)
+                .map(|c| row.get(c))
+                .collect::<rusqlite::Result<Vec<Value>>>()
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn fresh_and_pre_owner_v16_databases_share_the_amended_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let amended = dir.path().join("amended.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&amended).unwrap());
+    rewind_to_pre_owner_v16(&amended);
+    let db = Db::open(&amended).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    let fresh_conn = Connection::open(&fresh).unwrap();
+    for table in ["linear_marks", "linear_notes", "linear_show_requests"] {
+        for column in OWNER_COLUMNS {
+            assert!(
+                has_column(&fresh_conn, table, column),
+                "fresh schema lacks {table}.{column}"
+            );
+        }
+    }
+    for column in ["expires_at", "outcome"] {
+        assert!(has_column(&fresh_conn, "linear_show_requests", column));
+    }
+    assert_eq!(
+        schema_shape(&fresh_conn),
+        schema_shape(&Connection::open(&amended).unwrap())
+    );
+}
+
+#[test]
+fn upgraded_v15_database_lands_on_the_amended_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let upgraded = dir.path().join("upgraded.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&upgraded).unwrap());
+    rewind_to_v15(&upgraded);
+    drop(Db::open(&upgraded).unwrap());
+    let conn = Connection::open(&upgraded).unwrap();
+    assert!(has_column(&conn, "linear_show_requests", "outcome"));
+    assert_eq!(
+        schema_shape(&Connection::open(&fresh).unwrap()),
+        schema_shape(&conn)
+    );
+}
+
+#[test]
+fn pre_owner_v16_rows_survive_with_no_owner_and_a_pending_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    let before = {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO linear_marks (space, issue_identifier, kind, text, detail_json, created_by)
+               VALUES ('ws-1', 'WEB-1', 'attention', 'look', '{\"a\":1}', 'agent');
+             INSERT INTO linear_marks (space, issue_identifier, kind)
+               VALUES ('ws-1', 'WEB-2', 'suggestion');
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'a note', 'user');
+             INSERT INTO linear_show_requests (space, issue_identifier, reason, requested_by)
+               VALUES ('ws-1', 'WEB-1', 'ready', 'agent');",
+        )
+        .unwrap();
+        (
+            raw_rows(&conn, "linear_marks"),
+            raw_rows(&conn, "linear_notes"),
+            raw_rows(&conn, "linear_show_requests"),
+        )
+    };
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_marks",
+            "id, space, issue_identifier, kind, text, detail_json, created_by, created_at"
+        ),
+        before.0
+    );
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_notes",
+            "id, space, issue_identifier, body, author, created_at"
+        ),
+        before.1
+    );
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_show_requests",
+            "id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at"
+        ),
+        before.2
+    );
+    let owners = OWNER_COLUMNS.join(", ");
+    for table in ["linear_marks", "linear_notes"] {
+        for row in selected(&conn, table, &owners) {
+            assert!(row.iter().all(|v| *v == Value::Null), "{table}: {row:?}");
+        }
+    }
+    for row in selected(
+        &conn,
+        "linear_show_requests",
+        &format!("{owners}, expires_at, outcome"),
+    ) {
+        assert!(
+            row.iter().all(|v| *v == Value::Null),
+            "a pre-amendment request must come out ownerless and pending: {row:?}"
+        );
+    }
+}
+
+#[test]
+fn amended_checks_admit_four_mark_kinds_and_four_outcomes_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("kinds.db");
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    for kind in ["attention", "question", "done", "suggestion"] {
+        conn.execute(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', ?1)",
+            [kind],
+        )
+        .unwrap_or_else(|e| panic!("kind {kind} refused: {e}"));
+    }
+    for outcome in ["accepted", "rejected", "withdrawn", "expired"] {
+        conn.execute(
+            "INSERT INTO linear_show_requests (space, issue_identifier, outcome)
+             VALUES ('ws-1', 'WEB-1', ?1)",
+            [outcome],
+        )
+        .unwrap_or_else(|e| panic!("outcome {outcome} refused: {e}"));
+    }
+    let refused = conn
+        .execute(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'urgent')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("CHECK"), "{refused}");
+    let refused = conn
+        .execute(
+            "INSERT INTO linear_show_requests (space, issue_identifier, outcome)
+             VALUES ('ws-1', 'WEB-1', 'ignored')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("CHECK"), "{refused}");
+}
+
+#[test]
+fn owned_rows_round_trip_through_the_row_structs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owned.db");
+    drop(Db::open(&path).unwrap());
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO linear_marks
+               (id, space, issue_identifier, kind, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+               VALUES (1, 'ws-1', 'WEB-1', 'question', '/tmp/h.sock', 'p-1', 'sess-1');
+             INSERT INTO linear_marks (id, space, issue_identifier, kind)
+               VALUES (2, 'ws-1', 'WEB-1', 'done');
+             INSERT INTO linear_notes
+               (id, space, issue_identifier, body, author, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+               VALUES (1, 'ws-1', 'WEB-1', 'n', 'agent', '/tmp/h.sock', 'p-2', 'sess-2');
+             INSERT INTO linear_show_requests
+               (id, space, issue_identifier, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at, outcome)
+               VALUES (1, 'ws-1', 'WEB-1', '/tmp/h.sock', 'p-3', 'sess-3', '2026-09-30 12:30:00', 'withdrawn');",
+        )
+        .unwrap();
+    let db = Db::open(&path).unwrap();
+    let mark = db.mark(1).unwrap().unwrap();
+    assert_eq!(mark.kind, MarkKind::Question);
+    assert_eq!(
+        (
+            mark.owner_herdr_socket.as_deref(),
+            mark.owner_herdr_pane_id.as_deref(),
+            mark.owner_claude_session_id.as_deref()
+        ),
+        (Some("/tmp/h.sock"), Some("p-1"), Some("sess-1"))
+    );
+    let unowned = db.mark(2).unwrap().unwrap();
+    assert_eq!(unowned.kind, MarkKind::Done);
+    assert_eq!(unowned.owner_herdr_pane_id, None);
+    let note = db.note(1).unwrap().unwrap();
+    assert_eq!(note.owner_claude_session_id.as_deref(), Some("sess-2"));
+    let request = db.show_request(1).unwrap().unwrap();
+    assert_eq!(request.owner_herdr_pane_id.as_deref(), Some("p-3"));
+    assert_eq!(request.expires_at.as_deref(), Some("2026-09-30 12:30:00"));
+    assert_eq!(request.outcome, Some(ShowOutcome::Withdrawn));
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["outcome"], "withdrawn");
+    assert_eq!(
+        serde_json::from_value::<board_core::db::ShowRequest>(wire).unwrap(),
+        request
+    );
+}
+
+#[test]
+fn pre_owner_v16_rebuild_runs_once_then_reopen_is_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("once.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    drop(Db::open(&path).unwrap());
+    {
+        let conn = Connection::open(&path).unwrap();
+        assert!(has_column(&conn, "linear_marks", "owner_claude_session_id"));
+        conn.execute(
+            "INSERT INTO linear_marks
+               (space, issue_identifier, kind, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+             VALUES ('ws-1', 'WEB-1', 'question', '/tmp/h.sock', 'p-1', 'sess-1')",
+            [],
+        )
+        .unwrap();
+    }
+    let before = raw_rows(&Connection::open(&path).unwrap(), "linear_marks");
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    assert_eq!(
+        raw_rows(&Connection::open(&path).unwrap(), "linear_marks"),
+        before,
+        "a second open must not rebuild again"
+    );
+}
+
+#[test]
+fn failed_pre_owner_rebuild_rolls_back_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollback.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    {
+        let conn = Connection::open(&path).unwrap();
+        // The amended CHECK refuses `bogus`, so the marks copy fails after the
+        // notes step already ran in the same transaction.
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'kept', 'user');
+             INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'bogus');
+             INSERT INTO linear_show_requests (space, issue_identifier) VALUES ('ws-1', 'WEB-1');",
+        )
+        .unwrap();
+    }
+    let snapshot = |conn: &Connection| {
+        (
+            schema_shape(conn),
+            raw_rows(conn, "linear_marks"),
+            raw_rows(conn, "linear_notes"),
+            raw_rows(conn, "linear_show_requests"),
+        )
+    };
+    let before = snapshot(&Connection::open(&path).unwrap());
+    for attempt in 0..2 {
+        assert!(
+            Db::open(&path).is_err(),
+            "attempt {attempt}: a failing rebuild must abort the open"
+        );
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            snapshot(&conn),
+            before,
+            "attempt {attempt}: the pre-amendment shape and rows must be intact"
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            16
+        );
+    }
 }
 
 #[test]

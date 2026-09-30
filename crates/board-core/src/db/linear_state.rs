@@ -422,6 +422,8 @@ pub struct SessionScope {
 #[serde(rename_all = "snake_case")]
 pub enum MarkKind {
     Attention,
+    Question,
+    Done,
     Suggestion,
 }
 
@@ -429,6 +431,8 @@ impl MarkKind {
     pub fn as_str(self) -> &'static str {
         match self {
             MarkKind::Attention => "attention",
+            MarkKind::Question => "question",
+            MarkKind::Done => "done",
             MarkKind::Suggestion => "suggestion",
         }
     }
@@ -436,8 +440,40 @@ impl MarkKind {
     fn parse(text: &str) -> rusqlite::Result<Self> {
         match text {
             "attention" => Ok(MarkKind::Attention),
+            "question" => Ok(MarkKind::Question),
+            "done" => Ok(MarkKind::Done),
             "suggestion" => Ok(MarkKind::Suggestion),
             _ => Err(super::conv_err("linear_marks.kind")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowOutcome {
+    Accepted,
+    Rejected,
+    Withdrawn,
+    Expired,
+}
+
+impl ShowOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShowOutcome::Accepted => "accepted",
+            ShowOutcome::Rejected => "rejected",
+            ShowOutcome::Withdrawn => "withdrawn",
+            ShowOutcome::Expired => "expired",
+        }
+    }
+
+    fn parse(text: &str) -> rusqlite::Result<Self> {
+        match text {
+            "accepted" => Ok(ShowOutcome::Accepted),
+            "rejected" => Ok(ShowOutcome::Rejected),
+            "withdrawn" => Ok(ShowOutcome::Withdrawn),
+            "expired" => Ok(ShowOutcome::Expired),
+            _ => Err(super::conv_err("linear_show_requests.outcome")),
         }
     }
 }
@@ -462,6 +498,9 @@ pub struct Mark {
     pub detail: Option<Value>,
     pub created_by: Option<String>,
     pub created_at: String,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,6 +511,9 @@ pub struct Note {
     pub body: String,
     pub author: String,
     pub created_at: String,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -483,6 +525,11 @@ pub struct ShowRequest {
     pub requested_by: Option<String>,
     pub created_at: String,
     pub acknowledged_at: Option<String>,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
+    pub expires_at: Option<String>,
+    pub outcome: Option<ShowOutcome>,
 }
 
 // -- activity and board panes -------------------------------------------------
@@ -568,10 +615,10 @@ fn is_tool_name(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
-const MARK_SELECT: &str = "SELECT id, space, issue_identifier, kind, text, detail_json, created_by, created_at FROM linear_marks";
+const MARK_SELECT: &str = "SELECT id, space, issue_identifier, kind, text, detail_json, created_by, created_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id FROM linear_marks";
 const NOTE_SELECT: &str =
-    "SELECT id, space, issue_identifier, body, author, created_at FROM linear_notes";
-const SHOW_SELECT: &str = "SELECT id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at FROM linear_show_requests";
+    "SELECT id, space, issue_identifier, body, author, created_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id FROM linear_notes";
+const SHOW_SELECT: &str = "SELECT id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at, outcome FROM linear_show_requests";
 const ACTIVITY_SELECT: &str = "SELECT id, space, tool_name, issue_identifier, herdr_socket, herdr_pane_id, herdr_workspace_id, card_id, run_id, created_at FROM linear_activity";
 const PANE_SELECT: &str = "SELECT herdr_socket, pane_id, context_key, placement, workspace_id, origin_pane_id, created_at FROM linear_board_panes";
 const SPACE_BINDING_SELECT: &str = "SELECT herdr_session, space, project_id, display_name, team_ids_json, view_json FROM linear_space_bindings";
@@ -587,6 +634,9 @@ fn row_to_mark(r: &Row) -> rusqlite::Result<Mark> {
         detail: optional_json(r.get(5)?)?,
         created_by: r.get(6)?,
         created_at: r.get(7)?,
+        owner_herdr_socket: r.get(8)?,
+        owner_herdr_pane_id: r.get(9)?,
+        owner_claude_session_id: r.get(10)?,
     })
 }
 
@@ -598,6 +648,9 @@ fn row_to_note(r: &Row) -> rusqlite::Result<Note> {
         body: r.get(3)?,
         author: r.get(4)?,
         created_at: r.get(5)?,
+        owner_herdr_socket: r.get(6)?,
+        owner_herdr_pane_id: r.get(7)?,
+        owner_claude_session_id: r.get(8)?,
     })
 }
 
@@ -610,6 +663,14 @@ fn row_to_show(r: &Row) -> rusqlite::Result<ShowRequest> {
         requested_by: r.get(4)?,
         created_at: r.get(5)?,
         acknowledged_at: r.get(6)?,
+        owner_herdr_socket: r.get(7)?,
+        owner_herdr_pane_id: r.get(8)?,
+        owner_claude_session_id: r.get(9)?,
+        expires_at: r.get(10)?,
+        outcome: r
+            .get::<_, Option<String>>(11)?
+            .map(|text| ShowOutcome::parse(&text))
+            .transpose()?,
     })
 }
 

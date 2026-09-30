@@ -244,11 +244,14 @@ CREATE TABLE linear_marks (
   id               INTEGER PRIMARY KEY,
   space            TEXT NOT NULL,
   issue_identifier TEXT NOT NULL,
-  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','question','done','suggestion')),
   text             TEXT,
   detail_json      TEXT,
   created_by       TEXT,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE linear_notes (
@@ -257,7 +260,10 @@ CREATE TABLE linear_notes (
   issue_identifier TEXT NOT NULL,
   body             TEXT NOT NULL,
   author           TEXT NOT NULL,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE linear_show_requests (
@@ -267,7 +273,12 @@ CREATE TABLE linear_show_requests (
   reason           TEXT,
   requested_by     TEXT,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-  acknowledged_at  TEXT
+  acknowledged_at  TEXT,
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT,
+  expires_at              TEXT,
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
 );
 
 -- Never the raw hook payload: the tool, the issue and who claimed the call.
