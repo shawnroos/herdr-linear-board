@@ -31,6 +31,9 @@ use crate::ops::ROUTED_METHODS;
 /// - `board.pane.open` / `board.pane.close` / `board.notify` — agent-facing
 ///   Herdr mutations sent by `board mcp`, never by the TUI; a DB-only fake
 ///   cannot open a pane or show a notification.
+/// - `linear.import` — reads the work plugin's store from boardd's own
+///   filesystem and environment; the TUI never sends it and a DB-only fake has
+///   no store to read.
 const KNOWN_UNIMPLEMENTED: &[&str] = &[
     "board.notify",
     "board.pane.close",
@@ -39,6 +42,7 @@ const KNOWN_UNIMPLEMENTED: &[&str] = &[
     "daemon.stop",
     "harness.capabilities",
     "harness.list",
+    "linear.import",
     "run.cancel",
     "run.pane_exited",
     "run.retry",

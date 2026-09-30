@@ -114,3 +114,54 @@ fn card_lists_render_one_aligned_row_per_card() {
     let text = String::from_utf8(out).expect("UTF-8");
     assert_eq!(text, "#4  [idle]  col=2  task  session=work\n");
 }
+
+#[test]
+fn an_import_renders_its_counts_then_one_row_per_record() {
+    use board_core::protocol::LinearImportIgnored;
+    let result = LinearImportResult {
+        store_dir: "/s".into(),
+        present: true,
+        dry_run: false,
+        imported: vec![LinearImportItem {
+            kind: LinearImportKind::WorktreeBinding,
+            key: "/w".into(),
+            source: "bindings/a.json".into(),
+            reason: None,
+            dropped: vec!["consent".into()],
+        }],
+        skipped: vec![LinearImportItem {
+            kind: LinearImportKind::SpaceBinding,
+            key: "default/w\u{1b}1".into(),
+            source: "workspaces/w1.json".into(),
+            reason: Some("already in the board".into()),
+            dropped: vec![],
+        }],
+        ignored: vec![LinearImportIgnored {
+            path: "layouts".into(),
+            reason: "herdr layout journals".into(),
+        }],
+    };
+    let mut out = Vec::new();
+    result.render(&mut out).expect("renders");
+    assert_eq!(
+        String::from_utf8(out).expect("UTF-8"),
+        "imported 1, skipped 1, ignored 1 from /s\n\
+         imported  worktree  /w          dropped consent\n\
+         skipped   space     default/w1  already in the board\n\
+         ignored             layouts     herdr layout journals\n"
+    );
+}
+
+#[test]
+fn an_absent_store_renders_nothing_to_import() {
+    let result = LinearImportResult {
+        store_dir: "/nowhere".into(),
+        ..LinearImportResult::default()
+    };
+    let mut out = Vec::new();
+    result.render(&mut out).expect("renders");
+    assert_eq!(
+        String::from_utf8(out).expect("UTF-8"),
+        "nothing to import: no work store at /nowhere\n"
+    );
+}

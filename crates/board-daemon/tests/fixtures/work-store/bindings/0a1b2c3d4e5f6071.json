@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "worktree_path": "/tmp/hb-import/wt-a",
+  "state": "bound",
+  "issue_identifier": "WEB-101",
+  "branch_at_confirmation": "feature/web-101",
+  "tab": "",
+  "display_name": "",
+  "team_ids": [
+    "team-1"
+  ],
+  "view": null,
+  "declined": [
+    "WEB-9"
+  ],
+  "proposal": {
+    "identifier": "WEB-101",
+    "nonce": "n-1",
+    "presented_at": "2026-09-01T00:00:00Z"
+  },
+  "consent": {
+    "team": "team-1",
+    "project": "project-1",
+    "branch": "feature/web-101",
+    "answered_at": "2026-09-01T00:01:00Z"
+  },
+  "consent_proposal": null,
+  "pending_consent": null,
+  "pending_placement": null,
+  "pending_judgment": null,
+  "created_children": [
+    "WEB-150"
+  ],
+  "created_documents": [],
+  "created_views": [],
+  "prior_bindings": [],
+  "description_head": "abc123",
+  "issue_updated_at": "",
+  "updated_at": "2026-09-01T00:02:00Z"
+}

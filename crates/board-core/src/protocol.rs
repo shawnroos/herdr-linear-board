@@ -1649,6 +1649,61 @@ pub struct LinearActivityListResult {
     pub activity: Vec<Activity>,
 }
 
+/// `linear.import`: copy the work plugin's `~/.claude/work` store into local
+/// state. boardd reads the store from its own environment; the request names
+/// no path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportParams {
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearImportKind {
+    Grouping,
+    SpaceBinding,
+    WorktreeBinding,
+    SessionScope,
+    ScopeRepo,
+}
+
+/// One store record. `key` is the row's natural key when the record got far
+/// enough to have one, else its path in the store. `dropped` names retiring
+/// plugin fields the record carried with a value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportItem {
+    pub kind: LinearImportKind,
+    pub key: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<String>,
+}
+
+/// A store entry the import does not read, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportIgnored {
+    pub path: String,
+    pub reason: String,
+}
+
+/// With `dry_run`, `imported` lists what a real run would insert and nothing
+/// is written. `present: false` means there was no store to import.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportResult {
+    pub store_dir: String,
+    pub present: bool,
+    pub dry_run: bool,
+    #[serde(default)]
+    pub imported: Vec<LinearImportItem>,
+    #[serde(default)]
+    pub skipped: Vec<LinearImportItem>,
+    #[serde(default)]
+    pub ignored: Vec<LinearImportIgnored>,
+}
+
 /// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
 /// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
 /// defaults so a partial document still parses; statuses stay strings because

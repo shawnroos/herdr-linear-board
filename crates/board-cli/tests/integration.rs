@@ -20,6 +20,8 @@ mod events;
 mod exit_codes;
 #[path = "integration/harness.rs"]
 mod harness;
+#[path = "integration/import.rs"]
+mod import;
 #[path = "integration/lifecycle.rs"]
 mod lifecycle;
 #[path = "integration/linear.rs"]

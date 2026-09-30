@@ -369,3 +369,29 @@ fn bind_is_not_a_verb_anywhere() {
         );
     }
 }
+
+// -- import -------------------------------------------------------------------
+
+#[test]
+fn import_work_store_parses_with_and_without_dry_run() {
+    assert!(matches!(
+        parse(&["board", "import", "work-store"]).cmd,
+        Cmd::Import {
+            sub: ImportCmd::WorkStore { dry_run: false }
+        }
+    ));
+    assert!(matches!(
+        parse(&["board", "import", "work-store", "--dry-run", "--json"]),
+        Cli {
+            json: true,
+            cmd: Cmd::Import {
+                sub: ImportCmd::WorkStore { dry_run: true }
+            },
+            ..
+        }
+    ));
+    assert_eq!(
+        reject(&["board", "import", "work-store", "/some/path"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
+}

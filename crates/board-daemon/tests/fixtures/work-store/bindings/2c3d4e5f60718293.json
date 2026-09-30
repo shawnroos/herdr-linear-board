@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "worktree_path": "/tmp/hb-import/wt-c",
+  "state": "proposed",
+  "issue_identifier": "",
+  "proposal": {
+    "identifier": "WEB-103",
+    "nonce": "n-3",
+    "presented_at": "2026-09-03T00:00:00Z"
+  },
+  "updated_at": "2026-09-03T00:00:00Z"
+}

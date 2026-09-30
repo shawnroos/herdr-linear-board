@@ -722,6 +722,7 @@ mod boards;
 mod cards;
 mod comments;
 mod discovery;
+mod import;
 mod lifecycle;
 mod linear;
 mod linear_state;

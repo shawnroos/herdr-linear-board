@@ -13,6 +13,7 @@ mod card;
 mod column;
 mod common;
 mod discovery;
+mod import;
 mod project;
 mod run;
 
@@ -23,6 +24,7 @@ pub(crate) use common::ConfirmArgs;
 pub(crate) use discovery::{
     HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
 };
+pub(crate) use import::ImportCmd;
 pub(crate) use project::ProjectCmd;
 pub(crate) use run::RunCmd;
 
@@ -151,6 +153,11 @@ pub(crate) enum Cmd {
     Linear {
         #[command(subcommand)]
         sub: LinearCmd,
+    },
+    /// Import local state from another store.
+    Import {
+        #[command(subcommand)]
+        sub: ImportCmd,
     },
 }
 

@@ -143,7 +143,24 @@ routes!(d, params, {
     "linear.show.dismiss" => linear_state::show_answer(d, from(params)?),
     "linear.activity.record" => linear_state::activity_record(d, from(params)?),
     "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
+    "linear.import" => linear_import(d, from_or_default(params)?),
 });
+
+fn linear_import(d: &Arc<Daemon>, p: LinearImportParams) -> Result<Value> {
+    linear_import_at(d, &crate::import::store_dir_from_env()?, p.dry_run)
+}
+
+pub(crate) fn linear_import_at(
+    d: &Arc<Daemon>,
+    store_dir: &std::path::Path,
+    dry_run: bool,
+) -> Result<Value> {
+    let outcome = crate::import::import_work_store(&d.store.lock(), store_dir, dry_run)?;
+    for space in outcome.changed_spaces {
+        d.emit(Event::LocalStateChanged { space });
+    }
+    Ok(json!(outcome.result))
+}
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
     serde_json::from_value(v).map_err(|e| Error::BadRequest(format!("bad params: {e}")))

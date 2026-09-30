@@ -17,15 +17,16 @@ use crate::protocol::{
     LinearActivityListParams, LinearActivityListResult, LinearActivityRecordParams,
     LinearActivityRecordResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearBindParams,
     LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
-    LinearIdParams, LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
-    LinearMarkSetParams, LinearNoteSetParams, LinearReplace, LinearShowRequestParams,
-    LinearSnapshot, LinearSnapshotParams, LinearState, LinearStateGetParams, LinearUnbindParams,
-    Mark, Note, PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult,
-    ProjectArchiveParams, ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams,
-    ProjectListResult, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
-    ProjectSelectedResult, RunActionResult, RunCardParams, RunDoneParams, RunFocusParams,
-    RunFocusResult, RunOutcome, RunPaneExitedParams, SessionListResult, ShowRequest,
-    SpaceListParams, SpaceListResult, StopResult, TemplateApplyParams, Visibility, WorktreeBinding,
+    LinearIdParams, LinearImportParams, LinearImportResult, LinearIssueDocument, LinearIssueParams,
+    LinearListParams, LinearListResult, LinearMarkSetParams, LinearNoteSetParams, LinearReplace,
+    LinearShowRequestParams, LinearSnapshot, LinearSnapshotParams, LinearState,
+    LinearStateGetParams, LinearUnbindParams, Mark, Note, PaneFocusParams, PaneFocusResult,
+    PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
+    ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
+    ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
+    RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams,
+    SessionListResult, ShowRequest, SpaceListParams, SpaceListResult, StopResult,
+    TemplateApplyParams, Visibility, WorktreeBinding,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -685,6 +686,12 @@ pub trait BoardClient {
     ) -> anyhow::Result<LinearActivityListResult> {
         Ok(serde_json::from_value(
             self.call("linear.activity.list", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_import(&mut self, p: &LinearImportParams) -> anyhow::Result<LinearImportResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.import", serde_json::to_value(p)?)?,
         )?)
     }
 }

@@ -20,6 +20,7 @@ use commands::board::cmd_board;
 use commands::card::{cmd_card, cmd_move};
 use commands::column::cmd_column;
 use commands::discovery::{cmd_harness, cmd_linear, cmd_session, cmd_space, cmd_status};
+use commands::import::cmd_import;
 use commands::project::cmd_project;
 use commands::run::{cmd_card_run, cmd_comment, cmd_pane_exited};
 use commands::template::cmd_template;
@@ -138,6 +139,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Space { sub } => cmd_space(sub, &mut ctx),
         Cmd::Session { sub } => cmd_session(sub, &mut ctx),
         Cmd::Linear { sub } => cmd_linear(sub, &mut ctx),
+        Cmd::Import { sub } => cmd_import(sub, &mut ctx),
         // Legacy top-level spellings. They only reshape their arguments and
         // then re-enter the canonical nested handler, so there is one
         // implementation per operation.

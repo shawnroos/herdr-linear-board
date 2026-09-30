@@ -132,7 +132,8 @@ fn require_issue(value: &str) -> Result<()> {
     }
 }
 
-fn is_scope_key(value: &str) -> bool {
+/// `project-<id>.team-<id>`, `team-<id>` or `project-<id>`.
+pub fn is_scope_key(value: &str) -> bool {
     let id_ok = |id: &str| {
         !id.is_empty()
             && id

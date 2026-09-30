@@ -108,7 +108,7 @@ The typed catalog/action surface includes `harness.capabilities`, `harness.list`
 `board.pane.open`, `board.pane.close`, `board.notify`,
 `linear.snapshot`, `linear.list`, `linear.bind_handoff`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
-`linear.note.*`, `linear.show.*`, `linear.activity.*`), in addition to the
+`linear.note.*`, `linear.show.*`, `linear.activity.*`, `linear.import`), in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
 as `{}` while a named session serializes as `{ "session": "..." }`, preserving the v1 wire contract.
 
@@ -717,6 +717,39 @@ that space. `mark.set`, `note.set` and `show.request` on a card that is not know
   `linear.bind`. Every other write records activity only. The newest 500 rows are kept per space.
 - `linear.activity.list {space?, limit?}` → `{activity}`: newest first, default 50, at most 500;
   no `space` lists activity recorded without one.
+- `linear.import {dry_run?}` → `{store_dir, present, dry_run, imported, skipped, ignored}`: copies
+  the work plugin's store into local state (`board import work-store [--dry-run]` sends it). boardd
+  reads the store from its own environment — `HERDR_LINEAR_STORE_DIR`, else `$HOME/.claude/work`;
+  the request names no path. It only reads the store. Insert-only by natural key: a row the board
+  already holds is listed in `skipped` ("already in the board") and never overwritten, so running
+  it again adds only what is new. A real run emits one `local_state_changed` per affected space
+  (none for a dry run or when nothing was inserted). No store directory is `present: false` with
+  empty lists, not an error.
+  - Each `imported`/`skipped` item is `{kind, key, source, reason?, dropped?}`; `kind` is
+    `grouping`, `space_binding`, `worktree_binding`, `session_scope` or `scope_repo`; `key` is the
+    natural key (`global` or `space <name>`, `<session>/<workspace>`, the worktree path, the session
+    id, `<scope key> <repository>`), or the record's store path when it never got that far.
+    `dropped` names the retiring plugin fields (`proposal`, `consent`, `consent_proposal`,
+    `pending_consent`, `pending_placement`, `declined`, `pending_judgment`) that held a value; they
+    are not imported.
+  - `board.json` → the grouping config: the global mapping if the board has none, then each space
+    override it lacks, in `board.json` order. Levels are kept as written; `ticket` and `sub-ticket`
+    mean "ungrouped at this level". A repeated key, an unknown key, or a mapping the grouping rules
+    refuse skips the whole file.
+  - `workspaces/<session>/<workspace>.json` → space bindings. A flat `workspaces/<workspace>.json`
+    imports under the session `default`, unless any session-keyed record exists for that
+    workspace: then it is skipped as superseded. `contexts/session-<session>.json` → session
+    scopes. Only records in state `bound` import.
+  - `bindings/*.json` → worktree bindings, keyed by their `worktree_path`, in state `bound`,
+    `misplaced` or `stale` (`unbound`/`proposed` records are skipped). Fields the board does not
+    interpret are kept in `carried`. A binding whose issue another worktree holds is skipped.
+  - `scopes/<key>.json` → scope repositories, one item per repository path.
+  - The plugin's trust rule holds: a record that is not a regular file (a symlink included), is
+    not owned by boardd's user, or is group- or other-writable is skipped with the reason; so is a
+    record whose `version` is not 1 (a newer one is named as newer).
+  - Everything else in the store is listed in `ignored` with a reason, never read: `board/`,
+    `sessions/` (pane-sync state), `layouts/`, `descriptions/`, `shadow.log`, `write-enabled`, and
+    any unknown entry.
 
 ## Card statuses & signals
 
