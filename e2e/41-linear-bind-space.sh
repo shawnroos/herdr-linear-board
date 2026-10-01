@@ -53,7 +53,7 @@ wait_screen() {
 }
 
 space_binding() {  # the project id this session binds the space to, or empty
-  brpc linear.state.get "{\"space\":\"$WS_ID\"}" | python3 -c '
+  brpc linear.state.get "{\"space\":\"$WS_ID\",\"herdr_socket\":\"$HERDR_SOCKET_PATH\"}" | python3 -c '
 import json,sys
 rows=json.load(sys.stdin).get("space_bindings", [])
 print(rows[0]["project_id"] if rows else "")'

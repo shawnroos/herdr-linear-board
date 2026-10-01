@@ -41,7 +41,7 @@ with open(path,"w") as f:
 os.chmod(path,0o600)
 PY
 "$BOARD_BIN" import work-store --json >"$E2E_TMP/import.json"
-state_of() { brpc linear.state.get "{\"space\":\"$WS_ID\"}" >"$E2E_TMP/state.json"; }
+state_of() { brpc linear.state.get "{\"space\":\"$WS_ID\",\"herdr_socket\":\"$HERDR_SOCKET_PATH\"}" >"$E2E_TMP/state.json"; }
 state_of
 python3 - "$E2E_TMP/state.json" "$WS_ID" "$E2E_SESSION" <<'PY' || fail "the import did not bind $WS_ID in session $E2E_SESSION: $(cat "$E2E_TMP/import.json")"
 import json,sys
