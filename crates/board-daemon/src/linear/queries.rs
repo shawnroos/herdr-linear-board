@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use super::client::{LinearClient, LinearError, Page};
+use super::ApiKey;
 
 const ISSUE_FIELDS: &str = "id identifier title url branchName updatedAt priority \
     state { id name type } parent { id identifier title } project { id name } \
@@ -34,41 +35,70 @@ fn issues_query() -> String {
 impl LinearClient {
     /// Issues in a project, cancelled ones left out.
     pub fn project_issues(&self, project_id: &str) -> Result<Page, LinearError> {
+        self.project_issues_with(&self.key()?, project_id)
+    }
+
+    pub(super) fn project_issues_with(
+        &self,
+        key: &ApiKey,
+        project_id: &str,
+    ) -> Result<Page, LinearError> {
         let filter = json!({
             "project": {"id": {"eq": project_id}},
             "state": {"type": {"neq": "canceled"}},
         });
-        self.issues_matching(filter)
+        self.issues_matching_with(key, filter)
     }
 
     /// Issues matching a Linear `IssueFilter`, passed through as a variable
     /// and never rewritten.
     pub fn issues_matching(&self, filter: Value) -> Result<Page, LinearError> {
-        let key = self.key()?;
-        self.paged(&key, &issues_query(), "issues", json!({"filter": filter}))
+        self.issues_matching_with(&self.key()?, filter)
+    }
+
+    pub(super) fn issues_matching_with(
+        &self,
+        key: &ApiKey,
+        filter: Value,
+    ) -> Result<Page, LinearError> {
+        self.paged(key, &issues_query(), "issues", json!({"filter": filter}))
     }
 
     /// Issues in a custom view, read through the view's own `filterData`.
     pub fn view_issues(&self, view_id: &str) -> Result<Page, LinearError> {
         let key = self.key()?;
         let view = self.view_with(&key, view_id)?;
-        self.paged(&key, &issues_query(), "issues", view_filter(&view))
+        self.issues_in_view_with(&key, &view)
     }
 
     /// Issues in a view already read, so its `filterData` is not fetched twice.
     pub fn issues_in_view(&self, view: &Value) -> Result<Page, LinearError> {
-        let key = self.key()?;
-        self.paged(&key, &issues_query(), "issues", view_filter(view))
+        self.issues_in_view_with(&self.key()?, view)
+    }
+
+    pub(super) fn issues_in_view_with(
+        &self,
+        key: &ApiKey,
+        view: &Value,
+    ) -> Result<Page, LinearError> {
+        self.paged(key, &issues_query(), "issues", view_filter(view))
     }
 
     /// One project with every team's workflow states, in Linear's order.
     pub fn project(&self, project_id: &str) -> Result<Value, LinearError> {
-        let key = self.key()?;
+        self.project_with(&self.key()?, project_id)
+    }
+
+    pub(super) fn project_with(
+        &self,
+        key: &ApiKey,
+        project_id: &str,
+    ) -> Result<Value, LinearError> {
         let query = format!(
             "query($id:String!){{project(id:$id){{id name url \
              teams(first:50){{nodes{{id key name {STATES}}}}}}}}}"
         );
-        let data = self.execute(&key, &query, json!({"id": project_id}))?;
+        let data = self.execute(key, &query, json!({"id": project_id}))?;
         found(&data["project"])
     }
 
@@ -113,7 +143,7 @@ impl LinearClient {
         found(&data["issue"])
     }
 
-    fn view_with(&self, key: &super::ApiKey, view_id: &str) -> Result<Value, LinearError> {
+    pub(super) fn view_with(&self, key: &ApiKey, view_id: &str) -> Result<Value, LinearError> {
         let query = format!("query($id:String!){{customView(id:$id){{{VIEW_FIELDS}}}}}");
         let data = self.execute(key, &query, json!({"id": view_id}))?;
         found(&data["customView"])

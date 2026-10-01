@@ -34,12 +34,14 @@ const SUPPORTED_VIEW_GROUPINGS: [&str; 5] =
     ["workflowState", "assignee", "priority", "label", "project"];
 
 pub fn fetch(client: &LinearClient, plan: &FetchPlan) -> Result<SpaceRead, LinearError> {
+    // One resolve per fetch: each resolve can spawn the keychain reader.
+    let key = client.key()?;
     let mut read = SpaceRead {
         view_status: "none",
         ..SpaceRead::default()
     };
     if let (Some(view_id), None) = (plan.view_id.as_deref(), plan.filter.as_ref()) {
-        match client.view(view_id) {
+        match client.view_with(&key, view_id) {
             Ok(view) => {
                 read.view_status = view_status(&view, &plan.project_id);
                 read.view = Some(view);
@@ -49,13 +51,13 @@ pub fn fetch(client: &LinearClient, plan: &FetchPlan) -> Result<SpaceRead, Linea
         }
     }
     let page = match (&plan.filter, &read.view) {
-        (Some(filter), _) => client.issues_matching(filter.clone())?,
-        (None, Some(view)) if read.view_status == "ok" => client.issues_in_view(view)?,
-        _ => client.project_issues(&plan.project_id)?,
+        (Some(filter), _) => client.issues_matching_with(&key, filter.clone())?,
+        (None, Some(view)) if read.view_status == "ok" => client.issues_in_view_with(&key, view)?,
+        _ => client.project_issues_with(&key, &plan.project_id)?,
     };
     read.issues = page.nodes;
     read.partial = page.partial;
-    read.project = match client.project(&plan.project_id) {
+    read.project = match client.project_with(&key, &plan.project_id) {
         Ok(project) => Some(project),
         Err(LinearError::NotFound) => None,
         Err(error) => return Err(error),

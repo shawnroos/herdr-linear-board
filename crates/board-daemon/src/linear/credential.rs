@@ -8,6 +8,9 @@ pub const KEYCHAIN_SERVICE: &str = "work-linear";
 pub const KEYCHAIN_ACCOUNT: &str = "linear-api-key";
 pub const SECURITY_BIN: &str = "/usr/bin/security";
 pub const KEYCHAIN_TIMEOUT: Duration = Duration::from_secs(5);
+// A locked keychain stays locked for minutes, and every retry costs the full
+// timeout and can re-raise the unlock prompt, so a timeout is remembered.
+const KEYCHAIN_BACKOFF: Duration = Duration::from_secs(60);
 const ENV_KEY: &str = "LINEAR_API_KEY";
 
 #[derive(Clone)]
@@ -148,13 +151,15 @@ impl CredentialSource {
 }
 
 /// Keychain first, then `LINEAR_API_KEY` from boardd's startup environment,
-/// then `~/.secrets`. The keychain and the file are read on every call.
+/// then `~/.secrets`. The keychain and the file are read on every call, except
+/// that the keychain is skipped for `KEYCHAIN_BACKOFF` after a read times out.
 #[derive(Debug)]
 pub struct CredentialResolver {
     keychain: Box<dyn KeychainReader>,
     env_key: Option<ApiKey>,
     secrets_file: Option<PathBuf>,
     logged: Mutex<Option<CredentialSource>>,
+    keychain_skip_until: Mutex<Option<Instant>>,
 }
 
 impl CredentialResolver {
@@ -168,6 +173,7 @@ impl CredentialResolver {
             env_key: env_key.as_deref().and_then(ApiKey::new),
             secrets_file,
             logged: Mutex::new(None),
+            keychain_skip_until: Mutex::new(None),
         }
     }
 
@@ -185,18 +191,34 @@ impl CredentialResolver {
     }
 
     fn find(&self) -> Option<(ApiKey, CredentialSource)> {
-        match self.keychain.read() {
-            KeychainRead::Found(key) => return Some((key, CredentialSource::Keychain)),
-            KeychainRead::TimedOut => {
-                tracing::warn!("linear: keychain read timed out; trying the fallbacks");
+        if !self.keychain_backing_off() {
+            match self.keychain.read() {
+                KeychainRead::Found(key) => return Some((key, CredentialSource::Keychain)),
+                KeychainRead::TimedOut => {
+                    tracing::warn!(
+                        backoff_secs = KEYCHAIN_BACKOFF.as_secs(),
+                        "linear: keychain read timed out; using the fallbacks until the backoff ends"
+                    );
+                    if let Ok(mut until) = self.keychain_skip_until.lock() {
+                        *until = Some(Instant::now() + KEYCHAIN_BACKOFF);
+                    }
+                }
+                KeychainRead::Absent | KeychainRead::Unsupported => {}
             }
-            KeychainRead::Absent | KeychainRead::Unsupported => {}
         }
         if let Some(key) = &self.env_key {
             return Some((key.clone(), CredentialSource::Environment));
         }
         let contents = std::fs::read_to_string(self.secrets_file.as_ref()?).ok()?;
         parse_secrets(&contents).map(|key| (key, CredentialSource::SecretsFile))
+    }
+
+    fn keychain_backing_off(&self) -> bool {
+        self.keychain_skip_until
+            .lock()
+            .ok()
+            .and_then(|until| *until)
+            .is_some_and(|until| Instant::now() < until)
     }
 
     // The first client to start boardd decides its environment, so which

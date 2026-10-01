@@ -20,6 +20,10 @@ pub enum Reply {
         headers: Vec<(String, String)>,
     },
     Stall(Duration),
+    Bytes {
+        status: u16,
+        body: Vec<u8>,
+    },
 }
 
 impl Reply {
@@ -128,6 +132,15 @@ fn serve(
     let mut stream = stream;
     match handler(&request, index) {
         Reply::Stall(duration) => std::thread::sleep(duration),
+        Reply::Bytes { status, body } => {
+            let head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+        }
         Reply::Json {
             status,
             body,

@@ -17,7 +17,7 @@ const DEFAULT_PAGE_SIZE: u32 = 50;
 // a longer wait would not clear an hourly limit and only stalls the caller.
 const DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(5);
-const BODY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
+pub(super) const BODY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct LinearConfig {
@@ -303,7 +303,12 @@ fn check_url(url: &str) -> Result<bool, LinearError> {
     let Some(rest) = url.strip_prefix("http://") else {
         return Err(LinearError::InsecureUrl(strip_control_and_format(url)));
     };
-    let authority = rest.split('/').next().unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Userinfo would make `localhost:1@remote` read as loopback here while the
+    // HTTP client connects to `remote`, so any `@` is refused outright.
+    if authority.contains('@') {
+        return Err(LinearError::InsecureUrl(strip_control_and_format(url)));
+    }
     let host = if let Some(bracketed) = authority.strip_prefix('[') {
         bracketed.split(']').next().unwrap_or("")
     } else {

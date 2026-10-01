@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -8,8 +9,8 @@ use serde_json::{json, Value};
 
 use super::fake::{FakeLinear, Recorded, Reply};
 use super::{
-    CredentialResolver, CredentialSource, KeychainRead, KeychainReader, LinearClient, LinearConfig,
-    LinearError, NoKeychain, SecurityCli,
+    fetch, CredentialResolver, CredentialSource, FetchPlan, KeychainRead, KeychainReader,
+    LinearClient, LinearConfig, LinearError, NoKeychain, SecurityCli,
 };
 
 const KEY: &str = "lin_api_SECRETtestKEY0123456789";
@@ -468,4 +469,172 @@ fn off_macos_the_seam_reports_no_keychain_and_uses_the_fallbacks() {
             .map(|(k, s)| (k.expose().to_string(), s)),
         Some(("file-key".to_string(), CredentialSource::SecretsFile))
     );
+}
+
+#[test]
+fn userinfo_or_a_query_cannot_pass_a_remote_host_off_as_loopback() {
+    let fake = FakeLinear::start(|_, _| Reply::ok(json!({})));
+    for url in [
+        "http://localhost:1@example.com/graphql",
+        "http://127.0.0.1@example.com/graphql",
+        "http://[::1]@example.com/graphql",
+        "http://example.com?x@localhost:1/graphql",
+        "http://example.com#@localhost:1/graphql",
+    ] {
+        let mut cfg = config(&fake);
+        cfg.api_url = url.to_string();
+        assert!(
+            matches!(
+                LinearClient::new(cfg, env_only()),
+                Err(LinearError::InsecureUrl(_))
+            ),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn a_redirect_is_refused_and_the_key_never_reaches_the_target() {
+    let target = FakeLinear::start(|_, _| Reply::ok(json!({"data": {"teams": {}}})));
+    let location = target.url();
+    let fake = FakeLinear::start(move |_, _| Reply::Json {
+        status: 302,
+        body: json!({}),
+        headers: vec![("Location".to_string(), location.clone())],
+    });
+    let error = client(&fake).teams().expect_err("redirect refused");
+
+    assert!(matches!(error, LinearError::Unavailable(_)), "{error:?}");
+    assert_eq!(fake.requests().len(), 1);
+    assert!(target.requests().is_empty(), "the redirect was followed");
+}
+
+#[test]
+fn a_long_retry_after_is_clamped() {
+    let fake = FakeLinear::start(|_, _| Reply::Json {
+        status: 429,
+        body: json!({"errors": []}),
+        headers: vec![("Retry-After".to_string(), "3600".to_string())],
+    });
+    let started = Instant::now();
+    let error = client(&fake).teams().expect_err("rate limited");
+    let elapsed = started.elapsed();
+
+    assert!(matches!(error, LinearError::RateLimited), "{error:?}");
+    assert_eq!(fake.requests().len(), 2);
+    assert!(
+        elapsed >= Duration::from_millis(4500),
+        "Retry-After was not read: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "Retry-After was not clamped: {elapsed:?}"
+    );
+}
+
+#[test]
+fn an_oversized_body_is_refused() {
+    let limit = usize::try_from(super::client::BODY_LIMIT_BYTES).unwrap();
+    let fake = FakeLinear::start(move |_, _| Reply::Bytes {
+        status: 200,
+        body: vec![b' '; limit + 1],
+    });
+    let error = client(&fake).teams().expect_err("too large");
+    match error {
+        LinearError::Unavailable(reason) => assert_eq!(reason, "response too large"),
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
+}
+
+#[derive(Debug)]
+struct SlowTimedOutKeychain {
+    reads: Arc<AtomicUsize>,
+}
+
+impl KeychainReader for SlowTimedOutKeychain {
+    fn read(&self) -> KeychainRead {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(50));
+        KeychainRead::TimedOut
+    }
+}
+
+fn space_fake() -> FakeLinear {
+    let view = json!({
+        "id": "v1", "name": "Board", "modelName": "Issue", "archivedAt": null,
+        "filterData": {"project": {"id": {"eq": "p1"}}},
+        "viewPreferencesValues": {"issueGrouping": "workflowState"}
+    });
+    FakeLinear::start(move |request, _| {
+        let query = request.body["query"].as_str().unwrap_or("");
+        if query.contains("customView(") {
+            Reply::ok(json!({"data": {"customView": view.clone()}}))
+        } else if query.contains("project(") {
+            Reply::ok(json!({"data": {"project": {"id": "p1", "name": "P"}}}))
+        } else {
+            Reply::ok(issues_page(&["a"], None))
+        }
+    })
+}
+
+fn view_plan() -> FetchPlan {
+    FetchPlan {
+        project_id: "p1".to_string(),
+        view_id: Some("v1".to_string()),
+        filter: None,
+        label: "space".to_string(),
+    }
+}
+
+#[test]
+fn one_space_fetch_reads_the_keychain_once() {
+    let fake = space_fake();
+    let dir = tempfile::tempdir().unwrap();
+    let count = dir.path().join("count");
+    let bin = script(
+        dir.path(),
+        "security",
+        &format!("echo x >> '{}'\nprintf 'from-keychain\\n'", count.display()),
+    );
+    let resolver = CredentialResolver::new(
+        Box::new(SecurityCli::new(bin, Duration::from_secs(5))),
+        None,
+        None,
+    );
+    let client = LinearClient::new(config(&fake), resolver).unwrap();
+
+    let read = fetch(&client, &view_plan()).expect("fetch");
+    assert_eq!(read.view_status, "ok");
+    assert_eq!(fake.requests().len(), 3, "view, issues, project");
+    let reads = std::fs::read_to_string(&count).unwrap().lines().count();
+    assert_eq!(reads, 1, "one keychain read per Linear call");
+    for request in fake.requests() {
+        assert_eq!(request.authorization.as_deref(), Some("from-keychain"));
+    }
+}
+
+#[test]
+fn a_timed_out_keychain_is_skipped_inside_the_backoff_window() {
+    let fake = space_fake();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let resolver = CredentialResolver::new(
+        Box::new(SlowTimedOutKeychain {
+            reads: reads.clone(),
+        }),
+        Some(KEY.to_string()),
+        None,
+    );
+    let client = LinearClient::new(config(&fake), resolver).unwrap();
+
+    fetch(&client, &view_plan()).expect("first fetch");
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    fetch(&client, &view_plan()).expect("second fetch");
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "the keychain was retried inside the backoff window"
+    );
+    for request in fake.requests() {
+        assert_eq!(request.authorization.as_deref(), Some(KEY));
+    }
 }
