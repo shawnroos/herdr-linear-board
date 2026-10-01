@@ -37,8 +37,8 @@ pub(crate) enum SpaceCmd {
 
 #[derive(Subcommand)]
 pub(crate) enum LinearCmd {
-    /// Print the work plugin's snapshot of one herdr space (the Linear-mode
-    /// board's read), with live pane status attached.
+    /// Print the Linear-mode board's read of one herdr space (its binding,
+    /// grouping and Linear issues), with live pane status attached.
     Snapshot {
         /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
         workspace_id: Option<String>,

@@ -1,7 +1,7 @@
-//! Linear mode: the board rendered from the work plugin's snapshot, the
+//! Linear mode: the board rendered from boardd's `linear.snapshot`, the
 //! closed effect allow set, the one-in-flight refresh rule, and the three
 //! card actions. Every test runs against `FakeBoardClient` (or a wrapper) and
-//! the vendored plugin fixtures in `board-core/tests/fixtures/linear-snapshot`.
+//! the snapshot fixtures in `board-core/tests/fixtures/linear-snapshot`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

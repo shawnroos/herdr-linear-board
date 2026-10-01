@@ -1,5 +1,5 @@
 //! Linear mode: the state and reducer for a herdr space bound to a Linear
-//! project. The document is the work plugin's snapshot (`linear.snapshot`),
+//! project. The document is boardd's `linear.snapshot`,
 //! overlaid by identifier with the space's local state (`linear.state.get`);
 //! nothing here reads `App::board`. It writes local state only through boardd,
 //! never Linear and never the plugin's records: the mark clears, show-request

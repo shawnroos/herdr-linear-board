@@ -1847,10 +1847,9 @@ pub struct LinearImportResult {
     pub ignored: Vec<LinearImportIgnored>,
 }
 
-/// The `linear.snapshot` document, in the shape the work plugin's snapshot
-/// script defined (`plugins/work/docs/snapshot.md`), plus `pane_status`. Every section
-/// defaults so a partial document still parses; statuses stay strings because
-/// the plugin may add values the board does not know.
+/// The `linear.snapshot` document, plus `pane_status`. Every section defaults
+/// so a partial document still parses; statuses stay strings so an older client
+/// can read a newer daemon's values.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LinearSnapshot {
     #[serde(default)]
