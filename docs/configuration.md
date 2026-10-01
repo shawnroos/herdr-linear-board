@@ -21,10 +21,17 @@ local_poll_ms = 2000        # local-spawner liveness interval
 # work_plugin_root = "/path/to/shrimpshack/plugins/work"  # Linear mode: the work plugin checkout,
 #                                                         # after BOARD_WORK_PLUGIN_ROOT, before installed_plugins.json
 
+[linear]
+show_request_ttl_secs = 1800  # how long an agent's request to show an issue waits for you before it expires
+
 [harness.myharness]
 argv = ["mytool", "--model", "{model}"]
 resume = false             # can this harness resume a recorded conversation? default false
 ```
+
+`[linear] show_request_ttl_secs` applies to every show-request an agent makes (`board mcp`'s
+`ask_to_show`). When it runs out, the request leaves the board's pinned line and its outcome
+becomes `expired`. An agent cannot set its own expiry. Values below 1 count as 1.
 
 Custom harness prompts are delivered through `$BOARD_PROMPT`. The placeholders `{model}`, `{effort}`,
 and `{permission_mode}` are available in `argv`. Optional keys `models`, `efforts`, and

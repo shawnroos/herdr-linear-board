@@ -264,14 +264,19 @@ board linear snapshot [WORKSPACE_ID] [--json]
 board linear space list [--json]
 board linear project list [--json]
 board linear view list <PROJECT_ID> [--json]
+board linear session [WORKSPACE_ID] [--json]
+board linear status-line [--json]
 ```
 
 - Inside a herdr pane whose space the `work` plugin has bound to a Linear project
   (`HERDR_WORKSPACE_ID`, or the plugin context's `workspace_id`, is set), `board tui` opens a
   Linear board for that space instead of the kanban: columns are the recorded Linear
   view's groups (or the team's workflow states when no view is chosen), cards are the project's
-  issues, and each card lists its worktree bindings, recorded tabs and live pane status. It writes
-  nothing to Linear, the plugin's records or SQLite. Its herdr writes are its pane title
+  issues, and each card lists its worktree bindings, recorded tabs and live pane status. Cards
+  show the marks agents set (`!` needs you, `?` question, `◇` suggestion, `✓` done) and pending
+  show-requests (`◉`). It writes nothing to Linear. Its board writes are the person's answers:
+  `Enter` on a card clears the `!`, `?` and `✓` marks it showed, `a` accepts a suggestion or the
+  oldest show-request, and `x` rejects one. Its herdr writes are its pane title
   (`Linear: <project or space>`), focusing an existing pane (`o`), and, when the person chooses a
   space's project, a view (`v`) or `b` on a card, one new `bind` tab running Claude with the
   plugin's `/work:bind` skill. `r` refreshes; `u` opens the issue; `y` copies the worktree path.
@@ -296,6 +301,23 @@ board linear view list <PROJECT_ID> [--json]
   views. The text form prints a `status:` line first when the status is not `ok`, then a table.
   Like the snapshot, exit 0 means a list came back, not that every source was reachable. A project
   id must be 1 to 64 ASCII letters, digits, `_` or `-`, starting with a letter or digit.
+- `board linear session [WORKSPACE_ID]` prints what the board knows about this agent session:
+  `{space, space_bound, binding, column, marks, pending_requests}`. The space defaults to
+  `$HERDR_WORKSPACE_ID`, the session to `$HERDR_SOCKET_PATH`, and the worktree to the current
+  directory. It never starts the daemon; when boardd is down it fails with the socket path.
+- `board linear status-line` prints one line for Claude Code's status line, for example
+  `ENG-148 · In progress · 12m · !? · ◉1`: the bound issue, its column, how long the worktree
+  has been bound, the issue's mark glyphs, and the space's pending show-requests. Other outputs:
+  `board: not bound`, `board: daemon down`, `board: no answer` (no reply within 200 ms), and
+  nothing at all outside herdr (no `HERDR_WORKSPACE_ID` or `HERDR_SOCKET_PATH`). It reads the
+  Claude session id and working directory from the JSON Claude Code pipes on stdin, never starts
+  the daemon, and always exits 0. `--json` prints `{"line": ...}`. To use it, add this to your
+  Claude Code settings:
+
+  ```json
+  {"statusLine": {"type": "command", "command": "board linear status-line"}}
+  ```
+
 - Focusing a pane (`o` in the Linear board) has no CLI verb on purpose: it moves the person's view
   in herdr, which an agent has no reason to do. An agent that needs a pane's state reads
   `pane_status` from `board linear snapshot`.
@@ -322,7 +344,7 @@ A call with none of them owns nothing, and only the person can clear what it wri
 | `notify {title, body?}` | Send a herdr notification. |
 | `ask_to_show {issue, reason?}` | Ask the person to look at an issue. Asking again refreshes your request. It expires if nobody acts on it. |
 | `withdraw_show {issue}` | Withdraw your own pending request. |
-| `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. |
+| `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. With `session: true`, open or close this session's side pane instead: your bound issue, your lane, or the bind hint. |
 
 Agents point; the person moves the view. No tool focuses a pane, moves the selection, or accepts a
 request. The view moves to an issue only when the person accepts its request. An agent cannot set a
@@ -333,7 +355,7 @@ accepted or rejected a request, read `state` and look in `your_resolved_requests
 ### TUI, daemon, version, skill
 
 ```bash
-board tui
+board tui [--session]
 board daemon start [--foreground]
 board daemon stop [--json]
 board daemon status [--json]
@@ -341,7 +363,9 @@ board version [--json]
 board skill
 ```
 
-- `board tui` opens the kanban TUI, auto-starting boardd. `daemon start` runs boardd in this
+- `board tui` opens the kanban TUI, auto-starting boardd. `board tui --session` is the session
+  side pane `open_board` with `session: true` starts; it reads its agent's identity from the
+  `BOARD_SESSION_*` variables the daemon sets and writes nothing. `daemon start` runs boardd in this
   process; `--foreground` additionally logs to stderr and stays attached. Bare `board daemon` (no
   subcommand) is unchanged, and the historical `board daemon --foreground` / `board daemon --stop`
   flags still work but are hidden from `--help`.

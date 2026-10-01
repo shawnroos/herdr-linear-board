@@ -93,11 +93,14 @@ state is never modified.
 
 Opened inside a herdr space that the work plugin has bound to a Linear project, `board tui` runs in
 **Linear mode**: it renders that project's issues, worktrees and live panes from the plugin's
-snapshot instead of a kanban, and writes nothing to Linear, the plugin's records or SQLite. It sets its own pane title and can start a bind in a new herdr tab. The daemon runs the plugin's `bin/work-snapshot.sh` and its three list scripts
+snapshot instead of a kanban, and writes nothing to Linear or the plugin's records. Agents mark
+cards and ask you to look at an issue through `board mcp`; the board shows those marks, and `a` /
+`x` answer them. It sets its own pane title and can start a bind in a new herdr tab. The daemon runs the plugin's `bin/work-snapshot.sh` and its three list scripts
 from the installed `work@shrimpshack` plugin; until a plugin release with that script is installed,
 point `BOARD_WORK_PLUGIN_ROOT` (or `[daemon] work_plugin_root` in the config) at a plugin checkout.
-`board linear snapshot <workspace-id> --json` prints the same document from the command line. See
-[`docs/design.md`](docs/design.md) section 13.
+`board linear snapshot <workspace-id> --json` prints the same document from the command line, and
+`board linear status-line` puts an agent's bound issue in Claude Code's status line (setup in
+`board skill`). See [`docs/design.md`](docs/design.md) section 13.
 
 ## Install
 
