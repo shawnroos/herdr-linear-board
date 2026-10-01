@@ -383,7 +383,7 @@ fn attach_bindings(
                         id: t.to_string(),
                         label: tab_label(t),
                     }),
-                    panes: tab.map(&panes_in).unwrap_or_default(),
+                    panes: tab.map(panes_in).unwrap_or_default(),
                 });
                 if let Some(t) = tab {
                     claimed.insert(t.to_string());
