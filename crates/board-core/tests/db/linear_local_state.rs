@@ -545,3 +545,55 @@ fn session_read_from_a_subdirectory_of_a_bound_worktree_returns_the_bound_issue(
     );
     assert_eq!(read.column, None);
 }
+
+#[test]
+fn state_lists_the_space_resolved_requests_newest_first_up_to_the_cap() {
+    let db = mem();
+    let a = owner("p-a");
+    let ask_for = |n: usize| {
+        db.linear_show_request(&ask(&a, &format!("ENG-{n}"), "r"), true, now(), TTL)
+            .unwrap()
+            .after
+            .unwrap()
+            .id
+    };
+    let over = board_core::db::RECENT_RESOLVED_SHOW_REQUESTS + 2;
+    let ids: Vec<i64> = (1..=over).map(ask_for).collect();
+    for id in &ids {
+        db.linear_show_dismiss(*id, now()).unwrap();
+    }
+    let still_pending = ask_for(over + 1);
+    let other_space = db
+        .linear_show_request(
+            &LinearShowRequestParams {
+                space: "ws-2".into(),
+                ..ask(&a, "ENG-1", "r")
+            },
+            true,
+            now(),
+            TTL,
+        )
+        .unwrap()
+        .after
+        .unwrap()
+        .id;
+    db.linear_show_dismiss(other_space, now()).unwrap();
+
+    let state = db.linear_state(SPACE, now()).unwrap();
+    let listed: Vec<i64> = state.resolved_show_requests.iter().map(|r| r.id).collect();
+    let newest: Vec<i64> = ids
+        .iter()
+        .rev()
+        .take(board_core::db::RECENT_RESOLVED_SHOW_REQUESTS)
+        .copied()
+        .collect();
+    assert_eq!(listed, newest);
+    assert!(state
+        .resolved_show_requests
+        .iter()
+        .all(|r| r.outcome == Some(ShowOutcome::Rejected)));
+    assert_eq!(
+        state.show_requests.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![still_pending]
+    );
+}

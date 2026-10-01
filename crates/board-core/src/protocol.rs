@@ -1524,6 +1524,10 @@ pub struct LinearState {
     pub notes: Vec<Note>,
     #[serde(default)]
     pub show_requests: Vec<ShowRequest>,
+    /// The space's most recently answered, withdrawn or expired requests,
+    /// newest first, so an agent can read its own request's outcome.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_show_requests: Vec<ShowRequest>,
 }
 
 /// `linear.bind`: bind the git worktree containing `cwd` to `issue`.

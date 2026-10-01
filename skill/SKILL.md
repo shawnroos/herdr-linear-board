@@ -304,6 +304,32 @@ board linear view list <PROJECT_ID> [--json]
   agent has no reason to do. An agent that needs a bind runs the plugin's `/work:bind` skill itself,
   with the ids the list verbs print.
 
+### Agent tools (`board mcp`)
+
+`board mcp` is a stdio MCP server, installed once by the user
+(`claude mcp add --scope user board -- board mcp`). Each tool forwards to boardd. Ownership comes
+from the server's environment: `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `CLAUDE_CODE_SESSION_ID`.
+A call with none of them owns nothing, and only the person can clear what it writes.
+
+| Tool | Does |
+|---|---|
+| `state` | Read a space: bindings, marks (`kind`, `yours`), notes, pending show-requests (`expires_at`, `yours`), and `your_resolved_requests` with each `outcome` (accepted, rejected, withdrawn, expired). |
+| `panes_for_issue` | Read the herdr panes that recorded Linear activity on an issue. |
+| `bind` / `unbind` | Bind this worktree to an issue, or remove the binding. |
+| `mark {issue, kind, text?}` | Set `needs_you`, `question` or `done` on a card. A second mark of the same kind replaces your own; other agents' marks stay. Any other kind is refused. |
+| `unmark {issue, kind?}` | Clear your own marks on a card, of one kind or all kinds. |
+| `note {issue, body}` | Attach a short note; it replaces your earlier note. |
+| `notify {title, body?}` | Send a herdr notification. |
+| `ask_to_show {issue, reason?}` | Ask the person to look at an issue. Asking again refreshes your request. It expires if nobody acts on it. |
+| `withdraw_show {issue}` | Withdraw your own pending request. |
+| `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. |
+
+Agents point; the person moves the view. No tool focuses a pane, moves the selection, or accepts a
+request. The view moves to an issue only when the person accepts its request. An agent cannot set a
+suggestion mark (only the board sets one, from a reported Linear write), clear another agent's
+marks, withdraw another agent's request, or set a request's expiry. To learn whether the person
+accepted or rejected a request, read `state` and look in `your_resolved_requests`.
+
 ### TUI, daemon, version, skill
 
 ```bash

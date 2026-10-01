@@ -14,6 +14,9 @@ use crate::{Error, Result};
 
 /// Chosen, not measured: activity is a recent-history view, not an audit log.
 pub const LINEAR_ACTIVITY_KEEP_PER_SPACE: usize = 500;
+/// A count, not a time window: `acknowledged_at` comes from SQLite's own
+/// clock, not the injected `now`, so a window would mix the two clocks.
+pub const RECENT_RESOLVED_SHOW_REQUESTS: usize = 20;
 
 pub const GROUPING_LEVELS: [&str; 4] = ["space", "tab", "column", "row"];
 pub const GROUPING_FIELD_KINDS: [&str; 8] = [
@@ -1375,6 +1378,20 @@ impl Db {
     pub fn pending_show_requests(&self, space: &str, now: i64) -> Result<Vec<ShowRequest>> {
         let mut rows = self.open_show_requests(Some(space))?;
         rows.retain(|r| r.is_pending(now));
+        Ok(rows)
+    }
+
+    pub fn recent_resolved_show_requests(&self, space: &str) -> Result<Vec<ShowRequest>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{SHOW_SELECT} WHERE space = ?1 AND outcome IS NOT NULL
+             ORDER BY acknowledged_at DESC, id DESC LIMIT ?2"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![space, RECENT_RESOLVED_SHOW_REQUESTS as i64],
+                row_to_show,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 

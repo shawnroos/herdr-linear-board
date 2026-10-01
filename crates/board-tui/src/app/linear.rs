@@ -1765,6 +1765,7 @@ fn sanitise_local(local: LocalState) -> LocalState {
             marks: vec![],
             notes: vec![],
             show_requests: vec![],
+            resolved_show_requests: vec![],
         })
 }
 

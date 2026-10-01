@@ -721,9 +721,12 @@ A card is *known* in a space when a worktree binding holds it, activity was reco
 that space, or the space's shared Linear read (see `linear.snapshot`) lists it. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
 
 - `linear.state.get {space}` → `{space, space_bindings, worktree_bindings, grouping, marks, notes,
-  show_requests}`: the space's bindings, every worktree binding (they are not keyed by space), the
-  grouping mapping in force for the space (`{space: null|string, mapping}` or `null`), its marks and
-  notes, and its show-requests not yet answered.
+  show_requests, resolved_show_requests?}`: the space's bindings, every worktree binding (they are
+  not keyed by space), the grouping mapping in force for the space (`{space: null|string, mapping}`
+  or `null`), its marks and notes, and its show-requests not yet answered. `resolved_show_requests`
+  lists the space's 20 most recently closed requests (accepted, rejected, withdrawn or expired),
+  newest first, each with its `outcome`; it is omitted when there are none, and an older daemon
+  never sends it.
 - `linear.bind {cwd, issue, space?, branch?, tab?, display_name?, claims?}` → `{before, after}`:
   binds the git worktree containing `cwd` (canonicalised, then the nearest ancestor with a `.git`
   entry) to `issue`. Rebinding a worktree replaces its binding; `before` is the replaced one, so

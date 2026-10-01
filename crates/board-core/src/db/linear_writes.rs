@@ -313,6 +313,7 @@ impl Db {
             marks: self.list_marks(space)?,
             notes: self.list_notes(space, None)?,
             show_requests: self.pending_show_requests(space, now)?,
+            resolved_show_requests: self.recent_resolved_show_requests(space)?,
         })
     }
 
