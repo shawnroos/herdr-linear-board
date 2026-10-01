@@ -481,7 +481,7 @@ impl ShowOutcome {
     }
 }
 
-/// Who wrote a mark, note or request (KTD2). Attribution, not access
+/// Who wrote a mark, note or request. Attribution, not access
 /// control: the fields are the caller's own claims. All three `None` is no
 /// owner, which only the person can clear.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1214,6 +1214,16 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn space_issue_marks(&self, space: &str, issue: &str) -> Result<Vec<Mark>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{MARK_SELECT} WHERE space = ?1 AND issue_identifier = ?2 ORDER BY id"
+        ))?;
+        let rows = statement
+            .query_map(params![space, issue], row_to_mark)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn issue_marks(&self, issue: &str) -> Result<Vec<Mark>> {
         let mut statement = self.conn.prepare(&format!(
             "{MARK_SELECT} WHERE issue_identifier = ?1 ORDER BY id"
@@ -1345,7 +1355,7 @@ impl Db {
     }
 
     /// Keeps the request's id and `created_at`, so its place in the pinned
-    /// line does not move (R31).
+    /// line does not move.
     pub fn refresh_show_request(
         &self,
         id: i64,

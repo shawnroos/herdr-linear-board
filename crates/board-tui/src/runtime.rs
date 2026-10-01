@@ -96,7 +96,7 @@ pub fn run_linear(client: Box<dyn BoardClient>, start: LinearStart) -> Result<()
     run_driver(&mut driver)
 }
 
-/// The session side pane beside one agent (KTD10): reads only, never a
+/// The session side pane beside one agent: reads only, never a
 /// write, not even its own pane title.
 pub fn run_session(
     client: Box<dyn BoardClient>,

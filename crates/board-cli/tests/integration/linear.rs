@@ -561,8 +561,6 @@ fn bind_is_not_a_command_line_verb() {
     }
 }
 
-// -- the session read and the Claude Code status line -------------------------
-
 mod session {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;

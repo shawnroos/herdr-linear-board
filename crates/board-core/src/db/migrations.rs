@@ -427,6 +427,7 @@ CREATE TABLE IF NOT EXISTS linear_board_panes (
 CREATE INDEX IF NOT EXISTS idx_linear_marks_space ON linear_marks(space, issue_identifier);
 CREATE INDEX IF NOT EXISTS idx_linear_notes_space ON linear_notes(space, issue_identifier);
 CREATE INDEX IF NOT EXISTS idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_linear_activity_space ON linear_activity(space, id);
 CREATE INDEX IF NOT EXISTS idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);
 ";
@@ -464,6 +465,8 @@ CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
 
 /// Rebuilds the v16 `linear_show_requests` of databases stamped 16 before
 /// request owners, expiry and outcome existed. Copied rows stay pending.
+const V16_RESOLVED_INDEX_SQL: &str = "CREATE INDEX IF NOT EXISTS idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL";
+
 const V16_SHOW_REQUESTS_AMEND_SQL: &str = "
 CREATE TABLE linear_show_requests_amended (
   id               INTEGER PRIMARY KEY,
@@ -778,6 +781,9 @@ impl Db {
         if !has_column("linear_show_requests", "outcome")? {
             tx.execute_batch(V16_SHOW_REQUESTS_AMEND_SQL)?;
         }
+        // After the rebuild, which drops the table's indexes, and also for a
+        // database amended before this index existed.
+        tx.execute_batch(V16_RESOLVED_INDEX_SQL)?;
         tx.commit()?;
         Ok(())
     }

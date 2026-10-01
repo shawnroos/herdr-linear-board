@@ -221,8 +221,9 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
             )))
         }
     };
-    let (context_key, mut show_env) = context_key(&p.context, Some(&p.origin_pane))?;
-    if p.context.session {
+    let session = p.context.session;
+    let (key, mut show_env) = context_key(&p.context, Some(&p.origin_pane))?;
+    if session {
         show_env.extend(session_identity(&p)?);
     }
     if p.origin_pane.trim().is_empty() {
@@ -243,10 +244,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
             ))
         })?;
 
-    let recorded = d
-        .store
-        .lock()
-        .board_pane_for_context(&socket, &context_key)?;
+    let recorded = d.store.lock().board_pane_for_context(&socket, &key)?;
     if let Some(row) = recorded {
         let live = client
             .pane_get(&row.pane_id)
@@ -291,7 +289,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
         d.db_path.to_string_lossy().into_owned(),
     );
     env.extend(show_env.into_iter().map(|(k, v)| (k.to_string(), v)));
-    if p.context.session {
+    if session {
         if origin.workspace_id.is_empty() {
             return Err(Error::HerdrUnavailable(format!(
                 "pane.get {} named no workspace",
@@ -310,7 +308,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
     let opened = client
         .plugin_pane_open(&PluginPaneOpenParams {
             plugin_id: BOARD_PLUGIN_ID.into(),
-            entrypoint: if p.context.session {
+            entrypoint: if session {
                 SESSION_ENTRYPOINT
             } else {
                 BOARD_ENTRYPOINT
@@ -330,7 +328,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
     d.store.lock().record_board_pane(&NewBoardPane {
         herdr_socket: &socket,
         pane_id: &pane.pane_id,
-        context_key: &context_key,
+        context_key: &key,
         placement,
         workspace_id: Some(pane.workspace_id.as_str()).filter(|w| !w.is_empty()),
         origin_pane_id: Some(&origin.pane_id),

@@ -1,4 +1,4 @@
-//! Show-request expiry (KTD3): reads already hide an overdue request, and this
+//! Show-request expiry: reads already hide an overdue request, and this
 //! sweep closes it as `expired` and announces its space so an open board
 //! drops it while nothing else changes.
 
@@ -18,7 +18,7 @@ pub(super) async fn show_request_sweeper(d: Arc<Daemon>) {
     loop {
         tokio::select! {
             _ = iv.tick() => {
-                sweep_show_requests_at(&d, d.wall_now_ms() / 1000);
+                sweep_show_requests_at(&d, crate::ops::now_secs(&d));
             }
             _ = rx.changed() => break,
         }

@@ -454,7 +454,7 @@ fn sidebar_column(
         }
     }
 
-    // R32: what the card showed when it was opened, kept after it clears.
+    // What the card showed when it was opened, kept after it clears.
     let marks = state.detail_marks();
     if !marks.is_empty() {
         out.push(Line::from(""));

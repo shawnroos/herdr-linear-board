@@ -922,14 +922,12 @@ fake_methods!(db, config, linear, now, params, {
     },
     "linear.mark.clear" => {
         let p: crate::protocol::LinearMarkClearParams = serde_json::from_value(params)?;
-        match (p.id, p.ids) {
-            (Some(id), None) => serde_json::to_value(db.linear_mark_clear(id)?)?,
-            (None, Some(ids)) => serde_json::to_value(db.linear_mark_clear_ids(&ids)?)?,
-            _ => {
-                return Err(crate::Error::BadRequest(
-                    "linear.mark.clear takes one of id or ids".into(),
-                )
-                .into())
+        match p.target()? {
+            crate::protocol::MarkClearTarget::One(id) => {
+                serde_json::to_value(db.linear_mark_clear(id)?)?
+            }
+            crate::protocol::MarkClearTarget::Many(ids) => {
+                serde_json::to_value(db.linear_mark_clear_ids(&ids)?)?
             }
         }
     },

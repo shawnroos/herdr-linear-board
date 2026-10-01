@@ -1,5 +1,5 @@
 //! Marks, notes and show-requests on the Linear board, and the `a`, `x`,
-//! `n`, `N` keys that act on them (R3, R4, R10 to R17, R19, R20, R32).
+//! `n`, `N` keys that act on them.
 
 use super::*;
 
@@ -182,8 +182,6 @@ fn row_with(frame: &str, needle: &str) -> String {
         .unwrap_or_else(|| panic!("no row with {needle:?}:\n{frame}"))
 }
 
-// -- gutter, note, badge -----------------------------------------------------
-
 #[test]
 fn a_card_with_done_needs_you_and_question_marks_shows_bang_plus_in_its_gutter() {
     let shared = SharedFake::quiet(tabs_lanes());
@@ -250,8 +248,6 @@ fn the_board_reads_local_state_after_its_first_snapshot_and_after_a_reconnect() 
     d.on_daemon_signals(false, true);
     assert_eq!(count(&log, "linear.state.get"), 2, "{:?}", methods(&log));
 }
-
-// -- a and x -----------------------------------------------------------------
 
 #[test]
 fn ae1_a_on_a_selected_suggestion_binds_it_and_the_pinned_request_stays() {
@@ -458,8 +454,6 @@ fn a_snapshot_that_reorders_cards_before_a_still_binds_the_card_that_was_selecte
     assert_eq!(binds[0]["cwd"], third.0.to_str().unwrap());
 }
 
-// -- opening a card clears what it showed (R12, R32) -------------------------
-
 #[test]
 fn ae3_ae10_enter_clears_only_the_marks_it_showed_and_a_suggestion_stays() {
     let shared = SharedFake::quiet(tabs_lanes());
@@ -523,8 +517,6 @@ fn a_click_on_a_card_clears_its_marks_like_enter() {
     );
 }
 
-// -- n and N -----------------------------------------------------------------
-
 #[test]
 fn n_walks_marked_cards_across_pages_and_tabs_and_wraps() {
     let shared = SharedFake::quiet(tabs_lanes());
@@ -564,8 +556,6 @@ fn n_walks_marked_cards_across_pages_and_tabs_and_wraps() {
     );
 }
 
-// -- attention counts (R3, R4) -----------------------------------------------
-
 #[test]
 fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
     let shared = SharedFake::quiet(tabs_lanes());
@@ -585,8 +575,6 @@ fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
     assert!(frame_row(&frame, 2).contains("[Frontend]"), "{frame}");
     insta::assert_snapshot!("linear_marks_44", frame);
 }
-
-// -- pinned line and footer cue (R14) ----------------------------------------
 
 #[test]
 fn with_a_suggestion_selected_the_footer_names_bind_and_the_pinned_keys_dim() {

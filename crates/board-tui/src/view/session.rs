@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::linear::{fit, line};
+use super::linear::{fit, line, not_imported};
 use super::{centered_rect_abs, session_help_keys};
 use crate::app::{sanitise, session_lane, App, LinearState, Screen, SessionState, SessionView};
 
@@ -74,29 +74,6 @@ fn status_line(app: &App, session: &SessionState) -> Option<Line<'static>> {
         format!(" last read kept: {}", line(failed)),
         Style::default().fg(Color::Yellow),
     )))
-}
-
-/// The daemon's not-imported message, as the board's not-bound body prints it.
-fn not_imported(state: &LinearState) -> Option<Vec<Line<'static>>> {
-    let snapshot = state
-        .snapshot()
-        .filter(|s| s.linear.status == "not_imported")?;
-    let message = snapshot
-        .linear
-        .message
-        .as_deref()
-        .unwrap_or("the work store has not been imported; run `board import work-store`");
-    Some(
-        message
-            .lines()
-            .map(|text| {
-                Line::from(Span::styled(
-                    text.to_string(),
-                    Style::default().fg(Color::LightYellow),
-                ))
-            })
-            .collect(),
-    )
 }
 
 fn paragraph(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {

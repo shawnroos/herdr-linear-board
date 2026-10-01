@@ -95,7 +95,7 @@ pub(super) fn strip_lines(
     // any note about the list.
     let mut show_rows = !state.bound();
     // A list that is loading or holds no unbound space is nothing to show on
-    // its own (R5); a failed read is, so it is never mistaken for "all bound".
+    // its own; a failed read is, so it is never mistaken for "all bound".
     let status = match &state.spaces {
         SpaceList::NotRead => show_rows.then(|| note("  loading spaces…".to_string(), dim)),
         SpaceList::Failed(text) => Some(note(

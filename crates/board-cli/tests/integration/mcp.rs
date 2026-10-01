@@ -530,7 +530,7 @@ fn open_board_with_session_reaches_the_daemon_as_a_session_context() {
 }
 
 /// Two agents that share a herdr pane (a nested or background session
-/// inherits `HERDR_PANE_ID`) and differ only in their Claude session (KTD2).
+/// inherits `HERDR_PANE_ID`) and differ only in their Claude session.
 fn agent(session: &str) -> [(&'static str, String); 4] {
     [
         ("HERDR_SOCKET_PATH", "/tmp/herdr-test.sock".to_string()),

@@ -23,7 +23,7 @@ pub async fn timeout_ticker(d: Arc<Daemon>) {
     timeout::timeout_ticker(d).await;
 }
 
-/// Crate-private entrypoint for the show-request expiry sweep (KTD3).
+/// Crate-private entrypoint for the show-request expiry sweep.
 pub async fn show_request_sweeper(d: Arc<Daemon>) {
     expiry::show_request_sweeper(d).await;
 }

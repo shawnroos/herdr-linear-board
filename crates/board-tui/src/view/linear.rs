@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{lane_sections, sanitise, App, LinearState, Screen};
+use crate::app::{lane_sections, sanitise, App, CardOverlay, CardOverlays, LinearState, Screen};
 use crate::widgets::{HitMap, Zone};
 
 use super::linear_strip::{draw_strip, strip_lines};
@@ -250,12 +250,17 @@ fn title_lines(title: &str, width: usize) -> [String; 2] {
     [first.to_string(), fit(rest.trim_start(), width)]
 }
 
-fn card_height(state: &LinearState, identifier: &str) -> u16 {
-    CARD_H + u16::from(state.latest_note(identifier).is_some())
+fn card_height(overlay: CardOverlay<'_>) -> u16 {
+    CARD_H + u16::from(overlay.latest_note.is_some())
 }
 
-fn card_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<String> {
-    let mut first = state.gutter(&issue.identifier);
+fn card_lines(
+    state: &LinearState,
+    overlay: CardOverlay<'_>,
+    issue: &LinearIssue,
+    width: usize,
+) -> Vec<String> {
+    let mut first = overlay.gutter();
     first.push_str(&line(&issue.identifier));
     let running = issue
         .bindings
@@ -283,7 +288,7 @@ fn card_lines(state: &LinearState, issue: &LinearIssue, width: usize) -> Vec<Str
         .unwrap_or_else(|| "unassigned".to_string());
     let [title_first, title_second] = title_lines(&line(&issue.title), width);
     let mut lines = vec![fit(&first, width), title_first, title_second];
-    if let Some(note) = state.latest_note(&issue.identifier) {
+    if let Some(note) = overlay.latest_note {
         lines.push(fit(&format!("› {}", line(&note.body)), width));
     }
     lines.push(fit(&assignee, width));
@@ -328,9 +333,11 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         .height
         .saturating_sub(HEADER_ROWS + pinned_h + strip_h + footer_h);
     let per_page = linear_columns_per_page(area.width);
+    let overlays = state.overlays();
     let rows = [
-        tab_row(state, area.width as usize),
-        (state.groups().len() > per_page).then(|| pager_row(state, per_page, area.width as usize)),
+        tab_row(state, &overlays, area.width as usize),
+        (state.groups().len() > per_page)
+            .then(|| pager_row(state, &overlays, per_page, area.width as usize)),
     ];
     for row in rows.into_iter().flatten() {
         if body_h == 0 {
@@ -343,6 +350,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let body = Rect::new(area.x, y, area.width, body_h);
     draw_columns(
         state,
+        &overlays,
         snapshot,
         f,
         body,
@@ -362,7 +370,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
 
 /// `a` and `x` act on the selected card's suggestion before any request, so
 /// while one is selected the request's keys dim and the footer names the
-/// suggestion's (R14).
+/// suggestion's.
 fn suggestion_selected(state: &LinearState) -> bool {
     state.selected_suggestion().is_some()
 }
@@ -413,12 +421,12 @@ fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
 
 /// ` !N` for the cards among `identifiers` that need attention, or nothing.
 fn attention_count<'a>(
-    state: &LinearState,
+    overlays: &CardOverlays<'_>,
     identifiers: impl Iterator<Item = &'a String>,
 ) -> String {
     let needing: std::collections::BTreeSet<&str> = identifiers
         .map(String::as_str)
-        .filter(|id| state.needs_attention(id))
+        .filter(|id| overlays.get(id).needs_attention())
         .collect();
     match needing.len() {
         0 => String::new(),
@@ -429,7 +437,11 @@ fn attention_count<'a>(
 /// The tab row, the active tab in brackets. `None` for a document from
 /// before tabs, whose one tab has no name to show. When the row is too narrow
 /// it starts at a later tab so the active one stays in view.
-fn tab_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
+fn tab_row(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    width: usize,
+) -> Option<Line<'static>> {
     let tabs = state.tabs();
     if tabs.iter().all(|tab| tab.label.is_empty()) {
         return None;
@@ -447,7 +459,8 @@ fn tab_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
             if at == state.sel_tab {
                 format!("[{label}]")
             } else {
-                let count = attention_count(state, tab.groups.iter().flat_map(|g| g.issues.iter()));
+                let count =
+                    attention_count(overlays, tab.groups.iter().flat_map(|g| g.issues.iter()));
                 format!(" {label}{count} ")
             }
         })
@@ -480,7 +493,12 @@ fn tab_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
 
 /// `‹ <hidden column> <cards>` on the left, `<hidden column> <cards> ›` on the
 /// right, and the page number between them when there is room.
-fn pager_row(state: &LinearState, per_page: usize, width: usize) -> Line<'static> {
+fn pager_row(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    per_page: usize,
+    width: usize,
+) -> Line<'static> {
     let groups = state.groups();
     let start = state.sel_group.min(groups.len().saturating_sub(1)) / per_page * per_page;
     let end = (start + per_page).min(groups.len());
@@ -489,7 +507,7 @@ fn pager_row(state: &LinearState, per_page: usize, width: usize) -> Line<'static
         format!("{} {}", line(&group.label), group.issues.len())
     };
     let hidden = |range: std::ops::Range<usize>| {
-        attention_count(state, groups[range].iter().flat_map(|g| g.issues.iter()))
+        attention_count(overlays, groups[range].iter().flat_map(|g| g.issues.iter()))
     };
     let left = if start > 0 {
         format!("‹ {}{}", named(start - 1), hidden(0..start))
@@ -568,6 +586,7 @@ enum ColumnItem<'a> {
 
 fn draw_columns(
     state: &LinearState,
+    overlays: &CardOverlays<'_>,
     snapshot: &LinearSnapshot,
     f: &mut Frame,
     body: Rect,
@@ -643,7 +662,7 @@ fn draw_columns(
                     .map(|identifier| ColumnItem::Card {
                         lane: section.key,
                         identifier,
-                        height: card_height(state, identifier),
+                        height: card_height(overlays.get(identifier)),
                     }),
             );
         }
@@ -701,10 +720,12 @@ fn draw_columns(
                     );
                     let selected = focused && selected_slot == Some((lane, identifier));
                     let lines: Vec<Line> = match snapshot.issues.get(identifier) {
-                        Some(issue) => card_lines(state, issue, inner.width as usize)
-                            .into_iter()
-                            .map(Line::from)
-                            .collect(),
+                        Some(issue) => {
+                            card_lines(state, overlays.get(identifier), issue, inner.width as usize)
+                                .into_iter()
+                                .map(Line::from)
+                                .collect()
+                        }
                         None => vec![Line::from(fit(
                             &format!("{identifier} (missing)"),
                             inner.width as usize,
@@ -764,24 +785,9 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         )),
         Line::from(record),
     ];
-    // R24: the daemon's own words, which name the import command.
-    if let Some(message) = state
-        .snapshot()
-        .filter(|s| s.linear.status == "not_imported")
-        .map(|s| {
-            s.linear
-                .message
-                .as_deref()
-                .unwrap_or("the work store has not been imported; run `board import work-store`")
-        })
-    {
+    if let Some(message) = not_imported(state) {
         lines.push(Line::from(""));
-        lines.extend(message.lines().map(|text| {
-            Line::from(Span::styled(
-                text.to_string(),
-                Style::default().fg(Color::LightYellow),
-            ))
-        }));
+        lines.extend(message);
     }
     lines.extend([
         Line::from(""),
@@ -818,6 +824,29 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let above = Rect::new(area.x, area.y, area.width, strip_y - area.y);
     boxed(f, above, "Not bound", Color::LightYellow, lines);
     draw_strip(app, strip, f, area, strip_y);
+}
+
+/// The daemon's own not-imported words, which name the import command.
+pub(super) fn not_imported(state: &LinearState) -> Option<Vec<Line<'static>>> {
+    let snapshot = state
+        .snapshot()
+        .filter(|s| s.linear.status == "not_imported")?;
+    let message = snapshot
+        .linear
+        .message
+        .as_deref()
+        .unwrap_or("the work store has not been imported; run `board import work-store`");
+    Some(
+        message
+            .lines()
+            .map(|text| {
+                Line::from(Span::styled(
+                    text.to_string(),
+                    Style::default().fg(Color::LightYellow),
+                ))
+            })
+            .collect(),
+    )
 }
 
 fn draw_stale_daemon(state: &LinearState, f: &mut Frame, area: Rect) {

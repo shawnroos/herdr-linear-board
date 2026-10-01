@@ -103,7 +103,7 @@ fn is_space_id(space: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
-/// The agent a session pane is beside (KTD10), as the daemon passed it in
+/// The agent a session pane is beside, as the daemon passed it in
 /// `BOARD_SESSION_*`. The pane's own `HERDR_PANE_ID` names the split, not the
 /// agent, so none of this is read from herdr's variables except the space.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

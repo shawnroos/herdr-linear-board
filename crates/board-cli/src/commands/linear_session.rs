@@ -1,4 +1,4 @@
-//! `board linear session` and `board linear status-line` (KTD11): one
+//! `board linear session` and `board linear status-line`: one
 //! `linear.session.get` read for the calling agent session. Neither verb
 //! starts boardd: the status line runs on every Claude Code refresh, so a
 //! down daemon must cost one failed connect, never a start.
@@ -17,6 +17,7 @@ use board_core::protocol::{
 use board_core::text::strip_control_and_format;
 use serde_json::{json, Value};
 
+use super::{canonical_text, env_text};
 use crate::render::{emit, emit_line};
 
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -81,8 +82,7 @@ fn session_params(space: String, input: Option<&Value>) -> LinearSessionGetParam
         .or_else(|| field("/cwd"))
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
-        .map(|cwd| cwd.canonicalize().unwrap_or(cwd))
-        .map(|cwd| cwd.to_string_lossy().into_owned());
+        .map(canonical_text);
     LinearSessionGetParams {
         space,
         herdr_socket: env_text("HERDR_SOCKET_PATH"),
@@ -151,10 +151,6 @@ fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
-fn env_text(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

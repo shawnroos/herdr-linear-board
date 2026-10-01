@@ -309,5 +309,6 @@ CREATE TABLE linear_board_panes (
 CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
 CREATE INDEX idx_linear_notes_space ON linear_notes(space, issue_identifier);
 CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+CREATE INDEX idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL;
 CREATE INDEX idx_linear_activity_space ON linear_activity(space, id);
 CREATE INDEX idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);

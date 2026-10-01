@@ -3,8 +3,8 @@
 //! overlaid by identifier with the space's local state (`linear.state.get`);
 //! nothing here reads `App::board`. It writes local state only through boardd,
 //! never Linear and never the plugin's records: the mark clears, show-request
-//! answers and binds it emits are daemon requests on the Linear allow list
-//! (KTD7). The herdr writes it asks the daemon for are this pane's title, pane
+//! answers and binds it emits are daemon requests on the Linear allow list.
+//! The herdr writes it asks the daemon for are this pane's title, pane
 //! focus, and a bind handoff that opens one `bind` tab; the bind skill's
 //! confirmation in that tab gates every write made there.
 
@@ -15,6 +15,7 @@ use board_core::protocol::{
     LinearSpacesList, LinearTab, Mark, MarkKind, Note, ShowRequest,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::HashMap;
 
 use super::linear_cursor::CardCursor;
 use super::nav::{nav_delta, step_clamped};
@@ -88,7 +89,80 @@ pub enum WriteFailure {
     Failed(String),
 }
 
-/// The gutter glyph of a mark kind (R8).
+/// One card's marks, show-request badge and newest note.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CardOverlay<'a> {
+    attention: bool,
+    question: bool,
+    suggestion: bool,
+    done: bool,
+    requested: bool,
+    pub latest_note: Option<&'a Note>,
+}
+
+impl<'a> CardOverlay<'a> {
+    fn add_mark(&mut self, kind: MarkKind) {
+        match kind {
+            MarkKind::Attention => self.attention = true,
+            MarkKind::Question => self.question = true,
+            MarkKind::Suggestion => self.suggestion = true,
+            MarkKind::Done => self.done = true,
+        }
+    }
+
+    /// On equal keys the later note wins, as `Iterator::max_by` picks.
+    fn add_note(&mut self, note: &'a Note) {
+        if self
+            .latest_note
+            .is_none_or(|latest| (&note.created_at, note.id) >= (&latest.created_at, latest.id))
+        {
+            self.latest_note = Some(note);
+        }
+    }
+
+    /// The 2-cell gutter left of a card's identifier: its glyphs in priority
+    /// order, the first plus `+` when more than two.
+    pub fn gutter(&self) -> String {
+        let mut glyphs = vec![];
+        for (present, kind) in [
+            (self.attention, MarkKind::Attention),
+            (self.question, MarkKind::Question),
+            (self.suggestion, MarkKind::Suggestion),
+        ] {
+            if present {
+                glyphs.push(mark_glyph(kind));
+            }
+        }
+        if self.requested {
+            glyphs.push('◉');
+        }
+        if self.done {
+            glyphs.push(mark_glyph(MarkKind::Done));
+        }
+        match glyphs.as_slice() {
+            [] => "  ".to_string(),
+            [one] => format!("{one} "),
+            [one, two] => format!("{one}{two}"),
+            [first, ..] => format!("{first}+"),
+        }
+    }
+
+    /// What the attention counts count: a needs-you, question or suggestion
+    /// mark, or a show-request badge. Done is not a call to act.
+    pub fn needs_attention(&self) -> bool {
+        self.attention || self.question || self.suggestion || self.requested
+    }
+}
+
+/// [`CardOverlay`]s by identifier; a card with no local state gets the empty one.
+pub struct CardOverlays<'a>(HashMap<&'a str, CardOverlay<'a>>);
+
+impl<'a> CardOverlays<'a> {
+    pub fn get(&self, identifier: &str) -> CardOverlay<'a> {
+        self.0.get(identifier).copied().unwrap_or_default()
+    }
+}
+
 pub fn mark_glyph(kind: MarkKind) -> char {
     match kind {
         MarkKind::Attention => '!',
@@ -252,7 +326,7 @@ pub struct LinearState {
     /// Local state changed again while a read was in flight; one more read is
     /// sent when it lands, however many changes arrived.
     pub local_queued: bool,
-    /// The marks the open card showed when it was opened (R32), by issue, so
+    /// The marks the open card showed when it was opened, by issue, so
     /// the list outlives their clearing and a linked issue does not show it.
     pub detail_marks: Option<(String, Vec<Mark>)>,
     /// The issue page's scroll floor. Only the session pane sets it; the
@@ -413,53 +487,61 @@ impl LinearState {
         requests
     }
 
-    pub fn latest_note<'a>(&'a self, identifier: &'a str) -> Option<&'a Note> {
-        self.notes_for(identifier)
-            .max_by(|a, b| (&a.created_at, a.id).cmp(&(&b.created_at, b.id)))
-    }
-
-    fn has_mark(&self, identifier: &str, kind: MarkKind) -> bool {
-        self.marks_for(identifier).any(|m| m.kind == kind)
+    pub fn latest_note(&self, identifier: &str) -> Option<&Note> {
+        self.overlay(identifier).latest_note
     }
 
     fn requested(&self, identifier: &str) -> bool {
         self.show_requests_for(identifier).next().is_some()
     }
 
-    /// The 2-cell gutter left of a card's identifier (R10): its glyphs in
-    /// priority order, the first plus `+` when more than two.
+    /// The gutter left of a card's identifier; see [`CardOverlay::gutter`].
     pub fn gutter(&self, identifier: &str) -> String {
-        let mut glyphs = vec![];
-        for kind in [
-            MarkKind::Attention,
-            MarkKind::Question,
-            MarkKind::Suggestion,
-        ] {
-            if self.has_mark(identifier, kind) {
-                glyphs.push(mark_glyph(kind));
+        self.overlay(identifier).gutter()
+    }
+
+    /// See [`CardOverlay::needs_attention`].
+    pub fn needs_attention(&self, identifier: &str) -> bool {
+        self.overlay(identifier).needs_attention()
+    }
+
+    fn overlay(&self, identifier: &str) -> CardOverlay<'_> {
+        let mut overlay = CardOverlay::default();
+        if let Some(local) = &self.local {
+            local
+                .marks
+                .iter()
+                .filter(|m| m.issue == identifier)
+                .for_each(|m| overlay.add_mark(m.kind));
+            overlay.requested |= local.show_requests.iter().any(|r| r.issue == identifier);
+            local
+                .notes
+                .iter()
+                .filter(|n| n.issue == identifier)
+                .for_each(|n| overlay.add_note(n));
+        }
+        overlay
+    }
+
+    /// Every card's overlay in one pass over the local state, for a draw that
+    /// asks about many cards.
+    pub fn overlays(&self) -> CardOverlays<'_> {
+        let mut map: HashMap<&str, CardOverlay<'_>> = HashMap::new();
+        if let Some(local) = &self.local {
+            for mark in &local.marks {
+                map.entry(&mark.issue).or_default().add_mark(mark.kind);
+            }
+            for request in &local.show_requests {
+                map.entry(&request.issue).or_default().requested = true;
+            }
+            for note in &local.notes {
+                map.entry(&note.issue).or_default().add_note(note);
             }
         }
-        if self.requested(identifier) {
-            glyphs.push('◉');
-        }
-        if self.has_mark(identifier, MarkKind::Done) {
-            glyphs.push(mark_glyph(MarkKind::Done));
-        }
-        match glyphs.as_slice() {
-            [] => "  ".to_string(),
-            [one] => format!("{one} "),
-            [one, two] => format!("{one}{two}"),
-            [first, ..] => format!("{first}+"),
-        }
+        CardOverlays(map)
     }
 
-    /// What the attention counts count (R3, R4): a needs-you, question or
-    /// suggestion mark, or a show-request badge. Done is not a call to act.
-    pub fn needs_attention(&self, identifier: &str) -> bool {
-        self.marks_for(identifier).any(|m| m.kind != MarkKind::Done) || self.requested(identifier)
-    }
-
-    /// What `n` and `N` stop on (R13): any mark or badge, done included.
+    /// What `n` and `N` stop on: any mark or badge, done included.
     pub fn walkable(&self, identifier: &str) -> bool {
         self.marks_for(identifier).next().is_some() || self.requested(identifier)
     }
@@ -472,7 +554,7 @@ impl LinearState {
             .min_by_key(|m| m.id)
     }
 
-    /// The marks R32 lists on the open issue page.
+    /// The marks the open issue page lists.
     pub fn detail_marks(&self) -> &[Mark] {
         match (&self.detail_marks, &self.detail) {
             (Some((issue, marks)), Some(open)) if issue == open => marks,
@@ -525,8 +607,6 @@ impl LinearState {
         self.snapshot()?.record.project_id.as_deref()
     }
 
-    /// The binding of the detail's selected pane row; the first binding when
-    /// the card lists no panes.
     /// The binding `b` and `y` act on: the one the selected pane belongs to,
     /// and otherwise the issue's first. A selection on an issue row is not a
     /// binding, so those keys act on the page's own issue.
@@ -913,7 +993,7 @@ fn request_or_queue(app: &mut App) -> Vec<Effect> {
     }
 }
 
-/// `R`: a read past the daemon's cache (KTD9). Pressed during a read, it is
+/// `R`: a read past the daemon's cache. Pressed during a read, it is
 /// queued behind it rather than dropped, since the read in flight may be the
 /// cached copy `R` is there to skip.
 fn force_refresh(app: &mut App) -> Vec<Effect> {
@@ -935,13 +1015,13 @@ fn local_state_changed(app: &mut App, signals: &LocalStateSignals) -> Vec<Effect
     match signals.for_space(&state.workspace_id) {
         None => vec![],
         // The daemon already refetched Linear; its cached snapshot is the
-        // news, so this is a plain read and never a forced one (KTD5).
+        // news, so this is a plain read and never a forced one.
         Some(true) => request_or_queue(app),
         Some(false) => request_local_state(app),
     }
 }
 
-fn request_local_state(app: &mut App) -> Vec<Effect> {
+pub(super) fn request_local_state(app: &mut App) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -1057,7 +1137,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
     effects
 }
 
-/// R25: the first target the view can place, selected like an accepted
+/// The first target the view can place, selected like an accepted
 /// request and never clearing marks. Only a bound board has cards to land on.
 fn land(app: &mut App, show: &crate::ShowContext) -> Vec<Effect> {
     if !app.linear.as_ref().is_some_and(LinearState::bound) {
@@ -1089,7 +1169,7 @@ fn write_arrived(
             state.forget_marks(&ids);
             vec![]
         }
-        // KTD8: the marks stay and the next open retries.
+        // The marks stay and the next open retries.
         (LinearWrite::ClearMarks { on_open: true, .. }, Err(_)) => vec![],
         (LinearWrite::ClearMarks { .. }, Err(WriteFailure::Gone(_))) => request_local_state(app),
         (LinearWrite::ClearMarks { .. }, Err(WriteFailure::Failed(text))) => {
@@ -1143,7 +1223,7 @@ fn write_arrived(
 
 /// An accepted request's card: selected where it is drawn, switching tab and
 /// page, or opened as an issue page when no tab draws it. Neither clears its
-/// marks (R12).
+/// marks.
 fn show_target(app: &mut App, issue: &str) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
@@ -1173,7 +1253,7 @@ fn show_target(app: &mut App, issue: &str) -> Vec<Effect> {
 }
 
 /// `a` (accept) and `x` (reject): the selected card's oldest suggestion
-/// first, else the first drawn show-request, resolved now by id (R19, KTD6).
+/// first, else the first drawn show-request, resolved now by id.
 fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
     let Some(state) = app.linear.as_ref() else {
         return vec![];
@@ -1221,7 +1301,7 @@ fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
 }
 
 /// `n` / `N`: the next or previous card carrying a mark or badge, in tab,
-/// column, then lane order, wrapping (R13).
+/// column, then lane order, wrapping.
 fn walk(app: &mut App, delta: isize) {
     let Some(state) = app.linear.as_mut() else {
         return;
@@ -1390,7 +1470,7 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                     .iter()
                     .position(|row| row.status == "working")
                     .map(crate::view::IssueRowKind::Pane);
-                // R12, KTD8: the marks shown now clear, in one request; one
+                // The marks shown now clear, in one request; one
                 // set later stays. A suggestion clears only on `a` or `x`.
                 let shown: Vec<Mark> = state.marks_for(&id).cloned().collect();
                 let ids: Vec<i64> = shown
@@ -1618,8 +1698,6 @@ fn focus_selected_pane(app: &mut App, rows: &[crate::view::IssueRow]) -> Vec<Eff
     }
 }
 
-/// Enter on a sub-issue, the parent or a relation. The page being left goes on
-/// the stack with what it was showing, so Esc can put it straight back.
 /// The row the reader is opening, as the page already had it. Looked up in the
 /// open document rather than the snapshot, because that is where a linked issue
 /// the board has never seen comes from.
@@ -1635,6 +1713,8 @@ fn linked_row(state: &LinearState, identifier: &str) -> Option<LinearLinkedIssue
         .cloned()
 }
 
+/// Enter on a sub-issue, the parent or a relation. The page being left goes on
+/// the stack with what it was showing, so Esc can put it straight back.
 fn open_linked_issue(
     app: &mut App,
     identifier: &str,

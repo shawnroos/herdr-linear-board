@@ -75,8 +75,8 @@ impl Default for DaemonConfig {
 /// Settings in the root `[linear]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSettingsConfig {
-    /// How long a show-request waits for the person before it expires
-    /// (KTD3). Board-wide: an agent cannot set its own.
+    /// How long a show-request waits for the person before it expires.
+    /// Board-wide: an agent cannot set its own.
     #[serde(default = "default_show_request_ttl_secs")]
     pub show_request_ttl_secs: i64,
 }

@@ -52,8 +52,9 @@ mod switcher;
 
 pub use effect::Effect;
 pub use linear::{
-    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, LinearArrival, LinearFailure,
-    LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList, StripView, WriteFailure,
+    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays,
+    LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
+    StripView, WriteFailure,
 };
 pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
 pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};

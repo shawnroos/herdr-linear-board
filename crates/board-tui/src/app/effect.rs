@@ -140,7 +140,7 @@ pub enum Effect {
         working_directory: Option<String>,
     },
     /// Linear mode: `linear.mark.clear {ids}` in one request. `on_open` when
-    /// opening a card sent it: a failed clear then says nothing (KTD8).
+    /// opening a card sent it: a failed clear then says nothing.
     LinearMarkClear {
         ids: Vec<i64>,
         on_open: bool,

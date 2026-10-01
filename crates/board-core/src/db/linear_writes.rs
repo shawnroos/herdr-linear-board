@@ -27,7 +27,7 @@ use crate::Error;
 
 const ACTIVITY_LIST_DEFAULT: usize = 50;
 
-/// R18's default: how long an untouched show-request stays pinned.
+/// The default for how long an untouched show-request stays pinned.
 pub const SHOW_REQUEST_TTL_DEFAULT_SECS: i64 = 30 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -357,7 +357,7 @@ impl Db {
     }
 
     /// Binding the worktree a suggestion names clears every suggestion on
-    /// the issue, in every space (R20).
+    /// the issue, in every space.
     pub fn linear_bind(&self, p: &LinearBindParams) -> LsResult<LinearBound> {
         check_issue(&p.issue)?;
         let path = resolve_worktree(&p.cwd)?;
@@ -510,9 +510,9 @@ impl Db {
     fn replace_mark(&self, mark: &NewMark<'_>) -> LsResult<LinearReplace<Mark>> {
         let tx = self.conn.unchecked_transaction()?;
         let before: Vec<Mark> = self
-            .list_marks(mark.space)?
+            .space_issue_marks(mark.space, mark.issue)?
             .into_iter()
-            .filter(|m| m.issue == mark.issue && m.kind == mark.kind && m.owner() == *mark.owner)
+            .filter(|m| m.kind == mark.kind && m.owner() == *mark.owner)
             .collect();
         for old in &before {
             self.remove_mark(old.id)?;
@@ -523,7 +523,7 @@ impl Db {
     }
 
     /// Replaces the caller's own mark of the same kind on the issue; other
-    /// owners' marks stay (R9). `known_elsewhere` is the caller's own
+    /// owners' marks stay. `known_elsewhere` is the caller's own
     /// knowledge of the issue, such as a cached snapshot.
     pub fn linear_mark_set(
         &self,
@@ -556,11 +556,9 @@ impl Db {
         let owner = require_owner(&p.owner, "unmark")?;
         let tx = self.conn.unchecked_transaction()?;
         let removed: Vec<Mark> = self
-            .list_marks(&p.space)?
+            .space_issue_marks(&p.space, &p.issue)?
             .into_iter()
-            .filter(|m| {
-                m.issue == p.issue && p.kind.is_none_or(|k| k == m.kind) && m.owner() == owner
-            })
+            .filter(|m| p.kind.is_none_or(|k| k == m.kind) && m.owner() == owner)
             .collect();
         for mark in &removed {
             self.remove_mark(mark.id)?;
@@ -569,7 +567,7 @@ impl Db {
         Ok(LinearRemoved { removed })
     }
 
-    /// Clears the marks a detail screen showed when it opened (KTD8). A mark
+    /// Clears the marks a detail screen showed when it opened. A mark
     /// already gone is skipped, so a retried clear is not an error.
     pub fn linear_mark_clear_ids(&self, ids: &[i64]) -> LsResult<LinearRemoved<Mark>> {
         let tx = self.conn.unchecked_transaction()?;
@@ -630,7 +628,7 @@ impl Db {
     }
 
     /// A re-ask by the same owner for an issue it already has pending
-    /// refreshes that request instead of adding one (R31).
+    /// refreshes that request instead of adding one.
     pub fn linear_show_request(
         &self,
         p: &LinearShowRequestParams,
@@ -732,7 +730,7 @@ impl Db {
         })
     }
 
-    /// The SQLite half of `linear.session.get` (KTD11). An unknown socket, a
+    /// The SQLite half of `linear.session.get`. An unknown socket, a
     /// space with no board, or a cwd outside any git worktree reads as
     /// nothing to show, never an error: the status line prints the result.
     pub fn linear_session_get(
@@ -763,11 +761,7 @@ impl Db {
         let Some(binding) = self.worktree_binding(&worktree)? else {
             return Ok(result);
         };
-        result.marks = self
-            .list_marks(&p.space)?
-            .into_iter()
-            .filter(|m| m.issue == binding.issue)
-            .collect();
+        result.marks = self.space_issue_marks(&p.space, &binding.issue)?;
         result.binding = Some(LinearSessionBinding {
             bound_at: self.worktree_binding_since(&worktree)?,
             worktree_path: binding.worktree_path,

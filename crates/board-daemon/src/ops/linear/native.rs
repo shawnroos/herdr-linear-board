@@ -444,7 +444,7 @@ pub(in crate::ops) fn lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> 
 
 /// The column `issue` sits in on the board as this session last read it.
 /// `None` on a cold or failed cache: the status line never waits on Linear
-/// or herdr (KTD11).
+/// or herdr.
 pub(in crate::ops) fn cached_column(
     d: &Arc<Daemon>,
     socket: Option<&str>,

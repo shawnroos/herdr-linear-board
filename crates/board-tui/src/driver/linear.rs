@@ -68,8 +68,8 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
     )
 }
 
-/// The only effects the session pane executes: reads, and closing itself
-/// (KTD10). It writes nothing, not even its own pane title.
+/// The only effects the session pane executes: reads, and closing itself.
+/// It writes nothing, not even its own pane title.
 pub(super) fn session_allows(eff: &crate::app::Effect) -> bool {
     use crate::app::Effect;
     matches!(
@@ -551,16 +551,6 @@ impl Driver {
         true
     }
 
-    /// The runtime's coalesced `local_state_changed` events for one loop
-    /// iteration; the reducer decides whether any concern this space.
-    pub fn on_local_state_changed(&mut self, signals: LocalStateSignals) {
-        self.handle(Msg::LocalStateChanged(signals));
-    }
-
-    /// The runtime's coalesced subscription signals for one loop iteration.
-    /// Upstream mode: a reconnect installs a fresh request client and forces
-    /// one refetch; a change refetches. Linear mode: a board change is
-    /// ignored and a reconnect requests one snapshot.
     /// Run the oldest held local-state read synchronously and feed its
     /// arrival. Returns whether one was pending.
     pub fn deliver_pending_linear_state(&mut self) -> bool {
@@ -577,6 +567,16 @@ impl Driver {
         true
     }
 
+    /// The runtime's coalesced `local_state_changed` events for one loop
+    /// iteration; the reducer decides whether any concern this space.
+    pub fn on_local_state_changed(&mut self, signals: LocalStateSignals) {
+        self.handle(Msg::LocalStateChanged(signals));
+    }
+
+    /// The runtime's coalesced subscription signals for one loop iteration.
+    /// Upstream mode: a reconnect installs a fresh request client and forces
+    /// one refetch; a change refetches. Linear mode: a board change is
+    /// ignored and a reconnect requests one snapshot.
     pub fn on_daemon_signals(&mut self, changed: bool, reconnected: bool) {
         if matches!(self.app.mode, Mode::Linear | Mode::Session) {
             if reconnected {

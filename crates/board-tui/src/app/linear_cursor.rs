@@ -1,6 +1,6 @@
 //! The Linear board's card cursor: which tab, column, lane and card is
 //! selected, held as indices for drawing and re-found by key after every read
-//! and every tab switch (KTD6).
+//! and every tab switch.
 
 use board_core::protocol::{LinearGroup, LinearTab};
 

@@ -10,6 +10,10 @@ use serde_json::{json, Value};
 
 use crate::state::Daemon;
 
+pub(crate) fn now_secs(d: &Arc<Daemon>) -> i64 {
+    d.wall_now_ms() / 1000
+}
+
 mod bind_handoff;
 mod boards;
 mod cards;

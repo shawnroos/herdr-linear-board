@@ -1,4 +1,4 @@
-//! The session side pane (KTD10): the state and reducer for a split beside
+//! The session side pane: the state and reducer for a split beside
 //! one agent. It shows that agent's bound issue on the issue page, the lane
 //! that issue sits in, or the bind hint. It reads `linear.session.get`, the
 //! space's snapshot and local state, and the issue document; it never writes,
@@ -7,7 +7,7 @@
 use board_core::protocol::{LinearLinkedIssue, LinearSessionGetResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::linear::{order_tabs, sanitise, sanitise_local, sanitise_snapshot};
+use super::linear::{order_tabs, request_local_state, sanitise, sanitise_local, sanitise_snapshot};
 use super::nav::{nav_delta, step_clamped};
 use super::{App, Effect, LinearArrival, LinearFailure, LinearState, Msg, Screen};
 use crate::SessionIdentity;
@@ -120,7 +120,7 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 return vec![];
             };
             let mut effects = read_session(app);
-            effects.extend(read_local(app));
+            effects.extend(request_local_state(app));
             if snapshot {
                 effects.extend(read_snapshot(app));
             }
@@ -150,7 +150,7 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
 fn read_everything(app: &mut App) -> Vec<Effect> {
     let mut effects = read_session(app);
     effects.extend(read_snapshot(app));
-    effects.extend(read_local(app));
+    effects.extend(request_local_state(app));
     effects
 }
 
@@ -176,18 +176,6 @@ fn read_snapshot(app: &mut App) -> Vec<Effect> {
     }
     state.in_flight = true;
     vec![Effect::LinearSnapshot { force: false }]
-}
-
-fn read_local(app: &mut App) -> Vec<Effect> {
-    let Some(state) = app.linear.as_mut() else {
-        return vec![];
-    };
-    if state.local_in_flight {
-        state.local_queued = true;
-        return vec![];
-    }
-    state.local_in_flight = true;
-    vec![Effect::LinearStateGet]
 }
 
 fn failure_text(failure: LinearFailure) -> String {
@@ -269,7 +257,7 @@ fn local_arrived(
         state.local = Some(sanitise_local(local));
     }
     if follow_up {
-        read_local(app)
+        request_local_state(app)
     } else {
         vec![]
     }

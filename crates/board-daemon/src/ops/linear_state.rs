@@ -15,10 +15,6 @@ fn ls(error: LocalStateError) -> Error {
     local_state_error(error)
 }
 
-fn now_secs(d: &Arc<Daemon>) -> i64 {
-    d.wall_now_ms() / 1000
-}
-
 fn announce(d: &Arc<Daemon>, space: Option<String>) {
     d.emit(Event::LocalStateChanged {
         space,
@@ -26,19 +22,9 @@ fn announce(d: &Arc<Daemon>, space: Option<String>) {
     });
 }
 
-/// Once per distinct space, skipping `already` (announced elsewhere). A
-/// `None` already covers every space.
-fn announce_spaces<'a>(
-    d: &Arc<Daemon>,
-    already: Option<&Option<String>>,
-    spaces: impl IntoIterator<Item = &'a str>,
-) {
-    let skip = match already {
-        Some(None) => return,
-        Some(Some(space)) => Some(space.as_str()),
-        None => None,
-    };
-    let distinct: BTreeSet<&str> = spaces.into_iter().filter(|s| Some(*s) != skip).collect();
+/// Once per distinct space.
+fn announce_spaces<'a>(d: &Arc<Daemon>, spaces: impl IntoIterator<Item = &'a str>) {
+    let distinct: BTreeSet<&str> = spaces.into_iter().collect();
     for space in distinct {
         announce(d, Some(space.to_string()));
     }
@@ -46,6 +32,14 @@ fn announce_spaces<'a>(
 
 fn mark_spaces(marks: &[Mark]) -> impl Iterator<Item = &str> {
     marks.iter().map(|m| m.space.as_str())
+}
+
+/// The spaces of `cleared` other than `primary`, which the caller announced
+/// already. A `None` primary was announced for every space, so nothing is left.
+fn announce_cleared(d: &Arc<Daemon>, primary: Option<&str>, cleared: &[Mark]) {
+    if let Some(primary) = primary {
+        announce_spaces(d, mark_spaces(cleared).filter(|space| *space != primary));
+    }
 }
 
 /// A card listed in a reader's cached read of the space is known (KTD11).
@@ -73,7 +67,7 @@ pub(super) fn bind(d: &Arc<Daemon>, p: LinearBindParams) -> Result<Value> {
     let space = claimed_space(p.space.as_deref(), &clean_claims(&p.claims));
     let bound = d.store.lock().linear_bind(&p).map_err(ls)?;
     announce(d, space.clone());
-    announce_spaces(d, Some(&space), mark_spaces(&bound.cleared_suggestions));
+    announce_cleared(d, space.as_deref(), &bound.cleared_suggestions);
     Ok(json!(bound))
 }
 
@@ -116,28 +110,25 @@ pub(super) fn mark_set(d: &Arc<Daemon>, p: LinearMarkSetParams) -> Result<Value>
 }
 
 /// `{id}` is the single clear; `{ids}` the bulk clear a detail screen sends
-/// for the marks it showed (KTD8).
+/// for the marks it showed.
 pub(super) fn mark_clear(d: &Arc<Daemon>, p: LinearMarkClearParams) -> Result<Value> {
-    match (p.id, p.ids) {
-        (Some(id), None) => {
+    match p.target()? {
+        MarkClearTarget::One(id) => {
             let change = d.store.lock().linear_mark_clear(id).map_err(ls)?;
             announce(d, change.before.as_ref().map(|m| m.space.clone()));
             Ok(json!(change))
         }
-        (None, Some(ids)) => {
+        MarkClearTarget::Many(ids) => {
             let removed = d.store.lock().linear_mark_clear_ids(&ids).map_err(ls)?;
-            announce_spaces(d, None, mark_spaces(&removed.removed));
+            announce_spaces(d, mark_spaces(&removed.removed));
             Ok(json!(removed))
         }
-        _ => Err(Error::BadRequest(
-            "linear.mark.clear takes exactly one of `id` or `ids`".into(),
-        )),
     }
 }
 
 pub(super) fn mark_unmark(d: &Arc<Daemon>, p: LinearMarkUnmarkParams) -> Result<Value> {
     let removed = d.store.lock().linear_mark_unmark(&p).map_err(ls)?;
-    announce_spaces(d, None, mark_spaces(&removed.removed));
+    announce_spaces(d, mark_spaces(&removed.removed));
     Ok(json!(removed))
 }
 
@@ -196,7 +187,7 @@ pub(super) fn show_withdraw(d: &Arc<Daemon>, p: LinearShowWithdrawParams) -> Res
 }
 
 /// The SQLite half plus the column from the snapshot already cached for the
-/// space; never a Linear or herdr call (KTD11).
+/// space; never a Linear or herdr call.
 pub(super) fn session_get(d: &Arc<Daemon>, p: LinearSessionGetParams) -> Result<Value> {
     let mut result = d.store.lock().linear_session_get(&p, now_secs(d))?;
     if let Some(binding) = &result.binding {
@@ -216,7 +207,7 @@ pub(super) fn activity_record(d: &Arc<Daemon>, p: LinearActivityRecordParams) ->
     if !activity_recorded(d, &clean_claims(&p.claims), space.as_deref()) {
         announce(d, space.clone());
     }
-    announce_spaces(d, Some(&space), mark_spaces(&result.cleared_suggestions));
+    announce_cleared(d, space.as_deref(), &result.cleared_suggestions);
     Ok(json!(result))
 }
 

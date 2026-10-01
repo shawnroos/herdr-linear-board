@@ -1,4 +1,4 @@
-//! The session side pane (U11, KTD10): one agent's bound issue, its lane list
+//! The session side pane: one agent's bound issue, its lane list
 //! or the bind hint, read through `linear.session.get` and never written.
 
 use std::sync::atomic::{AtomicBool, Ordering};

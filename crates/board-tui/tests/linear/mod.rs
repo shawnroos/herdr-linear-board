@@ -651,8 +651,6 @@ fn board_changed_sends_nothing_local_state_reads_state_and_reconnect_sends_one_s
     );
 }
 
-// -- live local state (R22, KTD5) --------------------------------------------
-
 /// One event-loop tick's `local_state_changed` events.
 fn local(events: &[(Option<&str>, bool)]) -> LocalStateSignals {
     let mut signals = LocalStateSignals::default();
@@ -1472,8 +1470,6 @@ fn a_body_36_cells_wide_draws_one_column_and_72_draws_two() {
         assert_eq!(top.matches('┌').count(), columns, "{width}:\n{frame}");
     }
 }
-
-// -- paged narrow layout -----------------------------------------------------
 
 /// The top border of every drawn column: the first row holding one.
 fn column_tops(frame: &str) -> String {
@@ -4151,8 +4147,6 @@ fn empty_columns_move_to_the_end_in_view_order() {
         ["st-backlog", "st-todo", "st-prog", "st-devdone", "st-done"]
     );
 }
-
-// -- tabs, paged columns, lanes and the card cursor (U8) ---------------------
 
 /// Two tabs. Frontend: Todo 4 (lanes Alpha 3, Beta 1), In Progress 2, In
 /// Review 1 (Alpha empty there), Done 1. Backend: Todo 1, In Progress 1, both

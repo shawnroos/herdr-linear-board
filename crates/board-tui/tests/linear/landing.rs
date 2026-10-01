@@ -1,6 +1,6 @@
-//! Edge states and entry points: `R` forcing a read past the daemon's cache
-//! (R23, AE8), the not-imported message (R24), and a board opened by an agent
-//! landing on the context it was given (R25).
+//! Edge states and entry points: `R` forcing a read past the daemon's cache,
+//! the not-imported message, and a board opened by an agent landing on the
+//! context it was given.
 
 use super::*;
 

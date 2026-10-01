@@ -85,7 +85,6 @@ impl Driver {
         start: LinearStart,
         defer_snapshots: bool,
     ) -> Driver {
-        let (tx, rx) = linear::arrival_channel();
         let mut state = LinearState::new(
             start.workspace_id,
             start.board_version,
@@ -93,19 +92,8 @@ impl Driver {
         );
         state.herdr_keys = start.herdr_keys;
         state.landing = Some(start.show);
-        let mut driver = Driver {
-            app: App::linear(state, start.origin.clone()),
-            client,
-            editor,
-            origin: start.origin,
-            needs_full_redraw: false,
-            platform,
-            linear_tx: Some(tx),
-            linear_rx: Some(rx),
-            deferred_linear: defer_snapshots.then(Default::default),
-        };
-        driver.handle(Msg::LinearRefresh);
-        driver
+        let app = App::linear(state, start.origin.clone());
+        Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
     }
 
     /// The session side pane beside the agent `identity` names. Its first
@@ -116,26 +104,45 @@ impl Driver {
         start: LinearStart,
         identity: crate::SessionIdentity,
     ) -> Driver {
-        let (tx, rx) = linear::arrival_channel();
         let state = LinearState::new(
             start.workspace_id,
             start.board_version,
             start.daemon_version,
         );
-        let mut driver = Driver {
-            app: App::session(
-                state,
-                crate::app::SessionState::new(identity),
-                start.origin.clone(),
-            ),
+        let app = App::session(
+            state,
+            crate::app::SessionState::new(identity),
+            start.origin.clone(),
+        );
+        Driver::start_linear(
+            app,
             client,
-            editor: Box::new(RealEditor),
-            origin: start.origin,
+            Box::new(RealEditor),
+            platform,
+            start.origin,
+            false,
+        )
+    }
+
+    fn start_linear(
+        app: App,
+        client: Box<dyn BoardClient>,
+        editor: Box<dyn EditorLauncher>,
+        platform: Box<dyn PlatformActions>,
+        origin: OriginContext,
+        defer_snapshots: bool,
+    ) -> Driver {
+        let (tx, rx) = linear::arrival_channel();
+        let mut driver = Driver {
+            app,
+            client,
+            editor,
+            origin,
             needs_full_redraw: false,
             platform,
             linear_tx: Some(tx),
             linear_rx: Some(rx),
-            deferred_linear: None,
+            deferred_linear: defer_snapshots.then(Default::default),
         };
         driver.handle(Msg::LinearRefresh);
         driver

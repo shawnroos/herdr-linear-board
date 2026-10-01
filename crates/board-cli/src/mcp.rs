@@ -21,6 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::commands::{canonical_text, env_text};
 use crate::daemon::connect_or_start;
 
 /// Must not contain "linear": the work plugin's PostToolUse matcher is
@@ -54,17 +55,19 @@ struct Caller {
 
 impl Caller {
     fn from_environment() -> Caller {
+        let herdr_socket = env_text("HERDR_SOCKET_PATH");
+        let herdr_pane_id = env_text("HERDR_PANE_ID");
         Caller {
             claims: ActivityClaims {
-                herdr_socket: env_text("HERDR_SOCKET_PATH"),
-                herdr_pane_id: env_text("HERDR_PANE_ID"),
+                herdr_socket: herdr_socket.clone(),
+                herdr_pane_id: herdr_pane_id.clone(),
                 herdr_workspace_id: env_text("HERDR_WORKSPACE_ID"),
                 card_id: env_id("BOARD_CARD_ID"),
                 run_id: env_id("BOARD_RUN_ID"),
             },
             owner: LinearOwner {
-                herdr_socket: env_text("HERDR_SOCKET_PATH"),
-                herdr_pane_id: env_text("HERDR_PANE_ID"),
+                herdr_socket,
+                herdr_pane_id,
                 claude_session_id: env_text("CLAUDE_CODE_SESSION_ID"),
             },
         }
@@ -91,10 +94,6 @@ impl Caller {
     fn origin_pane(&self) -> String {
         self.claims.herdr_pane_id.clone().unwrap_or_default()
     }
-}
-
-fn env_text(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// An empty or malformed id is no claim: a rescued pane carries an empty
@@ -468,13 +467,7 @@ impl BoardMcp {
         let session = args.session.unwrap_or(false);
         // The session pane runs in the plugin root, so it reads the agent's
         // worktree from here; canonical, as the status line sends it.
-        let session_cwd = session.then(|| {
-            let cwd = PathBuf::from(cwd_or_current(None));
-            cwd.canonicalize()
-                .unwrap_or(cwd)
-                .to_string_lossy()
-                .into_owned()
-        });
+        let session_cwd = session.then(|| canonical_text(PathBuf::from(cwd_or_current(None))));
         let params = BoardPaneOpenParams {
             context: BoardPaneContext {
                 space: args.space,
@@ -522,7 +515,7 @@ impl ServerHandler for BoardMcp {
     }
 }
 
-/// Ownership compares all three owner parts (KTD2); a caller with no claims
+/// Ownership compares all three owner parts; a caller with no claims
 /// owns nothing, matching the daemon's refusal of an anonymous unmark.
 fn state_for(caller: &LinearOwner, state: LinearState) -> Result<Value> {
     let caller = clean_owner(caller);

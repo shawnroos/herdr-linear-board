@@ -358,7 +358,7 @@ pub enum Event {
     LocalStateChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         space: Option<String>,
-        /// The daemon refetched the space's snapshot (KTD5): a reader answers
+        /// The daemon refetched the space's snapshot: a reader answers
         /// with one cached `linear.snapshot`, not a forced one.
         #[serde(
             default,
@@ -1056,7 +1056,7 @@ pub struct PaneFocusResult {
 
 /// What an agent-opened board shows: a space, an issue, a card, or a mix.
 /// The daemon shape-checks every field and requires at least one. `session`
-/// asks for the session side pane of the calling agent instead (KTD10).
+/// asks for the session side pane of the calling agent instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardPaneContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1065,7 +1065,7 @@ pub struct BoardPaneContext {
     pub issue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card: Option<i64>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub session: bool,
 }
 
@@ -1140,7 +1140,7 @@ pub struct LinearSnapshotParams {
     /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_root: Option<String>,
-    /// Skip the daemon's read cache (KTD9). An older daemon ignores it.
+    /// Skip the daemon's read cache. An older daemon ignores it.
     #[serde(
         default,
         skip_serializing_if = "is_false",
@@ -1656,7 +1656,7 @@ pub struct LinearBound {
 }
 
 /// `linear.mark.clear`: one `id` answers a [`LinearChange`]; `ids` answers
-/// a [`LinearRemoved`] and skips ids already gone (KTD8).
+/// a [`LinearRemoved`] and skips ids already gone.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearMarkClearParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1665,20 +1665,31 @@ pub struct LinearMarkClearParams {
     pub ids: Option<Vec<i64>>,
 }
 
+/// What a valid [`LinearMarkClearParams`] clears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkClearTarget {
+    One(i64),
+    Many(Vec<i64>),
+}
+
+impl LinearMarkClearParams {
+    pub fn target(self) -> crate::Result<MarkClearTarget> {
+        match (self.id, self.ids) {
+            (Some(id), None) => Ok(MarkClearTarget::One(id)),
+            (None, Some(ids)) => Ok(MarkClearTarget::Many(ids)),
+            _ => Err(crate::Error::BadRequest(
+                "linear.mark.clear takes exactly one of `id` or `ids`".into(),
+            )),
+        }
+    }
+}
+
 /// Rows a write removed; empty when there was nothing to remove.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub struct LinearRemoved<T> {
-    #[serde(default = "Vec::new", deserialize_with = "null_as_vec")]
+    #[serde(default = "Vec::new", deserialize_with = "null_as_default")]
     pub removed: Vec<T>,
-}
-
-fn null_as_vec<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 /// `linear.mark.unmark`: remove the caller's own marks on the issue, of
@@ -1704,7 +1715,7 @@ pub struct LinearShowWithdrawParams {
 }
 
 /// `linear.session.get`: what the status line and side pane show for one
-/// agent session (KTD11). `cwd` is any path inside the agent's worktree.
+/// agent session. `cwd` is any path inside the agent's worktree.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSessionGetParams {
     pub space: String,
@@ -1724,7 +1735,7 @@ pub struct LinearSessionBinding {
     pub worktree_path: String,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub issue: String,
-    /// When the worktree was bound to the issue: the run time's start (R26).
+    /// When the worktree was bound to the issue: the run time's start.
     #[serde(default)]
     pub bound_at: Option<String>,
 }
@@ -1742,7 +1753,7 @@ pub struct LinearSessionGetResult {
     pub binding: Option<LinearSessionBinding>,
     #[serde(default)]
     pub column: Option<String>,
-    #[serde(default, deserialize_with = "null_as_vec")]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub marks: Vec<Mark>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub pending_requests: u32,
