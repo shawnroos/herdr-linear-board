@@ -1,12 +1,15 @@
 # Decision: the board owns the work store
 
-**Status:** Proposed. Nothing described here is built.
-**Date:** 2026-09-28
-**Reopens:** [design.md](design.md) §9 item 7 ("No MCP — CLI only"), the "no MCP needed" line in §10, and the
-"never writes … a plugin record or a SQLite row" contract in §13.
+**Status:** Accepted, and built.
+**Date:** 2026-09-28 (proposed); 2026-10-01 (accepted, with the amendments below)
+**Amends:** [design.md](design.md) §9 item 7 ("No MCP — CLI only"), the "no MCP needed" line in
+§10, and the "never writes … a plugin record or a SQLite row" contract in §13. Those sections now
+describe what shipped.
 
-This record argues and decides. It does not plan the migration; a separate plan does that. The
-open questions that plan must answer are at the end.
+This record argues and decides. The migration plan
+([plans/2026-09-29-2127-feat-board-owns-the-store-migration-plan.md](plans/2026-09-29-2127-feat-board-owns-the-store-migration-plan.md))
+carried it out and answered the open questions; the answers are at the end, and
+[Amendments](#amendments-2026-10-01) records where the decision changed on the way.
 
 ## Context
 
@@ -57,7 +60,8 @@ MCP, and the board learns about it (see "Watching Linear MCP").
 
 boardd becomes the only owner and the only writer of the work store. The store holds local state
 only: bindings, scopes, layouts, and the grouping config. It is not a copy of Linear. It becomes
-rows in boardd's SQLite database (today schema v15, `schema.sql`). Nothing else writes those rows.
+rows in boardd's SQLite database (schema v16 added them, `schema.sql`). Nothing else writes those
+rows.
 
 The board has three clients. None of them owns data:
 
@@ -86,7 +90,8 @@ the board's, through GraphQL, for display.
 
 The board adopts the plugin's grouping model: 4 levels by 8 fields, per-space overrides, and a
 filter. A Linear custom view becomes the fallback for a space with no grouping configured. It
-stops being the source.
+stops being the source. The board reads the hierarchy as a display model (see
+[Amendments](#amendments-2026-10-01)): tabs, columns and swimlanes, like Linear's own board view.
 
 ### Watching Linear MCP
 
@@ -95,9 +100,9 @@ board watches Linear MCP through a Claude Code PostToolUse hook, not through an 
 
 The plugin already has this hook. `plugins/work/hooks/board-behind.sh` (shrimpshack) fires after any
 Linear MCP tool, treats every tool not named `get_`, `list_`, `search_` or `extract_` as a write,
-and marks the board behind. Under this decision the hook stays thin: it passes the tool name, its
-input, its result and the session's working directory to boardd with one `board` CLI call, and
-exits 0 on every failure.
+and marks the board behind. Under this decision the hook stays thin: it pipes the hook payload
+(tool name, input, result and the session's working directory) to `board linear report`, which
+sends one request to boardd and exits 0 on every failure.
 
 With that report, boardd can:
 
@@ -205,26 +210,32 @@ New fields are added, existing fields are never re-typed, and the version is bum
 client against a newer daemon sees a narrower result instead of failing to parse. This applies to
 boardd's own protocol ([protocol.md](protocol.md), v1).
 
-The Linear document `schema` field stops being a cross-process contract once boardd reads Linear
-itself; it matters only while the old plugin and the new board overlap. If that window needs a
-schema bump, the two hard `schema != 1` rejects (`crates/board-daemon/src/ops/linear.rs:213` and
-`:243`) must change together
-([solution note](solutions/integration-issues/a-pinned-version-check-has-a-twin.md)). Any new
-field that crosses a process boundary needs `Option<T>` or `null_as_empty`
-([solution note](solutions/integration-issues/serde-default-rejects-explicit-null.md)). Today
-`LinearGroup` and the snapshot types have neither.
+The Linear document `schema` field stopped being a cross-process contract once boardd read Linear
+itself: boardd builds the document, so no plugin script and no version pin sits between them. Any
+new field that crosses a process boundary needs `Option<T>` or `null_as_empty`
+([solution note](solutions/integration-issues/serde-default-rejects-explicit-null.md)); the
+snapshot's new `tabs`, `lanes` and `message` fields follow that rule, so an older client reads a
+narrower document.
 
 ## What this retires
 
 - `plugins/work/bin/work-snapshot.sh` and its hardcoded mapping, and the four other bin scripts
-  boardd runs (`work-spaces.sh`, `work-projects.sh`, `work-views.sh`, `work-issue.sh`).
+  boardd ran (`work-spaces.sh`, `work-projects.sh`, `work-views.sh`, `work-issue.sh`), with the
+  plugin-root setting that pointed boardd at them (`[daemon] work_plugin_root` and
+  `BOARD_WORK_PLUGIN_ROOT` are now accepted and ignored with one warning).
+- The bind handoff: the board no longer starts the plugin's `/work:bind` skill in a new tab. The
+  person binds a space from the board's pickers, and agents bind their worktree through
+  `board mcp`.
+- The plugin's herdr sync: `board-sync.sh`, `board-herdr.sh` and `board-plan.sh` stop running when
+  the thin plugin ships. The board does not take them over (see
+  [Amendments](#amendments-2026-10-01)).
 - The plugin's own Linear write path: its create, update, description and document commands, and
   the guards around them (shadow mode, `write_allowed`, per-directory write consent). Agents write
   through Linear MCP instead.
 - The propose/confirm nonce for bindings.
-- The cross-repo fixture contract: the vendored documents under
-  `crates/board-core/tests/fixtures/linear-snapshot/` and `linear-issue/`, and the sha256 `VERSION`
-  pin that both repos assert ([design.md](design.md) §13, "Fixture contract").
+- The cross-repo fixture contract: the sha256 `VERSION` pin that both repos asserted over the
+  vendored documents under `crates/board-core/tests/fixtures/linear-snapshot/` and `linear-issue/`.
+  The documents stay as parse fixtures ([design.md](design.md) §13, "Fixtures").
 - Display parity as a wire problem. The TUI and Claude read the same rows at the same moment.
 - The four record engines and both locks in `~/.claude/work`.
 - The plugin's bash-only test gates, including the library-sourcing gate (shrimpshack PR #94).
@@ -257,6 +268,8 @@ field that crosses a process boundary needs `Option<T>` or `null_as_empty`
   logic for no benefit over the database boardd already owns.
 - **The plugin and the board both writing the store.** Two writers on one store is the failure mode
   this record exists to design out.
+- **The board taking over the plugin's herdr pane sync.** It would move panes the board did not
+  create. Deferred, not dropped (see [Amendments](#amendments-2026-10-01)).
 - **TUI confirmation for bindings.** Costs a round-trip to the TUI to guard local, undoable links;
   the tool permission prompt already asks the person when they want to be asked.
 - **Agent tools that move the person's view** (focus a pane, open the board as an overlay, popup or
@@ -268,23 +281,32 @@ field that crosses a process boundary needs `Option<T>` or `null_as_empty`
 ## Related
 
 A small board status pane built on Claude Code function hooks (current card, run elapsed, agents
-running, show-requests and "needs you" marks) is a separate proposal. It overlaps this record in
-one place: the marks and show-requests agents send are what such a pane would show.
+running, show-requests and "needs you" marks) was a separate proposal. Part of it shipped as the
+session side pane (`open_board {session: true}`) and `board linear status-line`, which show the
+marks and show-requests this record introduced.
 
-## Open questions for the migration plan
+## Amendments (2026-10-01)
 
-- Where user-authored grouping config lives: rows in SQLite, or a section of the board's existing
-  TOML config (`RootConfig` in `crates/board-core/src/config.rs`).
-- Which package ships the Linear MCP hook once the plugin shrinks: the plugin, the board's optional
-  skill, or a small Claude Code plugin of its own.
-- Whether linking by observation happens automatically, or is offered as a suggestion the agent or
-  person accepts.
-- Whether a hook that runs before a Linear write can fill in the bound project or team on a new
-  ticket. That depends on whether Claude Code lets a PreToolUse hook change a tool's input, which is
-  not yet verified.
-- Cut-over: whether the plugin reads through the board during a transition, or the move ships in one
-  release.
-- The plugin's herdr fakes disagree: `tests/fixtures/fake-herdr.sh` reports herdr 0.8.2 / protocol
-  20 in its status output but 0.9.0 / protocol 22 in its canned snapshot, while
-  `tests/fixtures/fake-herdr-socket.py` pins 0.9.0 / protocol 22. Which ported tests inherit which,
-  given boardd accepts only 0.9.0 / protocol 22.
+- **The hierarchy is a display model.** The plugin's four levels placed tickets into real herdr
+  tabs and panes. The board renders them instead the way Linear's board view does: the tab level
+  is the tab strip, the column level is columns, and the row level is swimlanes across columns. A
+  level set to `ticket` or `sub-ticket` shows ungrouped cards at that level. The board moves no
+  herdr pane.
+- **Automatic pane sync is a separate, later decision.** If it comes back, it is limited to panes
+  the board created. Until then, nothing moves panes: the plugin's `board-sync.sh`,
+  `board-herdr.sh` and `board-plan.sh` stop running when the thin plugin ships, and the board has
+  no replacement.
+- **Space binding moved to the board.** The board binds a space to a project or view itself
+  (`linear.space.bind`), from its pickers. The bind handoff that started the plugin's bind skill
+  in a new tab is retired.
+
+## Answers to the open questions
+
+| Question | Answer |
+|---|---|
+| Where grouping config lives | Rows in SQLite, so a bad config never stops the daemon. A write is validated and refused with a named reason. Today it is written by `board import work-store` (from `board.json`) and the `linear.grouping.set` / `preview` socket methods; there is no CLI verb yet. |
+| Which package ships the hook | The thin work plugin keeps shipping its hook, and its `board-behind` hook calls `board linear report`. The board ships the verb and documents the hook for users without the plugin ([install.md](install.md) → Linear mode and agent tools). |
+| Link automatically or suggest | Link automatically only when the reporting session is known (its space has a binding) and its worktree is unbound. Otherwise the board leaves a suggestion mark for the person or agent to accept. |
+| PreToolUse fill-in | Claude Code documents changing a tool's input from a PreToolUse hook. Adopting it to fill the bound project or team into a new ticket is a follow-up. |
+| Cut-over | One board release with the import, then the thin plugin release, in this order: upgrade the board and import; update the plugin; restart Claude sessions; import again. The import is insert-only, so the second run adds only what the old plugin wrote in between ([install.md](install.md) → Moving from the work plugin). |
+| Which herdr fake ported tests use | boardd's own fake Herdr (0.9.0 / protocol 22). The plugin's fakes are not ported. |

@@ -891,7 +891,7 @@ mode, terminal capture, or telemetry upload.
 5. boardd lifecycle: `board tui` auto-starts the daemon if absent; daemon outlives the overlay (runs continue with the board closed; `herdr notification show` covers "done while closed").
 
 6. **Independent canonical-path boards.** Git-root/CWD chooses the pipeline board; `Global` preserves legacy data. The agent's runtime session/workspace remains explicit card configuration and is never inferred from board scope.
-7. **No MCP — CLI only.** Agents interact with the board exclusively through the `board` CLI. Reopened by [board-owns-the-store.md](board-owns-the-store.md) (proposed, not built).
+7. **No MCP — CLI only.** Kanban card agents interact with the board through the `board` CLI. Amended by [board-owns-the-store.md](board-owns-the-store.md) (accepted, built): for Linear mode, agents also have `board mcp`, a stdio MCP server that links their work to Linear issues, marks cards and opens boards beside their own pane.
 
 ## 10. The herdr-board skill
 
@@ -900,7 +900,7 @@ The repo ships a **skill** (`skill/SKILL.md`, optionally installed into an agent
 Two consumers:
 
 - **Dispatched card agents**: the column `system_prompt` stays short ("you are in the PLAN stage…, finish with `board done`") because the skill carries the full CLI knowledge; `$BOARD_CARD_ID`/`$BOARD_RUN_ID` arrive via env at spawn.
-- **Any interactive agent session** (e.g. the user's main Claude Code): can create/inspect/move cards conversationally — "create a card to fix X in space w4, put it in Plan" — no MCP needed. A proposal to add an MCP door beside the CLI is in [board-owns-the-store.md](board-owns-the-store.md).
+- **Any interactive agent session** (e.g. the user's main Claude Code): can create/inspect/move cards conversationally — "create a card to fix X in space w4, put it in Plan" — no MCP needed for the kanban. Linear-mode agents use the `board mcp` door beside the CLI ([board-owns-the-store.md](board-owns-the-store.md); tools in the skill's "Agent tools" section).
 
 Permissions: allowlist `Bash(board *)` (or per-subcommand) so card agents can comment/done without prompts.
 
@@ -930,15 +930,25 @@ Isolation rules for level 3–4: `BOARD_DB=/tmp/…` + dedicated daemon socket p
 
 ## 13. Linear mode
 
-Linear mode is the board rendered for one herdr space that the work plugin (`work@shrimpshack`)
-has bound to a Linear project. It is a view over the plugin's snapshot document; the upstream
-kanban, its SQLite rows, and its dispatch engine are not involved. The board never moves a card,
-edits an issue, or writes a Linear object or a plugin record. Its only board writes are the
-person's answers to agents: clearing the marks a card's detail showed, accepting or rejecting a
-show-request, and binding a worktree (see "Agent marks"). Its herdr writes are its own pane title
-and, when a person starts a bind, one new `bind` tab running Claude.
-[board-owns-the-store.md](board-owns-the-store.md) proposes reversing this: boardd would own the
-plugin's store and write it. That is a proposal; this section describes what ships.
+Linear mode is the board rendered for one herdr space that is bound to a Linear project. It shows
+that project's issues grouped the way the person configured, with the worktrees, tabs and live
+panes that belong to each issue. The upstream kanban, its card rows and its dispatch engine are
+not involved. The board never moves a card, edits an issue, or writes a Linear object: agents
+write Linear through Linear's own MCP server. boardd owns the local state around Linear —
+space and worktree bindings, session scopes, scope repositories, the grouping config, marks,
+notes, show-requests and Linear activity — in SQLite, and is the only writer of those rows (see
+[board-owns-the-store.md](board-owns-the-store.md)). The TUI's own writes are the person's
+answers to agents (clearing the marks a card's detail showed, accepting or rejecting a
+show-request, accepting a suggestion), binding a space to a project or view, and binding a
+worktree. Its only herdr writes are its own pane title and focusing a pane the person chose.
+
+**Local state and the import.** Bindings and the grouping config used to live in the work
+plugin's store, `~/.claude/work`. `board import work-store [--dry-run]` copies them into the
+board, once or again later: it is insert-only, so a row the board already holds is reported as
+skipped and never overwritten, and it never writes the store. boardd reads the store from its own
+environment (`HERDR_LINEAR_STORE_DIR`, else `~/.claude/work`). Until the first import, an unbound
+space whose store exists says so and names the command. Install and cut-over steps are in
+[install.md](install.md) → Linear mode and agent tools.
 
 **Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
 `workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
@@ -948,17 +958,32 @@ upstream board runs unchanged.
 **Mode decision.** `board tui` decides the mode before any store write. With a space id the CLI
 opens the daemon client and starts the TUI in Linear mode; the upstream path, which persists a
 project row for the cwd before the terminal exists, is never entered. A Linear-mode board holds no
-project, board, or card id, so the daemon has no row for it and no mutating method can name one.
+project, board, or card id, so no kanban method can name one.
 
-**The read path.** `linear.snapshot {workspace_id, origin_socket?}` is the whole board read:
+**The read path.** `linear.snapshot {workspace_id, origin_socket?, force?}` is the whole board
+read:
 
 ```text
 board tui / board linear snapshot [id]
   → boardd  linear.snapshot
-      → plugin root / bin/work-snapshot.sh <id>      (document on stdout, per-section status)
-      → herdr  session.snapshot on origin_socket       (best effort: pane_status per named pane)
-  ← document + pane_status
+      → SQLite   space binding, worktree bindings, grouping config
+      → Linear   GraphQL, read-only, cached per space and shared by every reader
+      → herdr    session.snapshot on origin_socket   (best effort: tabs, panes, pane_status)
+  ← document: tabs, columns, lanes, issues, bindings, pane_status
 ```
+
+boardd reads Linear itself, with the key from the macOS Keychain (then `LINEAR_API_KEY` in its
+own environment, then `~/.secrets`). The grouping engine in `board-core` turns the issues into
+the board view. A grouping config has four levels — space, tab, column and row — each grouped by a
+field (team, project, milestone, cycle, assignee, state, priority, parent, or a label group), plus
+a filter; a level set to `ticket` or `sub-ticket`, or left out, does not split the board at that
+level. A space override replaces the global mapping for that space; nothing merges. The
+hierarchy is a display model, like Linear's own board view: tabs in the strip, columns, and
+swimlane rows across columns. It never moves a herdr pane. With no grouping config, the board
+keeps the earlier behaviour: the bound custom view's grouping, else the team's workflow states.
+The Linear read is cached per space for 15 s and shared, so ten open boards cost one fetch. When
+Linear cannot be read, the last good read stays on screen marked stale. The wire contract is
+[protocol.md](protocol.md) → linear.
 
 **The issue page.** Opening a card opens a page, not an overlay: it replaces the board at every
 width and is laid out like Linear's own issue page — title, description, sub-issues and Activity in
@@ -972,67 +997,43 @@ Enter on a card
   → the page draws at once from the snapshot row   (identifier, title, status, priority,
   →                                                 assignee, labels, bindings)
   → boardd  linear.issue {issue}
-      → plugin root / bin/work-issue.sh <id>        (one document, per-section status)
+      → Linear  one GraphQL request
   ← description, sub-issues, parent, relations, comments, history, project,
     milestone, cycle, estimate, due date
 ```
 
-Four properties of that read are load-bearing:
+Three properties of that read are load-bearing:
 
-- **It is ONE Linear call.** The script asks each paged connection for a single page and names what
+- **It is ONE Linear call.** The read asks each paged connection for a single page and names what
   did not fit in `truncated` rather than draining it, so an issue with a thousand comments opens as
-  fast as an empty one. The daemon's deadline for the op is sized for that one call.
+  fast as an empty one.
 - **A result is applied only to the issue still on screen.** `Enter` on a linked issue opens it in
   place, so overlapping reads are the normal case; a read that lands after the reader has moved on
   is dropped rather than painted under another issue's title.
 - **Nothing is cached between opens**, with one exception: a back step re-renders what that page
   last showed while its own fresh read runs, so `Esc` is a step back rather than a reload.
-- **"This plugin cannot do this read" is its own protocol code.** A plugin that ships no
-  `bin/work-issue.sh` answers `7`, not the `6` every other plugin-side failure uses, because the
-  two have opposite remedies: `6` is worth retrying and `7` is fixed only by updating the plugin. A
-  page that could not tell them apart would offer a retry that can never succeed.
 
-The document's contract is `plugins/work/docs/issue.md` in the work plugin. This repo vendors that
-script's own output as fixtures under `crates/board-core/tests/fixtures/linear-issue/`, pinned by
-sha256 in `VERSION`, so the contract cannot drift on one side without a failing test on the other.
-
-The plugin root is resolved on every request, in order: the caller's `BOARD_WORK_PLUGIN_ROOT`
-(sent as `plugin_root`), the daemon's, `[daemon] work_plugin_root` read from the board config at
-that moment, then the `user`-scope `installPath` of `work@shrimpshack` in
-`~/.claude/plugins/installed_plugins.json`. None of them needs a daemon restart to take effect. The daemon reads `.claude-plugin/plugin.json` at that
-root and refuses a version below `0.5.0`, naming both versions. The script runs under a bounded
-deadline with an environment built from scratch (`HOME`, `PATH`, the origin socket as
-`HERDR_SOCKET_PATH`, every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, and the retry and
-timeout knobs the daemon sets, including the bounds on the plugin's herdr and keychain reads);
-neither its argv nor its environment is logged, and its stderr is not shown anywhere, because a
-plugin tracing its own run would print the Linear credential. The script runs in its own process
-group and is stopped with SIGTERM (so its temp directory is removed), then SIGKILL, at the
-deadline, when the daemon stops, or when the asking client disconnects. Exit 0 with a document is
-the only success; each section of the document carries its own status and a partial document
-renders as partial. Pane status is a second read after the script, on the origin socket; with no
-origin socket or any failure every status is `unknown`. Every
-plugin-side failure is protocol error `6`, which the CLI passes through as exit code `6`.
+A Linear failure, no such issue included, comes back as a document with `status: "unavailable"`,
+not as an error, so the page can say why and offer a retry. An older daemon that ran the plugin's
+scripts could answer protocol code `7` ("this plugin cannot do this read"); the page still treats
+that code as not retryable.
 
 `board linear snapshot [workspace-id] [--json]` is the same read from the command line and prints
-the document as JSON either way; it exists so the CLI-to-daemon-to-script path is provable
-without a terminal.
+the document as JSON either way. With no positional it reads the space from
+`HERDR_WORKSPACE_ID`, before it connects to the daemon, so a missing id never starts one.
+`board linear issue <ID>` is the issue read.
 
-`board linear snapshot` with no positional reads the space from `HERDR_WORKSPACE_ID`, before it
-connects to the daemon, so a missing id never starts one.
-
-**Lists.** `linear.list {kind, id?}` runs one of three more plugin scripts through the same runner:
-`bin/work-spaces.sh` (every herdr space with its binding state), `bin/work-projects.sh` (the Linear
-projects the person is a member of) and `bin/work-views.sh <project id>` (one project's views).
-The runner shares the snapshot's root resolution, version floor, environment, stderr rule and stop
-rules, with its own deadline. The answer is the plugin's envelope `{status, message, rows}`, with
-`status` one of `ok`, `unavailable`, `partial` or `unknown`; the daemon strips control and format
-characters from every string before it answers. A plugin-side failure is protocol error `6`, as
-for the snapshot. `board linear space list`, `board linear project list` and
-`board linear view list <project id>` are the same reads from the command line.
+**Lists.** `linear.list {kind, id?}` answers three lists: `spaces` (every herdr space of the
+caller's session with its binding state), `projects` (the Linear projects the person is a member
+of) and `views` (one project's custom views). The answer is an envelope `{status, message, rows}`,
+with `status` one of `ok`, `unavailable`, `partial` or `unknown`; the daemon strips control and
+format characters from every string before it answers. `board linear space list`,
+`board linear project list` and `board linear view list <project id>` are the same reads from the
+command line.
 
 **Effects.** In Linear mode the driver executes only refetch, the snapshot request, the
 local-state read, a list read, the issue read, pane focus, opening the issue URL, copying the
-worktree path, setting the Linear pane title, the bind handoff, `linear.bind`, clearing marks,
+worktree path, setting the Linear pane title, `linear.space.bind`, `linear.bind`, clearing marks,
 accepting or dismissing a show-request, and quit. The session side pane executes a smaller set:
 the session, snapshot, local-state and issue reads, and quit. Every other effect is refused with a toast before a request is built. A
 test classifies every effect variant as allowed or refused, so a new variant must be placed before
@@ -1047,9 +1048,9 @@ characters again at the sink, for every caller. `scripts/open-board.sh` matches 
 the launcher key toggles a Linear board the way it toggles a kanban. Outside a herdr plugin pane
 no title is sent, and a failed rename is dropped without a toast.
 
-**Column order.** The board sorts the plugin's groups itself rather than trusting a view's saved
-column order: columns that hold issues come first, and within each half the state type the plugin
-reports (`kind`) puts them in Linear's own progression — triage, backlog, unstarted, started,
+**Column order.** The board sorts the snapshot's groups itself rather than trusting a view's saved
+column order: columns that hold issues come first, and within each half the state type the snapshot
+carries (`kind`) puts them in Linear's own progression — triage, backlog, unstarted, started,
 completed, canceled. A group with no type, which is every group under a grouping other than
 workflow state, keeps its place among its equals.
 
@@ -1087,21 +1088,17 @@ and choose. The picker opens at once with a loading line, then shows the rows, a
 or the read failure. A second open while a read is on the way sends no second request. `v` (or a
 click on the header's view label) opens the view picker for the bound project.
 
-**Bind handoff.** A bind starts from three places: a project chosen for a strip space binds that
-space to the project; a view chosen in the view picker binds the current space's project with that
-view; and `b` in a card's detail binds the selected worktree binding for that issue, in its
-worktree. `b` accepts only a binding the plugin can confirm or repair (`proposed`, `stale` or
-`misplaced`) and refuses every other state by name. Each sends `linear.bind_handoff` with ids and a
-directory, never names. The daemon validates them, opens an unfocused `bind` tab in the caller's
-own herdr session, and starts an interactive Claude there whose first turn is
-`/work:bind --space S --project P [--view V | --issue I]`. The board then focuses the returned pane.
-One handoff is in flight at a time. On success the header notes that the bind started in a new tab
-and that `r` refreshes when it finishes; there is no automatic refresh. A failure is a toast. A
-timeout tells the person to look for a `bind` tab before trying again, because the tab can open
-after the client stops waiting. The bind tab stays open after the skill finishes, is declined, or is
-left waiting; the person closes it. The daemon writes nothing; the bind skill's confirmation in that
-session is the only write gate. The mechanism, and why it does not use `agent.prompt`, is in
-[`herdr.md`](herdr.md) → Linear bind handoff.
+**Binding a space.** A bind starts from two places: a project chosen for a strip space binds that
+space to the project, and a view chosen in the view picker binds the current space's project with
+that view. Each sends one `linear.space.bind {space, project, view?}` with ids, never names, in
+the herdr session the board runs in. It is a synchronous write: on success the picker closes, a
+toast says `bound space <id>`, and the board reads the snapshot and the space list again; a
+refusal or a timeout toasts `bind failed: …` and leaves the picker open. No tab opens and no agent
+starts. `b` on an issue page binds the selected worktree binding's worktree to that issue with one
+`linear.bind`; it accepts only a binding in state `proposed`, `stale` or `misplaced` and refuses
+every other state by name. Agents bind their own worktree with `board mcp`'s `bind` tool. Earlier
+releases started the work plugin's `/work:bind` skill in a new tab instead; that handoff is
+retired, and the daemon answers its method as unknown.
 
 **Agent marks.** Agents mark cards through `board mcp`: needs you (`!`), question (`?`) and done
 (`✓`). The board adds a suggestion (`◇`) when a reported Linear write could not link a worktree.
@@ -1129,7 +1126,7 @@ forces a fresh Linear read. One snapshot is in flight at a time: an `r` while on
 dropped with a toast, and an `R` queues one forced read behind it. A failed refresh keeps the last
 good snapshot on screen.
 
-**Fixture contract.** `crates/board-core/tests/fixtures/linear-snapshot/` vendors the plugin's
-canonical snapshot documents. `VERSION` there records the plugin version and a sha256 per file; a
-board test asserts the on-disk files match those hashes, and the plugin's own suite asserts the same
-hashes from its side, so a drift between the repos is a failing test on whichever side moved.
+**Fixtures.** `crates/board-core/tests/fixtures/linear-snapshot/` and `linear-issue/` hold
+snapshot and issue documents that the board's types must keep parsing, so an older daemon's
+answer still reads. They are no longer pinned to the work plugin by hash: boardd builds those
+documents itself.

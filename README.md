@@ -91,16 +91,18 @@ interfaces that talk to it. The CLI also exposes `board skill`, which prints the
 dispatched agent is held to. All board state lives under `~/.local/share/herdr-board/`; Herdr's own
 state is never modified.
 
-Opened inside a herdr space that the work plugin has bound to a Linear project, `board tui` runs in
-**Linear mode**: it renders that project's issues, worktrees and live panes from the plugin's
-snapshot instead of a kanban, and writes nothing to Linear or the plugin's records. Agents mark
-cards and ask you to look at an issue through `board mcp`; the board shows those marks, and `a` /
-`x` answer them. It sets its own pane title and can start a bind in a new herdr tab. The daemon runs the plugin's `bin/work-snapshot.sh` and its three list scripts
-from the installed `work@shrimpshack` plugin; until a plugin release with that script is installed,
-point `BOARD_WORK_PLUGIN_ROOT` (or `[daemon] work_plugin_root` in the config) at a plugin checkout.
-`board linear snapshot <workspace-id> --json` prints the same document from the command line, and
-`board linear status-line` puts an agent's bound issue in Claude Code's status line (setup in
-`board skill`). See [`docs/design.md`](docs/design.md) section 13.
+Opened inside a herdr space bound to a Linear project, `board tui` runs in **Linear mode**: it
+shows that project's issues as tabs, columns and swimlanes, grouped the way you configured, with
+the worktrees and live panes that belong to each issue. The daemon reads Linear itself, read-only,
+with the key from your macOS Keychain, and keeps bindings, marks and notes in its own database.
+It never writes Linear: agents create and update tickets through Linear's own MCP server, and the
+board links that work to your sessions. Agents use `board mcp` to bind their worktree, mark cards,
+notify you, ask you to look at an issue, and open a board beside their own pane without taking
+focus; `a` / `x` answer them. Coming from the work plugin? Run `board import work-store` once to
+copy its bindings and grouping into the board. `board linear snapshot <workspace-id> --json`
+prints the board's read from the command line, and `board linear status-line` puts an agent's
+bound issue in Claude Code's status line. Setup: [`docs/install.md`](docs/install.md) → Linear mode
+and agent tools. Design: [`docs/design.md`](docs/design.md) section 13.
 
 ## Install
 
@@ -273,7 +275,9 @@ selected/current board.
 | `board column` | `list`, `create`, `show`, `edit`, `reorder`, `delete` |
 | `board harness` | `list`, `models`, `efforts`, `permissions` |
 | `board space` / `board session` | `list` |
-| `board linear` | `snapshot [WORKSPACE_ID]`, `space list`, `project list`, `view list <PROJECT_ID>` |
+| `board linear` | `snapshot [WORKSPACE_ID]`, `issue <ID>`, `space list`, `project list`, `view list <PROJECT_ID>`, `session [WORKSPACE_ID]`, `status-line`, `report` |
+| `board import` | `work-store [--dry-run]` |
+| `board mcp` | the stdio MCP server for agents (see the skill) |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -307,9 +311,9 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1`–`6` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal, work plugin unavailable |
+| `1`–`7` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal; `6` and `7` come only from an older daemon that ran the work plugin's scripts |
 | `64` | The CLI itself refused — usage/parse error, declined confirmation, bad enum value, unresolvable column, missing `$BOARD_CARD_ID` (`EX_USAGE`) |
-| `70` | Daemon reported a protocol code outside `1..=6`, clamped (`EX_SOFTWARE`) |
+| `70` | Daemon reported a protocol code outside `1..=7`, clamped (`EX_SOFTWARE`) |
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the

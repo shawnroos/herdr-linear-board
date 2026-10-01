@@ -17,13 +17,11 @@ protocol version.
 - Response: `{"id":"<same>","result":<any>}` or `{"id":"<same>","error":{"code":<int>,"message":"..."}}`.
   Error objects may add `kind` and `details`; old clients may ignore those members.
 - Error codes: `1` bad request / unknown method, `2` not found, `3` invalid state
-  (e.g. delete column with running card), `4` herdr unavailable, `5` internal, `6` work plugin
-  unavailable (the `linear.*` plugin ops only: no resolvable plugin root, a plugin below
-  the floor version, or a script run that produced no usable document), `7` the installed plugin
-  ships no script for this op. `6` and `7` are separate because their remedies are opposite: `6` is
-  worth retrying, `7` is fixed only by updating the work plugin. The CLI passes `1..=7`
-  through as its exit status (`board linear snapshot`, `board linear space list`,
-  `board linear project list` and `board linear view list` are the commands that raise `6`). The CLI preserves
+  (e.g. delete column with running card), `4` herdr unavailable, `5` internal. `6` (work plugin
+  unavailable) and `7` (the plugin ships no script for this op) are retired: this daemon reads
+  Linear itself and raises neither, but both keep their meaning so a client still reads them right
+  from an older daemon that ran the work plugin's scripts. The CLI passes `1..=7`
+  through as its exit status. The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
@@ -104,7 +102,7 @@ and mutates the database.
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
 `space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
 `board.pane.open`, `board.pane.close`, `board.notify`,
-`linear.snapshot`, `linear.list`, and the Linear local-state methods
+`linear.snapshot`, `linear.list`, `linear.issue`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.space.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
 `linear.note.*`, `linear.show.*`, `linear.session.get`, `linear.activity.*`, `linear.import`), in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
@@ -555,120 +553,86 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
 
 ### linear
 
-`linear.snapshot`, `linear.list` and `linear.issue` run **natively** unless a plugin root is
-named outright — `plugin_root` in the request, the daemon's `BOARD_WORK_PLUGIN_ROOT`, or
-`[daemon] work_plugin_root` — in which case each runs its script as described in its entry below
-(the installed-plugins record alone does not select the script path). The native path keeps each
-method's name, params and result shape, reading local state from SQLite, Linear through boardd's
-read-only GraphQL client (`https://api.linear.app/graphql`, overridable with
-`BOARD_LINEAR_API_URL`; the key from the macOS Keychain, then `LINEAR_API_KEY` in boardd's own
-startup environment, then `~/.secrets`), and herdr through one `session.snapshot` (the snapshot)
-or `workspace.list` (the spaces list) on `origin_socket`.
+boardd answers `linear.snapshot`, `linear.list` and `linear.issue` itself. It reads local state
+from SQLite, Linear through its own read-only GraphQL client (`https://api.linear.app/graphql`,
+overridable with `BOARD_LINEAR_API_URL`, where plain `http://` is accepted only for a loopback
+host), and herdr through one `session.snapshot` (the snapshot) or `workspace.list` (the spaces
+list) on `origin_socket`. The Linear key comes from the macOS Keychain (account `linear-api-key`,
+service `work-linear`), then `LINEAR_API_KEY` in boardd's own startup environment, then
+`~/.secrets`; boardd logs which source it used, never the key. It never runs the work plugin's
+scripts. A request that still carries the retired `plugin_root` field is accepted and the field is
+ignored, and so are `[daemon] work_plugin_root` and `BOARD_WORK_PLUGIN_ROOT` (one warning at
+daemon start).
 
-- **Native `linear.snapshot`.** The session is the one `origin_socket` names
-  (`…/sessions/<name>/herdr.sock`, else `default`); the space binding is `(session,
-  workspace_id)`. The space name — the herdr workspace label, else the binding's `display_name`,
-  else the id — selects a grouping space override and the global mapping's `space` level.
+- `linear.snapshot {workspace_id, origin_socket?, force?}` → the space snapshot document (board
+  types `LinearSnapshot` in `board-core::protocol`) plus `pane_status: {pane_id: status}` for every
+  pane id the document names in `issues[].bindings[].panes` and `unmapped[].panes`.
+  - The session is the one `origin_socket` names (`…/sessions/<name>/herdr.sock`, else
+    `default`); the space binding is `(session, workspace_id)`. The space name — the herdr
+    workspace label, else the binding's `display_name`, else the id — selects a grouping space
+    override and the global mapping's `space` level.
   - Unbound: `record {status: "missing", state: "unbound"}`, `linear.status: "unknown"`, and no
     Linear call. When the board holds no space or worktree binding at all and the work plugin's
     store directory exists, `linear.status` is `not_imported` and `linear.message` names
     `board import work-store`.
   - Bound: `record {status: "ok", state: "bound", project_id}`. With a grouping config the issues
     are the config's compiled filter; with none, the binding's custom view (its own filter and
-    grouping, `view.status` as the script names it, `not_in_project` when its filter no longer
-    names the project) or the project's issues grouped by the first team's workflow states.
-    `tabs`, `groups` and `issues` come from the grouping engine; `issues` holds only issues the
-    board shows. Worktree bindings, `unmapped` tabs and `pane_status` come from the one herdr read;
-    without it `herdr.status` is `unavailable` and every pane status `unknown`.
-  - **Shared read.** The Linear half is cached per `(session, workspace_id)` and shared by
-    every reader for 15 s; concurrent readers of one space wait for one fetch. A changed binding or
+    grouping; `view.status` is `ok`, `archived`, `not_in_project` when its filter no longer names
+    the project, `unsupported_grouping`, `not_found` or `unreadable`) or the project's issues
+    grouped by the first team's workflow states. `tabs`, `groups` and `issues` come from the
+    grouping engine; `issues` holds only issues the board shows. Worktree bindings, `unmapped`
+    tabs and `pane_status` come from the one herdr read; without it `herdr.status` is
+    `unavailable` and every pane status `unknown`.
+  - Board-view fields (the `board-core::engine::grouping` engine): `tabs: [{key, label, groups}]`
+    is the tab strip, and each group (column) may carry `lanes: [{key, label, issues}]`, the
+    swimlane rows across that tab's columns. A key is the Linear id the level groups by, or empty
+    for a "No <field>" or ungrouped group. `groups` stays equal to `tabs[0].groups`, so a client
+    that predates `tabs` renders the first tab's columns. Both fields default to empty and read an
+    explicit `null` as empty. `mapping` is `source: global|space` with the `space` and `tab`
+    levels and `pane` set to the column level when a grouping config is in force.
+  - **Shared read.** The Linear half is cached per `(session, workspace_id)` and shared by every
+    reader for 15 s; concurrent readers of one space wait for one fetch. A changed binding or
     grouping is a new read. When Linear cannot be read, the last good read is returned with
     `linear.status: "unavailable"`, `linear.message` (why), `cache_age_seconds`, and every issue
     `stale: true`; with no earlier read the board is empty, never an error.
   - A `linear.activity.record` for a space that has a cached read marks it out of date and
     schedules one refetch 500 ms later; reports that land meanwhile fold into it. When it lands,
-    boardd emits one `local_state_changed {space, snapshot: true}`, and a `linear.snapshot` inside the TTL returns
-    the refetched read without another Linear call.
+    boardd emits one `local_state_changed {space, snapshot: true}`, and a `linear.snapshot` inside
+    the TTL returns the refetched read without another Linear call.
   - `force: true` drops the space's cached read first, so this request reads Linear again. The
     board's `R` key sends it. A daemon that predates `force` ignores it.
-  - Additive: `linear.message` (string, omitted when there is nothing to say).
-- **Native `linear.list`.** `spaces`: the live workspaces of `origin_socket`'s session
-  (`workspace.list`) and then this session's bound workspaces that are not live, each with its
-  binding's `state` (`bound` or `unbound`), `project_id` and `display_name` as `project_name`;
-  without an origin socket or a herdr answer the status is `unavailable` with no rows. `projects`:
-  the key owner's projects, `team_key` from the first team. `views`: the custom views whose filter
-  names the project, archived ones left out. A Linear failure is `unavailable` with a message; a
-  listing cut at the page cap is `partial`.
-- **Native `linear.issue`.** One GraphQL request. Every Linear failure, no such issue included, is
-  a document with `status: "unavailable"`, `message` and `issue: null`.
+  - Additive: `linear.message` (string, omitted when there is nothing to say), `linear.status`
+    values `not_imported` and `unavailable`.
+  - Clients wait at most `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s). Error 1 for an empty
+    `workspace_id`.
+- `linear.list {kind, id?, origin_socket?}` → `{status, message, rows}`. `status` is one of `ok`,
+  `unavailable`, `partial` or `unknown` (any other value is an unparseable list, not an empty
+  one); `message` is a string or `null`. `kind` decides the rows; the wire carries no kind tag, so
+  a client decodes the rows by the kind it asked for:
+  - `spaces` → `{id, label, live, state, project_id, project_name}`: the live workspaces of
+    `origin_socket`'s session (`workspace.list`), then this session's bound workspaces that are
+    not live, each with its binding's `state` (`bound` or `unbound`), `project_id` and
+    `display_name` as `project_name`. Without an origin socket or a herdr answer the status is
+    `unavailable` with no rows.
+  - `projects` → `{id, name, team_key}`: the projects the key's owner is a member of; `team_key`
+    comes from the first team and is `null` for a project with no team.
+  - `views` → `{id, name}`: the custom views whose filter names project `id`, archived ones left
+    out.
 
-- `linear.snapshot {workspace_id, origin_socket?, plugin_root?, force?}` → the work plugin's space snapshot document
-  (`plugins/work/docs/snapshot.md` in the plugin repo; board types `LinearSnapshot` in
-  `board-core::protocol`) plus a daemon-attached `pane_status: {pane_id: status}` for every pane id
-  the document names in `issues[].bindings[].panes` and `unmapped[].panes`. The daemon resolves the
-  plugin root on every request (`plugin_root`, which the CLI and TUI fill from their own
-  `BOARD_WORK_PLUGIN_ROOT`; then the daemon's `BOARD_WORK_PLUGIN_ROOT`; then `[daemon]
-  work_plugin_root` read from the board config now; then the `user`-scope `installPath` of
-  `work@shrimpshack` in `~/.claude/plugins/installed_plugins.json`), refuses a
-  `.claude-plugin/plugin.json` version below `0.5.0` naming both versions, and runs
-  `bin/work-snapshot.sh <workspace_id>` with a bounded deadline and an environment built from
-  scratch: `HOME`, `PATH`, `HERDR_SOCKET_PATH` (the canonicalized `origin_socket`, when given),
-  every `HERDR_LINEAR_*` and `LINEAR_*` variable of the daemon, `HERDR_BIN` only when
-  `HERDR_BIN_PATH` names an existing file, and the knobs the daemon sets
-  (`HERDR_LINEAR_TIMEOUT_SECONDS=8`, `HERDR_LINEAR_RETRY_MAX=1`, `HERDR_LINEAR_VIEW_PAGE_MAX=10`,
-  `HERDR_LINEAR_HERDR_TIMEOUT_SECONDS=5`, `HERDR_LINEAR_KEYCHAIN_TIMEOUT_SECONDS=5`). A variable
-  whose name or value is not UTF-8 is left out. The child's argv and environment are never logged,
-  and its stderr is not captured or shown: a plugin tracing its own run would print the credential
-  it resolves. The script is stopped (SIGTERM to its process group, SIGKILL two seconds later) at
-  the deadline, when the daemon is stopping, or when the client that asked closes its connection;
-  a process it leaves in its group after exiting is killed. Clients wait at most
-  `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s), longer than the daemon can take to answer. Exit 0 with a document is the only success;
-  the daemon never reads exit 0 as "every source reachable" — each section carries its own status
-  and a partial document is returned as partial. Pane status is a best-effort second read: one
-  `session.snapshot` on `origin_socket`, whether or not the daemon has a herdr handle of its own;
-  with no `origin_socket` or any failure every status is `"unknown"`. Error 1 for an empty
-  `workspace_id`; error 7 for a plugin that ships no such script; error 6 for no resolvable root
-  (the message names all three sources), a plugin below the floor, a timeout or a stop (the child is stopped and reaped), a
-  non-zero exit (`2` argument refused, `3` no such space, others a crash — each naming the command
-  to run by hand to see the script's output), more than 32 MiB on stdout, empty stdout, an
-  unparseable document, or a `schema` other than `1`.
-  Additive board-view fields (the `board-core::engine::grouping` engine): `tabs: [{key, label,
-  groups}]` is the tab strip, and each group (column) may carry `lanes: [{key, label, issues}]`,
-  the swimlane rows across that tab's columns. A key is the Linear id the level groups by, or
-  empty for a "No <field>" or ungrouped group. `groups` stays equal to `tabs[0].groups`, so a
-  client that predates `tabs` renders the first tab's columns. Both fields default to empty and
-  read an explicit `null` as empty.
-- `linear.list {kind, id?, origin_socket?, plugin_root?}` → `{status, message, rows}` — one of the
-  work plugin's lists, run through the same plugin-root resolution, `0.5.0` floor, environment,
-  stderr rule, stdout cap and stop rules as `linear.snapshot`, under its own bounded deadline.
-  `kind` is `spaces` (`bin/work-spaces.sh`), `projects` (`bin/work-projects.sh`) or `views`
-  (`bin/work-views.sh <id>`). `views` requires `id`, a Linear project id; `spaces` and `projects`
-  take none. An id must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, so it can never read as an
-  option to the script. The result is the plugin's envelope: `status` is one of `ok`,
-  `unavailable`, `partial` or `unknown` (any other value is an unparseable list, not an empty one),
-  `message` is a string or `null`, and `rows` depends on `kind`:
-  `spaces` rows are `{id, label, live, state, project_id, project_name}` (the binding state of
-  every herdr space, bound or not), `projects` rows are `{id, name, team_key}` (the projects the
-  person is a member of; `team_key` is `null` for a project with no team), and `views` rows are `{id, name}`. The wire carries no kind tag; a client
-  decodes the rows by the kind it asked for. Before answering, the daemon removes control
-  characters other than tab and newline, and format characters, from every string in the envelope,
-  object keys included. The daemon makes no herdr call for a list; the spaces script reaches herdr
-  itself through the forwarded `HERDR_SOCKET_PATH`. Clients wait at most
-  `LINEAR_LIST_CLIENT_TIMEOUT` (130 s) from the CLI; the TUI reads lists under the 150 s snapshot
-  limit. Error 1 for an id on `spaces` or `projects`, a missing id on `views`, or an id of the
-  wrong shape; errors 6 and 7 for every plugin-side failure `linear.snapshot` names (no exit `3`
-  here: a list script documents only `2`, argument refused).
-- `linear.issue {issue, origin_socket?, plugin_root?}` → the issue document — one Linear issue read
-  whole for the board's issue page: description, sub-issues, parent and relations, comments and
-  history, plus project, milestone, cycle, estimate and due date. Runs `bin/work-issue.sh <issue>`,
-  whose contract is `plugins/work/docs/issue.md` in the work plugin. The read is ONE Linear call by
-  contract — each paged connection is asked for one page and what did not fit is named in
-  `truncated`, with `status` `partial` — so the deadline is sized for a single call rather than a
-  page count, and a busy issue opens as fast as an empty one. A reachability failure is carried in
-  the document as `status: "unavailable"` with `issue: null`, not as an error code, so a reader can
-  tell "this issue could not be read" from "this plugin has no such script" (error 7). Clients wait
-  at most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape; otherwise the
-  same 6 and 7 the ops above name.
+  `views` requires `id`, a Linear project id; `spaces` and `projects` take none. An id must match
+  `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. A Linear failure is `unavailable` with a message; a listing
+  cut at the page cap is `partial`. Every string in the envelope has control and format characters
+  removed, object keys included. Clients wait at most `LINEAR_LIST_CLIENT_TIMEOUT` (130 s) from the
+  CLI; the TUI reads lists under the 150 s snapshot limit. Error 1 for an id on `spaces` or
+  `projects`, a missing id on `views`, or an id of the wrong shape.
+- `linear.issue {issue, origin_socket?}` → the issue document — one Linear issue read whole for
+  the board's issue page: description, sub-issues, parent and relations, comments and history,
+  plus project, milestone, cycle, estimate and due date. The read is ONE GraphQL request: each
+  paged connection is asked for one page, and what did not fit is named in `truncated`, with
+  `status` `partial`, so a busy issue opens as fast as an empty one. History events that change
+  nothing the page shows are dropped. Every Linear failure, no such issue included, is a document
+  with `status: "unavailable"`, `message` and `issue: null`, not an error code. Clients wait at
+  most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape.
 - `linear.bind_handoff` — retired. The daemon answers it as an unknown method (error 1); bind a
   space with `linear.space.bind`.
 

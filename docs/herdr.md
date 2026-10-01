@@ -357,43 +357,18 @@ never used as a space identity.
 | neither | uses the default `~/.config/herdr/herdr.sock` |
 
 `--session` is a top-level flag only (`herdr --session x api snapshot`, never
-`herdr api --session x`). Because the CLI honours `HERDR_SOCKET_PATH`, the board
-daemon selects the origin session for the plugin's snapshot script by forwarding the
-origin socket path as `HERDR_SOCKET_PATH` in the child environment; the plugin needs
-no session setting of its own.
+`herdr api --session x`). In Linear mode the board daemon reads the caller's session by
+connecting to the `origin_socket` the client sends, so the board needs no session setting of
+its own.
 
-## Linear bind handoff: the command travels in `agent.start` argv
+## Linear bind handoff (retired)
 
-`linear.bind_handoff` starts the work plugin's bind skill in a new tab. It does not
-follow the managed launch contract above, and it does not use `agent.prompt`. The
-daemon creates one unfocused tab labelled `bind` with `tab.create` (cwd set, empty
-environment), then calls `agent.start` on that tab's root pane with `kind:"claude"`,
-a name derived from the tab id, and one argument: the bind line
-`/work:bind --space <space> --project <project>`, plus `--view <view>` or
-`--issue <issue>`. Claude Code takes a positional first argument as the first turn of
-a normal interactive conversation, so the slash command runs as a turn the person can
-see and answer.
-
-`agent.prompt` is not used for three reasons:
-
-1. A plain `claude` start can open Claude Code's agent view, and the agent view
-   refuses a slash command delivered as a prompt.
-2. The readiness signal the card launch waits on, a non-empty `agent_session`, comes
-   from herdr's Claude integration, which is optional. Without it there is no
-   reliable moment to send a prompt, and a prompt sent before the session settles can
-   be dropped.
-3. An argument cannot be dropped that way: it is part of the process start.
-
-The agent is addressed by pane id only, never by name, because herdr can drop the
-agent name after its startup timeout while Claude keeps running. The name is still
-unique per tab, because herdr refuses a name an open agent holds.
-
-A fresh tab's login shell can take much longer to accept `agent.start` than a split
-of a warm tab: one measured case took about 60 s under heavy load, answering
-`agent_pane_busy` until then. The handoff therefore retries `agent.start` on the same
-pane for up to 90 s (250 ms first wait, doubling to 5 s a step), where a card run
-gives up after about 3 s. Any failure after the tab exists closes its pane with
-`pane.close`, which closes the tab; `pane_not_found` counts as closed.
+Earlier releases bound a space by starting the work plugin's `/work:bind` skill: the daemon
+opened an unfocused `bind` tab and passed the slash command as the first argument of
+`agent.start` (`kind:"claude"`), because a plain `claude` start can open Claude Code's agent
+view, which refuses a slash command sent with `agent.prompt`. That method,
+`linear.bind_handoff`, is retired. The board now binds a space with `linear.space.bind`, a
+SQLite write that makes no herdr call and starts no agent.
 
 ## Opening a plugin pane by API (observed 2026-09-30)
 

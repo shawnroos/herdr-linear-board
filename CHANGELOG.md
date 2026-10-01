@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on
 
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode pickers, bind from the board, mouse, card detail, herdr keys in help, roomier cards, pane title and linear list verbs.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear boards show tabs, paged columns, lanes and agent marks you answer with a and x, plus a status line and session side pane.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode reads Linear itself, owns its bindings (import once with board import work-store) and gives agents board mcp tools.
 
 ## [0.17.0] - 2026-09-13
 
