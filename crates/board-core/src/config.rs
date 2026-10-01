@@ -23,6 +23,9 @@ fn default_local_poll_ms() -> u64 {
 fn default_tick_ms() -> u64 {
     1000
 }
+fn default_show_request_ttl_secs() -> i64 {
+    crate::db::SHOW_REQUEST_TTL_DEFAULT_SECS
+}
 
 /// The kind of process spawner used by the daemon.
 ///
@@ -65,6 +68,23 @@ impl Default for DaemonConfig {
             local_poll_ms: default_local_poll_ms(),
             tick_ms: default_tick_ms(),
             work_plugin_root: None,
+        }
+    }
+}
+
+/// Settings in the root `[linear]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSettingsConfig {
+    /// How long a show-request waits for the person before it expires
+    /// (KTD3). Board-wide: an agent cannot set its own.
+    #[serde(default = "default_show_request_ttl_secs")]
+    pub show_request_ttl_secs: i64,
+}
+
+impl Default for LinearSettingsConfig {
+    fn default() -> Self {
+        Self {
+            show_request_ttl_secs: default_show_request_ttl_secs(),
         }
     }
 }
@@ -198,6 +218,8 @@ pub struct RootConfig {
     pub board: Config,
     #[serde(default)]
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub linear: LinearSettingsConfig,
 }
 
 impl RootConfig {

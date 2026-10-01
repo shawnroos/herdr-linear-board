@@ -799,6 +799,7 @@ impl Db {
             outcome: LinearActivityOutcome::Recorded,
             binding: None,
             mark: None,
+            cleared_suggestions: Vec::new(),
         };
         let (Some(issue), Some(space)) = (p.issue.as_deref(), space.as_deref()) else {
             return Ok(recorded(activity));
@@ -825,6 +826,7 @@ impl Db {
                     outcome: LinearActivityOutcome::Linked,
                     binding: Some(binding.change),
                     mark: None,
+                    cleared_suggestions: binding.cleared_suggestions,
                 });
             }
         }
@@ -851,6 +853,7 @@ impl Db {
             outcome: LinearActivityOutcome::Suggested,
             binding: None,
             mark: Some(mark),
+            cleared_suggestions: Vec::new(),
         })
     }
 

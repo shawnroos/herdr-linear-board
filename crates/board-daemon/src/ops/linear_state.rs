@@ -5,9 +5,9 @@
 
 use super::*;
 
-use board_core::db::{
-    claimed_space, clean_claims, ActivityClaims, LocalStateError, SHOW_REQUEST_TTL_DEFAULT_SECS,
-};
+use std::collections::BTreeSet;
+
+use board_core::db::{claimed_space, clean_claims, ActivityClaims, LocalStateError, Mark};
 
 use super::errors::local_state_error;
 
@@ -24,6 +24,28 @@ fn announce(d: &Arc<Daemon>, space: Option<String>) {
         space,
         snapshot: false,
     });
+}
+
+/// Once per distinct space, skipping `already` (announced elsewhere). A
+/// `None` already covers every space.
+fn announce_spaces<'a>(
+    d: &Arc<Daemon>,
+    already: Option<&Option<String>>,
+    spaces: impl IntoIterator<Item = &'a str>,
+) {
+    let skip = match already {
+        Some(None) => return,
+        Some(Some(space)) => Some(space.as_str()),
+        None => None,
+    };
+    let distinct: BTreeSet<&str> = spaces.into_iter().filter(|s| Some(*s) != skip).collect();
+    for space in distinct {
+        announce(d, Some(space.to_string()));
+    }
+}
+
+fn mark_spaces(marks: &[Mark]) -> impl Iterator<Item = &str> {
+    marks.iter().map(|m| m.space.as_str())
 }
 
 /// A card listed in a reader's cached read of the space is known (KTD11).
@@ -49,9 +71,10 @@ pub(super) fn state_get(d: &Arc<Daemon>, p: LinearStateGetParams) -> Result<Valu
 
 pub(super) fn bind(d: &Arc<Daemon>, p: LinearBindParams) -> Result<Value> {
     let space = claimed_space(p.space.as_deref(), &clean_claims(&p.claims));
-    let change = d.store.lock().linear_bind(&p).map_err(ls)?;
-    announce(d, space);
-    Ok(json!(change))
+    let bound = d.store.lock().linear_bind(&p).map_err(ls)?;
+    announce(d, space.clone());
+    announce_spaces(d, Some(&space), mark_spaces(&bound.cleared_suggestions));
+    Ok(json!(bound))
 }
 
 pub(super) fn unbind(d: &Arc<Daemon>, p: LinearUnbindParams) -> Result<Value> {
@@ -92,10 +115,30 @@ pub(super) fn mark_set(d: &Arc<Daemon>, p: LinearMarkSetParams) -> Result<Value>
     Ok(json!(change))
 }
 
-pub(super) fn mark_clear(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
-    let change = d.store.lock().linear_mark_clear(p.id).map_err(ls)?;
-    announce(d, change.before.as_ref().map(|m| m.space.clone()));
-    Ok(json!(change))
+/// `{id}` is the single clear; `{ids}` the bulk clear a detail screen sends
+/// for the marks it showed (KTD8).
+pub(super) fn mark_clear(d: &Arc<Daemon>, p: LinearMarkClearParams) -> Result<Value> {
+    match (p.id, p.ids) {
+        (Some(id), None) => {
+            let change = d.store.lock().linear_mark_clear(id).map_err(ls)?;
+            announce(d, change.before.as_ref().map(|m| m.space.clone()));
+            Ok(json!(change))
+        }
+        (None, Some(ids)) => {
+            let removed = d.store.lock().linear_mark_clear_ids(&ids).map_err(ls)?;
+            announce_spaces(d, None, mark_spaces(&removed.removed));
+            Ok(json!(removed))
+        }
+        _ => Err(Error::BadRequest(
+            "linear.mark.clear takes exactly one of `id` or `ids`".into(),
+        )),
+    }
+}
+
+pub(super) fn mark_unmark(d: &Arc<Daemon>, p: LinearMarkUnmarkParams) -> Result<Value> {
+    let removed = d.store.lock().linear_mark_unmark(&p).map_err(ls)?;
+    announce_spaces(d, None, mark_spaces(&removed.removed));
+    Ok(json!(removed))
 }
 
 pub(super) fn note_set(d: &Arc<Daemon>, p: LinearNoteSetParams) -> Result<Value> {
@@ -116,7 +159,7 @@ pub(super) fn show_request(d: &Arc<Daemon>, p: LinearShowRequestParams) -> Resul
     let change = d
         .store
         .lock()
-        .linear_show_request(&p, known, now_secs(d), SHOW_REQUEST_TTL_DEFAULT_SECS)
+        .linear_show_request(&p, known, now_secs(d), d.settings.show_request_ttl_secs)
         .map_err(ls)?;
     announce(d, change.after.as_ref().map(|r| r.space.clone()));
     Ok(json!(change))
@@ -142,15 +185,38 @@ pub(super) fn show_dismiss(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> 
     Ok(json!(change))
 }
 
+pub(super) fn show_withdraw(d: &Arc<Daemon>, p: LinearShowWithdrawParams) -> Result<Value> {
+    let change = d
+        .store
+        .lock()
+        .linear_show_withdraw(&p, now_secs(d))
+        .map_err(ls)?;
+    announce(d, change.before.as_ref().map(|r| r.space.clone()));
+    Ok(json!(change))
+}
+
+/// The SQLite half plus the column from the snapshot already cached for the
+/// space; never a Linear or herdr call (KTD11).
+pub(super) fn session_get(d: &Arc<Daemon>, p: LinearSessionGetParams) -> Result<Value> {
+    let mut result = d.store.lock().linear_session_get(&p, now_secs(d))?;
+    if let Some(binding) = &result.binding {
+        result.column = super::linear::native::cached_column(
+            d,
+            p.herdr_socket.as_deref(),
+            &p.space,
+            &binding.issue,
+        )?;
+    }
+    Ok(json!(result))
+}
+
 pub(super) fn activity_record(d: &Arc<Daemon>, p: LinearActivityRecordParams) -> Result<Value> {
     let result = d.store.lock().linear_activity_record(&p).map_err(ls)?;
-    if !activity_recorded(
-        d,
-        &clean_claims(&p.claims),
-        result.activity.space.as_deref(),
-    ) {
-        announce(d, result.activity.space.clone());
+    let space = result.activity.space.clone();
+    if !activity_recorded(d, &clean_claims(&p.claims), space.as_deref()) {
+        announce(d, space.clone());
     }
+    announce_spaces(d, Some(&space), mark_spaces(&result.cleared_suggestions));
     Ok(json!(result))
 }
 

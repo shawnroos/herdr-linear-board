@@ -194,6 +194,9 @@ pub(in crate::ops) fn snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Resu
     }
 
     let key = SpaceKey { session, space };
+    if p.force {
+        d.linear.cache.invalidate(&key);
+    }
     let read = read_space(d, &key, &plan);
     fill_from_linear(&mut doc, &read, local.config.as_ref(), &plan);
     attach_bindings(&mut doc, &local.worktrees, herdr.as_ref(), &key.space);
@@ -439,6 +442,43 @@ pub(in crate::ops) fn lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> 
     })
 }
 
+/// The column `issue` sits in on the board as this session last read it.
+/// `None` on a cold or failed cache: the status line never waits on Linear
+/// or herdr (KTD11).
+pub(in crate::ops) fn cached_column(
+    d: &Arc<Daemon>,
+    socket: Option<&str>,
+    space: &str,
+    issue: &str,
+) -> Result<Option<String>> {
+    let key = SpaceKey {
+        session: session_of(socket),
+        space: space.to_string(),
+    };
+    let Some((data, plan)) = d.linear.cache.peek_good(&key) else {
+        return Ok(None);
+    };
+    let config = d.store.lock().grouping_config()?;
+    let mut doc = LinearSnapshot::default();
+    let read = CacheRead {
+        good: Some((data, std::time::Duration::ZERO)),
+        error: None,
+    };
+    fill_from_linear(&mut doc, &read, config.as_ref(), &plan);
+    Ok(doc
+        .tabs
+        .iter()
+        .flat_map(|tab| tab.groups.iter())
+        .find(|group| {
+            group.issues.iter().any(|id| id == issue)
+                || group
+                    .lanes
+                    .iter()
+                    .any(|lane| lane.issues.iter().any(|id| id == issue))
+        })
+        .map(|group| group.label.clone()))
+}
+
 /// After a reported Linear write: when a reader has read the space, mark its
 /// read out of date and schedule one debounced refetch that announces the
 /// space once it lands. Returns whether a refetch was scheduled, in which case
@@ -458,7 +498,7 @@ pub(in crate::ops) fn schedule_refetch(d: &Arc<Daemon>, session: String, space: 
             if !announcer.is_shutdown() {
                 announcer.emit(Event::LocalStateChanged {
                     space: Some(space),
-                    snapshot: false,
+                    snapshot: true,
                 });
             }
         },

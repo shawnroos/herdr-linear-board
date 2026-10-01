@@ -1766,6 +1766,13 @@ pub struct LinearActivityRecordResult {
     pub binding: Option<LinearChange<WorktreeBinding>>,
     #[serde(default)]
     pub mark: Option<LinearReplace<Mark>>,
+    /// The suggestions a `linked` outcome's bind cleared; see [`LinearBound`].
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_default"
+    )]
+    pub cleared_suggestions: Vec<Mark>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
