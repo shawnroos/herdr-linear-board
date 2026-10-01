@@ -47,16 +47,14 @@ fn snapshot_lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> bool {
     super::linear::native::lists_issue(d, space, issue)
 }
 
-/// A reported Linear write makes the space's cached read out of date. Returns
-/// whether a debounced refetch was scheduled; that refetch announces the space
-/// once it lands, so the write must not announce it as well.
-fn activity_recorded(d: &Arc<Daemon>, claims: &ActivityClaims, space: Option<&str>) -> bool {
+/// A reported Linear write makes the space's cached read out of date.
+fn activity_recorded(d: &Arc<Daemon>, claims: &ActivityClaims, space: Option<&str>) {
     let Some(space) = space else {
-        return false;
+        return;
     };
     let session = board_core::paths::session_name_from_socket(claims.herdr_socket.as_deref())
         .unwrap_or_else(|| "default".into());
-    super::linear::native::schedule_refetch(d, session, space.to_string())
+    super::linear::native::schedule_refetch(d, session, space.to_string());
 }
 
 pub(super) fn state_get(d: &Arc<Daemon>, p: LinearStateGetParams) -> Result<Value> {
@@ -210,9 +208,10 @@ pub(super) fn session_get(d: &Arc<Daemon>, p: LinearSessionGetParams) -> Result<
 pub(super) fn activity_record(d: &Arc<Daemon>, p: LinearActivityRecordParams) -> Result<Value> {
     let result = d.store.lock().linear_activity_record(&p).map_err(ls)?;
     let space = result.activity.space.clone();
-    if !activity_recorded(d, &clean_claims(&p.claims), space.as_deref()) {
-        announce(d, space.clone());
-    }
+    // The local write is announced now; the refetch announces again with the
+    // snapshot flag once Linear answers, which can take seconds.
+    activity_recorded(d, &clean_claims(&p.claims), space.as_deref());
+    announce(d, space.clone());
     announce_cleared(d, space.as_deref(), &result.cleared_suggestions);
     Ok(json!(result))
 }

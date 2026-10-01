@@ -481,12 +481,12 @@ pub(in crate::ops) fn cached_column(
 
 /// After a reported Linear write: when a reader has read the space, mark its
 /// read out of date and schedule one debounced refetch that announces the
-/// space once it lands. Returns whether a refetch was scheduled, in which case
-/// the caller leaves the announcement to it.
-pub(in crate::ops) fn schedule_refetch(d: &Arc<Daemon>, session: String, space: String) -> bool {
+/// space with the snapshot flag once it lands. The caller announces the
+/// local write itself.
+pub(in crate::ops) fn schedule_refetch(d: &Arc<Daemon>, session: String, space: String) {
     let key = SpaceKey { session, space };
     if d.linear.cache.invalidate(&key).is_none() {
-        return false;
+        return;
     }
     let (worker, announcer) = (d.clone(), d.clone());
     let (work_key, space) = (key.clone(), key.space.clone());
@@ -503,7 +503,6 @@ pub(in crate::ops) fn schedule_refetch(d: &Arc<Daemon>, session: String, space: 
             }
         },
     );
-    true
 }
 
 /// The plan is rebuilt from local state, because the write being reported may

@@ -216,7 +216,7 @@ enum Pass {
 
 /// Coalesces bursts per key: a burst of `schedule` calls runs `work` once
 /// after `delay`, and a call that lands while `work` runs gets one more pass.
-/// `done` runs once, after the last pass.
+/// `done` runs once, after the last pass, even when a pass panics.
 #[derive(Default)]
 pub struct Debouncer {
     passes: Mutex<HashMap<SpaceKey, Pass>>,
@@ -245,6 +245,9 @@ impl Debouncer {
         }
         let this = self.clone();
         std::thread::spawn(move || {
+            // Declared before `_clear` so it drops after it: on a panic the
+            // pass is cleared first, then `done` still runs.
+            let _done = RunOnDrop(Some(done));
             let _clear = ClearPass {
                 debouncer: &this,
                 key: &key,
@@ -261,8 +264,17 @@ impl Debouncer {
                 passes.remove(&key);
                 break;
             }
-            done();
         });
+    }
+}
+
+struct RunOnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for RunOnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(done) = self.0.take() {
+            done();
+        }
     }
 }
 
@@ -276,5 +288,34 @@ impl Drop for ClearPass<'_> {
         if std::thread::panicking() {
             locked(&self.debouncer.passes).remove(self.key);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn done_still_runs_when_the_work_panics() {
+        let debouncer = Arc::new(Debouncer::default());
+        let announced = Arc::new(AtomicBool::new(false));
+        let flag = announced.clone();
+        let key = SpaceKey {
+            session: "alpha".into(),
+            space: "w1".into(),
+        };
+        debouncer.schedule(
+            key.clone(),
+            Duration::from_millis(5),
+            || panic!("the refetch failed"),
+            move || flag.store(true, Ordering::SeqCst),
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        while !announced.load(Ordering::SeqCst) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(announced.load(Ordering::SeqCst));
+        assert!(!locked(&debouncer.passes).contains_key(&key));
     }
 }

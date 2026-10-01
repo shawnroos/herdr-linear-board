@@ -404,7 +404,7 @@ fn two_readers_of_one_space_cause_one_graphql_fetch() {
 }
 
 #[test]
-fn a_reported_save_issue_causes_one_refetch_then_one_local_state_changed() {
+fn a_reported_save_issue_announces_then_refetches_once_and_announces_the_snapshot() {
     let mut board = Board::new(|r, _| board_linear(r));
     board.bind(SPACE, None);
     board.snapshot();
@@ -412,8 +412,16 @@ fn a_reported_save_issue_causes_one_refetch_then_one_local_state_changed() {
     board.events();
 
     board.report_save_issue();
+    let local = board.events();
     let events = board.wait_for_event(Duration::from_secs(5));
 
+    assert_eq!(
+        local,
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: false,
+        }]
+    );
     assert_eq!(board.count("issues("), 2, "one refetch");
     assert_eq!(
         events,
@@ -443,11 +451,23 @@ fn a_burst_of_reports_is_folded_into_one_refetch_and_one_announcement() {
     for _ in 0..3 {
         board.report_save_issue();
     }
+    let local = board.events();
     let events = board.wait_for_event(Duration::from_secs(5));
     std::thread::sleep(Duration::from_millis(300));
     let later = board.events();
 
-    assert_eq!(events.len() + later.len(), 1, "{events:?} {later:?}");
+    assert_eq!(local.len(), 3, "each report is announced: {local:?}");
+    assert!(local
+        .iter()
+        .all(|e| matches!(e, Event::LocalStateChanged { snapshot: false, .. })));
+    let refetched: Vec<&Event> = events.iter().chain(&later).collect();
+    assert_eq!(
+        refetched,
+        vec![&Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: true,
+        }]
+    );
     assert_eq!(board.count("issues("), 2);
 }
 
@@ -462,6 +482,40 @@ fn a_report_for_a_space_nobody_reads_announces_at_once_and_fetches_nothing() {
     std::thread::sleep(Duration::from_millis(100));
     assert!(board.events().is_empty());
     assert!(board.fake.requests().is_empty());
+}
+
+#[test]
+fn a_report_is_announced_at_once_while_a_slow_failing_refetch_runs() {
+    let issue_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = issue_reads.clone();
+    let mut board = Board::new(move |r, _| {
+        if query(r).contains("issues(") && seen.fetch_add(1, Ordering::SeqCst) > 0 {
+            std::thread::sleep(Duration::from_millis(800));
+            return Reply::status(500, json!({"errors": [{"message": "down"}]}));
+        }
+        board_linear(r)
+    });
+    board.bind(SPACE, None);
+    board.snapshot();
+    board.events();
+
+    board.report_save_issue();
+
+    assert_eq!(
+        board.events(),
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: false,
+        }]
+    );
+    assert_eq!(
+        board.wait_for_event(Duration::from_secs(5)),
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: true,
+        }]
+    );
+    assert_eq!(issue_reads.load(Ordering::SeqCst), 2);
 }
 
 #[test]
