@@ -173,8 +173,6 @@ fn optional_json(text: Option<String>) -> rusqlite::Result<Option<Value>> {
     text.as_deref().map(from_json_text).transpose()
 }
 
-// -- grouping -----------------------------------------------------------------
-
 /// One mapping of levels to kinds plus the filter that selects tickets. Level
 /// kinds and filter values stay as the plugin's JSON spells them; `validate`
 /// is the only gate.
@@ -362,8 +360,6 @@ pub struct ResolvedGrouping {
     pub mapping: GroupingMapping,
 }
 
-// -- bindings, scopes, repositories -------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpaceBinding {
     pub herdr_session: String,
@@ -425,8 +421,6 @@ pub struct SessionScope {
     pub team_id: String,
     pub team_key: Option<String>,
 }
-
-// -- marks, notes, show-requests ----------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -607,8 +601,6 @@ impl ShowRequest {
         self.outcome.is_none() && self.acknowledged_at.is_none() && !self.is_overdue(now)
     }
 }
-
-// -- activity and board panes -------------------------------------------------
 
 /// Who a caller says it is. Claims, not proof: they come from the caller's
 /// own environment.
@@ -819,8 +811,6 @@ fn validate_team_ids(team_ids: &[String]) -> Result<()> {
 }
 
 impl Db {
-    // -- grouping -------------------------------------------------------------
-
     pub fn grouping_config(&self) -> Result<Option<GroupingConfig>> {
         let Some(global) = self
             .conn
@@ -968,8 +958,6 @@ impl Db {
         Ok(())
     }
 
-    // -- space and worktree bindings --------------------------------------------
-
     pub fn set_space_binding(&self, binding: &SpaceBinding) -> Result<()> {
         require_text(&binding.herdr_session, "herdr session")?;
         require_text(&binding.space, "space")?;
@@ -1104,8 +1092,6 @@ impl Db {
         )? > 0)
     }
 
-    // -- session scopes and scope repositories ----------------------------------
-
     pub fn set_session_scope(&self, scope: &SessionScope) -> Result<()> {
         require_text(&scope.session_id, "session id")?;
         require_text(&scope.team_id, "team id")?;
@@ -1183,8 +1169,6 @@ impl Db {
             params![scope_key, repo_path],
         )? > 0)
     }
-
-    // -- marks, notes, show-requests --------------------------------------------
 
     pub fn add_mark(&self, mark: &NewMark<'_>) -> Result<Mark> {
         require_text(mark.space, "space")?;
@@ -1463,8 +1447,6 @@ impl Db {
         Ok(spaces.into_iter().collect())
     }
 
-    // -- activity ---------------------------------------------------------------
-
     /// Records one Linear write and prunes the session's space to the newest
     /// [`LINEAR_ACTIVITY_KEEP_PER_SPACE`] rows in the same transaction.
     pub fn record_activity(&self, activity: &NewActivity<'_>) -> Result<Activity> {
@@ -1538,8 +1520,6 @@ impl Db {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
-
-    // -- board panes --------------------------------------------------------------
 
     pub fn record_board_pane(&self, pane: &NewBoardPane<'_>) -> Result<BoardPane> {
         require_text(pane.herdr_socket, "herdr socket")?;

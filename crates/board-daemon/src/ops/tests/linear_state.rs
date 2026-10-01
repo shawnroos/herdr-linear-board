@@ -504,8 +504,6 @@ fn grouping_set_returns_the_config_before_and_after_and_preview_writes_nothing()
     assert!(err.to_string().contains("same kind"), "{err}");
 }
 
-// R13: a reported save_issue links only an unbound, known session.
-
 #[test]
 fn a_save_issue_report_links_a_known_unbound_session() {
     let mut fx = Fixture::new();

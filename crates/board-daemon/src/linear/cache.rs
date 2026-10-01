@@ -1,4 +1,4 @@
-//! KTD11: one shared Linear read per space, and the debounced refetch that
+//! One shared Linear read per space, and the debounced refetch that
 //! follows a reported Linear write.
 
 use std::collections::HashMap;

@@ -1,5 +1,5 @@
-//! The native Linear read path (R4, R5, R8): local state from SQLite, Linear
-//! through boardd's read-only client and its shared per-space cache (KTD11),
+//! The native Linear read path: local state from SQLite, Linear
+//! through boardd's read-only client and its shared per-space cache,
 //! and the board view from `board_core::engine::grouping`. The result shapes
 //! are the script era's, plus additive fields.
 //!
@@ -106,7 +106,7 @@ fn default_mapping() -> LinearMapping {
     }
 }
 
-/// The plugin's pane level became the board's columns (R7), so `pane`
+/// The plugin's pane level became the board's columns, so `pane`
 /// reports the column level.
 fn mapping_doc(config: Option<&GroupingConfig>, label: &str) -> LinearMapping {
     let Some(config) = config else {

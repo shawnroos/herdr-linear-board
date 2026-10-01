@@ -1,6 +1,6 @@
 //! The grouping engine: pure, no I/O. Issues plus the grouping in force
 //! become the board view: tabs in the strip, columns, and swimlane rows across
-//! the columns (R6-R8). Ports the display half of the work plugin's
+//! the columns. Ports the display half of the work plugin's
 //! `lib/board-plan.sh` (group values, "No <field>" groups, sort order) and the
 //! no-config grouping of its snapshot script; pane placement is not ported.
 
@@ -383,7 +383,7 @@ fn label_group(issue: &GroupingIssue, group: &str) -> Option<Group> {
 }
 
 /// A level set to `ticket` or `sub-ticket`, or left out, does not split the
-/// board at that level (R7): the pane-per-ticket reading is the plugin's pane
+/// board at that level: the pane-per-ticket reading is the plugin's pane
 /// placement, which the board view does not port.
 fn field_level<'a>(mapping: &'a GroupingMapping, level: &str) -> Option<&'a str> {
     mapping

@@ -1,4 +1,4 @@
-//! `board linear report`: the Claude Code PostToolUse hook door (KTD8). It
+//! `board linear report`: the Claude Code PostToolUse hook door. It
 //! reads the hook payload on stdin, sends at most one `linear.activity.record`,
 //! and exits 0 on every path so a board problem never fails the agent's tool
 //! call. stdout stays empty; diagnostics go to stderr.

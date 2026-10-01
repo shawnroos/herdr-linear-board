@@ -1,5 +1,5 @@
 //! The daemon's one Linear service: the client, built from boardd's own
-//! environment on first use, and the shared per-space cache (KTD11).
+//! environment on first use, and the shared per-space cache.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};

@@ -1,7 +1,7 @@
 //! Linear-mode local state over the socket. The units of work live in
 //! `board_core::db` so the fake client runs the same code; this layer adds the
 //! snapshot-cache seams and announces every successful write exactly once as
-//! `local_state_changed` (KTD9).
+//! `local_state_changed`.
 
 use super::*;
 
@@ -45,8 +45,8 @@ fn announce_cleared(d: &Arc<Daemon>, primary: Option<&str>, cleared: &[Mark]) {
     }
 }
 
-/// A card listed in the caller's session's cached read of the space is known
-/// (KTD11). A UUID it lists is rewritten to the issue's identifier, the key
+/// A card listed in the caller's session's cached read of the space is known.
+/// A UUID it lists is rewritten to the issue's identifier, the key
 /// the board renders local state by; one it does not list is left as given.
 fn resolve_known(d: &Arc<Daemon>, socket: Option<&str>, space: &str, issue: &mut String) -> bool {
     match super::linear::native::resolve_issue(d, socket, space, issue) {

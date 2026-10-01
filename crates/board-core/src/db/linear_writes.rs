@@ -1,6 +1,6 @@
 //! Request-level units of work for Linear-mode local state. boardd and the
 //! fake client both run these, so the two cannot drift. Every write cleans
-//! the free text it stores (KTD13) and returns what it changed.
+//! the free text it stores and returns what it changed.
 
 use std::fmt;
 
@@ -843,7 +843,7 @@ impl Db {
         Ok(result)
     }
 
-    /// R13: a `save_issue` links the calling session only when its claims
+    /// A `save_issue` links the calling session only when its claims
     /// resolve to a pane in a bound space, running in an unbound worktree,
     /// for an issue no other worktree holds. Otherwise it leaves a
     /// suggestion mark; any other tool records activity only.

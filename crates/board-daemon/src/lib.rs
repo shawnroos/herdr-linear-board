@@ -8,8 +8,6 @@ mod dispatch;
 mod herdr_conn;
 mod herdr_snapshot;
 mod import;
-// Public until U7 routes ops through it: a private module with no caller fails
-// the clippy dead_code gate.
 pub mod linear;
 mod logging;
 mod ops;
