@@ -64,7 +64,6 @@ impl Mcp {
             .env("HOME", env.home)
             .env("BOARD_SPAWNER", "local")
             .env("BOARD_BIN", BOARD_BIN)
-            .env_remove("BOARD_WORK_PLUGIN_ROOT")
             .env_remove("BOARD_SCOPE_PATH")
             .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
             .env_remove("HERDR_WORKSPACE_ID")

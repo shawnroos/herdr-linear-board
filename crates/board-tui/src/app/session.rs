@@ -138,9 +138,7 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 super::linear::issue_arrived(app, &issue, generation, *result);
                 vec![]
             }
-            LinearArrival::List { .. }
-            | LinearArrival::Handoff(_)
-            | LinearArrival::Wrote { .. } => {
+            LinearArrival::List { .. } | LinearArrival::Wrote { .. } => {
                 vec![]
             }
         },

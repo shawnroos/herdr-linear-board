@@ -607,16 +607,134 @@ fn a_spaces_list_without_an_origin_socket_is_unavailable_not_an_error() {
 }
 
 #[test]
-fn a_named_plugin_root_keeps_the_script_path() {
+fn a_plugin_root_in_a_request_is_accepted_and_ignored() {
     let board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
     let missing = board.store.path().join("no-plugin");
-    let err = handle_request(
+    let value = handle_request(
         &board.d,
         "linear.snapshot",
-        json!({"workspace_id": SPACE, "plugin_root": missing}),
+        json!({"workspace_id": SPACE, "origin_socket": SOCKET, "plugin_root": missing}),
+    )
+    .unwrap();
+    let doc: LinearSnapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(doc.record.state.as_deref(), Some("bound"));
+    assert_eq!(doc.issues.len(), 2);
+
+    let value = handle_request(
+        &board.d,
+        "linear.issue",
+        json!({"issue": "WEB-1", "plugin_root": missing}),
+    )
+    .unwrap();
+    assert!(value.get("schema").is_some(), "{value}");
+}
+
+#[test]
+fn the_reads_are_routed_and_refuse_bad_params_before_any_linear_call() {
+    let board = Board::new(|r, _| board_linear(r));
+    for (method, params) in [
+        ("linear.snapshot", json!({})),
+        ("linear.snapshot", json!({"workspace_id": " "})),
+        ("linear.list", json!({"kind": "views"})),
+        ("linear.list", json!({"kind": "views", "id": "-rf"})),
+        ("linear.list", json!({"kind": "spaces", "id": "wA"})),
+        ("linear.list", json!({"kind": "issues"})),
+        ("linear.issue", json!({"issue": "bad id"})),
+        ("linear.issue", json!({"issue": "-rf"})),
+    ] {
+        let err = handle_request(&board.d, method, params.clone()).unwrap_err();
+        assert_eq!(err.code(), 1, "{method} {params}: {err}");
+    }
+    assert!(board.fake.requests().is_empty());
+}
+
+#[test]
+fn the_retired_bind_handoff_is_not_a_method() {
+    let d = test_daemon(Config::default());
+    let err = handle_request(
+        &d,
+        "linear.bind_handoff",
+        json!({"space": "wA", "project": "p1", "origin_socket": "/tmp/x.sock"}),
     )
     .unwrap_err();
-    assert_eq!(err.code(), 6, "{err}");
+    assert_eq!(err.code(), 1, "{err}");
+}
+
+fn space_bind(board: &Board, project: &str, view: Option<&str>) -> Value {
+    handle_request(
+        &board.d,
+        "linear.space.bind",
+        json!({
+            "space": SPACE,
+            "project": project,
+            "view": view,
+            "claims": {"herdr_socket": SOCKET},
+        }),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_space_bound_over_the_socket_reads_as_bound_with_its_grouped_board() {
+    let mut board = Board::new(|r, _| board_linear(r));
+    assert_eq!(board.snapshot().record.state.as_deref(), Some("unbound"));
+    board.events();
+
+    let change = space_bind(&board, "project-1", None);
+
+    assert!(change["before"].is_null(), "{change}");
+    assert_eq!(change["after"]["project_id"], "project-1");
+    assert_eq!(change["after"]["herdr_session"], "alpha");
+    assert_eq!(
+        board.events(),
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: false,
+        }]
+    );
+    let doc = board.snapshot();
+    assert_eq!(doc.record.state.as_deref(), Some("bound"));
+    assert_eq!(doc.record.project_id.as_deref(), Some("project-1"));
+    let todo = doc.groups.iter().find(|g| g.key == "s-todo").unwrap();
+    assert_eq!(todo.issues, ["WEB-1"]);
+}
+
+#[test]
+fn rebinding_a_space_to_a_view_reads_the_view_on_the_next_snapshot() {
+    let board = Board::new(|r, _| board_linear(r));
+    space_bind(&board, "project-1", None);
+    board.snapshot();
+    assert_eq!(board.count("customView(id"), 0);
+
+    let change = space_bind(&board, "project-1", Some("view-1"));
+
+    assert_eq!(change["before"]["view"], Value::Null);
+    assert_eq!(change["after"]["view"]["id"], "view-1");
+    let doc = board.snapshot();
+    assert_eq!(doc.view.id.as_deref(), Some("view-1"));
+    assert_eq!(board.count("customView(id"), 1, "the new view is read");
+}
+
+#[test]
+fn a_space_bind_with_an_option_shaped_id_is_refused_and_writes_nothing() {
+    let board = Board::new(|r, _| board_linear(r));
+    for (project, view) in [("-rf", None), ("p1", Some("a b")), ("", None)] {
+        let err = handle_request(
+            &board.d,
+            "linear.space.bind",
+            json!({"space": SPACE, "project": project, "view": view}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), 1, "{project} {view:?}: {err}");
+    }
+    assert!(board
+        .d
+        .store
+        .lock()
+        .list_space_bindings()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

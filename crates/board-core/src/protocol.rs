@@ -1126,20 +1126,16 @@ pub struct BoardNotifyResult {
 }
 
 // ---------------------------------------------------------------------------
-// linear methods (the work plugin's space snapshot)
+// linear methods (the board's read of Linear)
 // ---------------------------------------------------------------------------
 
 /// `linear.snapshot` params. `origin_socket` is the caller's herdr socket;
-/// absent means the script runs against the plugin's own default resolution
-/// and every pane status is `unknown`.
+/// absent means every pane status is `unknown`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSnapshotParams {
     pub workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
     /// Skip the daemon's read cache. An older daemon ignores it.
     #[serde(
         default,
@@ -1150,12 +1146,11 @@ pub struct LinearSnapshotParams {
 }
 
 /// How long a client waits for a `linear.snapshot` answer. Longer than the
-/// daemon's script deadline plus its stop grace, so a slow run is answered by
-/// the daemon; only a daemon that never answers reaches it.
+/// daemon's paged Linear read, so a slow read is answered by the daemon; only
+/// a daemon that never answers reaches it.
 pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
-/// How long a client waits for a `linear.list` answer: longer than the
-/// daemon's list deadline plus its stop grace, as for the snapshot.
+/// How long a client waits for a `linear.list` answer, as for the snapshot.
 pub const LINEAR_LIST_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 
 /// `linear.issue` params: one issue, read whole for the issue page.
@@ -1165,9 +1160,6 @@ pub struct LinearIssueParams {
     pub issue: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
 }
 
 /// How long a client waits for a `linear.issue` answer. Shorter than the
@@ -1175,7 +1167,7 @@ pub struct LinearIssueParams {
 /// issue page.
 pub const LINEAR_ISSUE_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The document `bin/work-issue.sh` prints. Every field the plugin can print as
+/// The `linear.issue` document. Every field that can arrive as
 /// `null` is an `Option`, and every connection defaults to empty, because an
 /// explicit null from another process is not the same as an absent key to
 /// serde (`docs/solutions/integration-issues/serde-default-rejects-explicit-null.md`).
@@ -1329,8 +1321,8 @@ pub struct LinearHistoryEvent {
     pub removed_labels: Vec<String>,
 }
 
-/// Which plugin list `linear.list` runs: `bin/work-spaces.sh`,
-/// `bin/work-projects.sh` or `bin/work-views.sh`.
+/// Which list `linear.list` reads: herdr spaces, Linear projects, or one
+/// project's views.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinearListKind {
@@ -1341,7 +1333,7 @@ pub enum LinearListKind {
 }
 
 /// `linear.list` params. `id` is the one argument a kind needs (the project
-/// id for `views`); `origin_socket` and `plugin_root` mean what they mean for
+/// id for `views`); `origin_socket` means what it means for
 /// [`LinearSnapshotParams`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearListParams {
@@ -1350,8 +1342,6 @@ pub struct LinearListParams {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
 }
 
 /// A closed vocabulary, unlike the snapshot's string statuses: a picker must
@@ -1462,33 +1452,6 @@ impl LinearListResult {
     }
 }
 
-/// How long a client waits for a `linear.bind_handoff` answer: longer than the
-/// daemon's busy retry on a slow new pane plus the herdr calls around it.
-pub const LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(300);
-
-/// `linear.bind_handoff` params: ids and a directory only, never names. The
-/// daemon validates every field before any herdr call.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinearBindHandoffParams {
-    pub space: String,
-    pub project: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issue: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub working_directory: Option<String>,
-    pub origin_socket: String,
-}
-
-/// The unfocused `bind` tab the handoff created and the pane running Claude.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinearBindHandoffResult {
-    pub tab_id: String,
-    pub pane_id: String,
-}
-
 // ---------------------------------------------------------------------------
 // linear local-state methods (boardd owns the rows; schema v16)
 // ---------------------------------------------------------------------------
@@ -1557,6 +1520,19 @@ pub struct LinearBindParams {
     pub tab: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+/// `linear.space.bind`: bind herdr space `space` to Linear project `project`,
+/// and to one of its custom views when `view` is set. The herdr session is
+/// the one `claims.herdr_socket` names, else `default`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSpaceBindParams {
+    pub space: String,
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
     #[serde(default)]
     pub claims: ActivityClaims,
 }
@@ -1871,8 +1847,8 @@ pub struct LinearImportResult {
     pub ignored: Vec<LinearImportIgnored>,
 }
 
-/// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
-/// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
+/// The `linear.snapshot` document, in the shape the work plugin's snapshot
+/// script defined (`plugins/work/docs/snapshot.md`), plus `pane_status`. Every section
 /// defaults so a partial document still parses; statuses stay strings because
 /// the plugin may add values the board does not know.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -283,19 +283,11 @@ impl Driver {
             Effect::LinearSessionGet => self.fetch_session(),
             Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
             Effect::LinearIssue { issue, generation } => self.fetch_linear_issue(issue, generation),
-            Effect::BindHandoff {
+            Effect::LinearSpaceBind {
                 space,
                 project,
                 view,
-                issue,
-                working_directory,
-            } => self.start_bind_handoff(crate::app::BindTarget {
-                space,
-                project,
-                view,
-                issue,
-                working_directory,
-            }),
+            } => self.bind_space(space, project, view),
             Effect::LinearMarkClear { ids, on_open } => self.clear_marks(ids, on_open),
             Effect::LinearShowAccept { id, issue } => self.accept_show(id, issue),
             Effect::LinearShowDismiss { id } => self.dismiss_show(id),

@@ -129,15 +129,12 @@ pub enum Effect {
         /// indistinguishable on arrival, and the older one can land last.
         generation: u64,
     },
-    /// Linear mode: `linear.bind_handoff` on the origin session. Ids and a
-    /// directory only: a name never reaches the bind line. The reducer marks
-    /// the handoff in flight before emitting it.
-    BindHandoff {
+    /// Linear mode: `linear.space.bind` of `space` to a project, and to one
+    /// of its views when `view` is set.
+    LinearSpaceBind {
         space: String,
         project: String,
         view: Option<String>,
-        issue: Option<String>,
-        working_directory: Option<String>,
     },
     /// Linear mode: `linear.mark.clear {ids}` in one request. `on_open` when
     /// opening a card sent it: a failed clear then says nothing.

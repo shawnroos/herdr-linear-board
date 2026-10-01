@@ -93,7 +93,6 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
                 client.linear_snapshot(&LinearSnapshotParams {
                     workspace_id,
                     origin_socket: env_text("HERDR_SOCKET_PATH"),
-                    plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
                     force: false,
                 })
             })?;
@@ -105,7 +104,6 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
                 client.linear_issue(&LinearIssueParams {
                     issue,
                     origin_socket: env_text("HERDR_SOCKET_PATH"),
-                    plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
                 })
             })?;
             let text = serde_json::to_string_pretty(&document)?;
@@ -139,7 +137,6 @@ fn linear_list(ctx: &mut Ctx, kind: LinearListKind, id: Option<String>) -> Resul
             kind,
             id,
             origin_socket: env_text("HERDR_SOCKET_PATH"),
-            plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
         })
     })?;
     emit(&list, json)

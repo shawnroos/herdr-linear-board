@@ -4,7 +4,6 @@
 //! socket server. Started by `board daemon`; talks to herdr (or a local child
 //! spawner) to launch agents.
 
-mod cancel;
 mod dispatch;
 mod herdr_conn;
 mod herdr_snapshot;
@@ -88,6 +87,9 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
     // daemon settings' legacy parser turn malformed TOML into defaults.
     let root = RootConfig::load()?;
     let settings = DaemonSettings::from_root(&root, &ProcessEnv)?;
+    if let Some(warning) = settings.retired_warning() {
+        tracing::warn!("{warning}");
+    }
     let mut config: Config = root.board;
     // Resolve the Pi agent dir for live model discovery unless the user pinned
     // it in config.toml. Tests construct Config directly (pi_agent_dir stays

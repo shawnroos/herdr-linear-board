@@ -10,8 +10,8 @@ use serde_json::{json, Map, Value};
 
 use super::linear_state::{
     is_issue_identifier, ActivityClaims, GroupingConfig, GroupingMapping, LinearOwner, Mark,
-    MarkKind, NewActivity, NewMark, NewShowRequest, ShowOutcome, SpaceGrouping, WorktreeBinding,
-    WorktreeBindingState, LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    MarkKind, NewActivity, NewMark, NewShowRequest, ShowOutcome, SpaceBinding, SpaceGrouping,
+    WorktreeBinding, WorktreeBindingState, LINEAR_ACTIVITY_KEEP_PER_SPACE,
 };
 use super::Db;
 use crate::protocol::{
@@ -20,7 +20,8 @@ use crate::protocol::{
     LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
     LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams, LinearRemoved, LinearReplace,
     LinearSessionBinding, LinearSessionGetParams, LinearSessionGetResult, LinearShowRequestParams,
-    LinearShowWithdrawParams, LinearState, LinearUnbindParams, Note, ShowRequest,
+    LinearShowWithdrawParams, LinearSpaceBindParams, LinearState, LinearUnbindParams, Note,
+    ShowRequest,
 };
 use crate::text::{sanitise_json, strip_control_and_format, strip_control_keep_lines};
 use crate::Error;
@@ -88,6 +89,24 @@ fn check_space(space: &str) -> LsResult<()> {
         )))
     } else {
         Ok(())
+    }
+}
+
+/// A Linear project or view id: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`.
+fn check_linear_id(id: &str, what: &str) -> LsResult<()> {
+    let bytes = id.as_bytes();
+    let ok = (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(refused(format!(
+            "{what} {id:?} is refused; it must be 1 to 64 ASCII letters, digits, `_` or `-`, \
+             starting with a letter or digit"
+        )))
     }
 }
 
@@ -414,6 +433,37 @@ impl Db {
             self.remove_mark(mark.id)?;
         }
         Ok(suggestions)
+    }
+
+    /// The binding keeps its display name, and its team ids while the project
+    /// is unchanged; the snapshot reads the project's teams itself.
+    pub fn linear_space_bind(
+        &self,
+        p: &LinearSpaceBindParams,
+    ) -> LsResult<LinearChange<SpaceBinding>> {
+        check_space(&p.space)?;
+        check_linear_id(&p.project, "project id")?;
+        if let Some(view) = p.view.as_deref() {
+            check_linear_id(view, "view id")?;
+        }
+        let session = claimed_session(&clean_claims(&p.claims)).unwrap_or_else(|| "default".into());
+        let tx = self.conn.unchecked_transaction()?;
+        let before = self.space_binding(&session, &p.space)?;
+        let kept = before.as_ref();
+        self.set_space_binding(&SpaceBinding {
+            herdr_session: session.clone(),
+            space: p.space.clone(),
+            project_id: p.project.clone(),
+            display_name: kept.and_then(|b| b.display_name.clone()),
+            team_ids: kept
+                .filter(|b| b.project_id == p.project)
+                .map(|b| b.team_ids.clone())
+                .unwrap_or_default(),
+            view: p.view.as_ref().map(|id| json!({ "id": id })),
+        })?;
+        let after = self.space_binding(&session, &p.space)?;
+        tx.commit()?;
+        Ok(LinearChange { before, after })
     }
 
     /// A worktree that no longer exists cannot be canonicalised, so its

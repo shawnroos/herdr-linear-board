@@ -4,15 +4,14 @@
 //! nothing here reads `App::board`. It writes local state only through boardd,
 //! never Linear and never the plugin's records: the mark clears, show-request
 //! answers and binds it emits are daemon requests on the Linear allow list.
-//! The herdr writes it asks the daemon for are this pane's title, pane
-//! focus, and a bind handoff that opens one `bind` tab; the bind skill's
-//! confirmation in that tab gates every write made there.
+//! The herdr writes it asks the daemon for are this pane's title and pane
+//! focus.
 
 use board_core::protocol::LinearState as LocalState;
 use board_core::protocol::{
-    LinearBindHandoffResult, LinearBinding, LinearIssue, LinearIssueDocument, LinearLinkedIssue,
-    LinearListEnvelope, LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow,
-    LinearSpacesList, LinearTab, Mark, MarkKind, Note, ShowRequest,
+    LinearBinding, LinearIssue, LinearIssueDocument, LinearLinkedIssue, LinearListEnvelope,
+    LinearListKind, LinearListResult, LinearSnapshot, LinearSpaceRow, LinearSpacesList, LinearTab,
+    Mark, MarkKind, Note, ShowRequest,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
@@ -63,7 +62,6 @@ pub enum LinearArrival {
         id: Option<String>,
         result: Result<LinearListResult, LinearFailure>,
     },
-    Handoff(Result<LinearBindHandoffResult, LinearFailure>),
     State(Box<Result<LocalState, LinearFailure>>),
     Session(Box<Result<board_core::protocol::LinearSessionGetResult, LinearFailure>>),
     Wrote {
@@ -79,6 +77,7 @@ pub enum LinearWrite {
     AcceptShow { id: i64, issue: String },
     DismissShow { id: i64 },
     Bind { mark: Option<i64>, issue: String },
+    SpaceBind { space: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,14 +278,6 @@ pub struct LinearState {
     /// The space chosen on the strip, whose project picker is or was open.
     /// A project pick (`pick.kind == Projects`) is for this space.
     pub bind_space: Option<LinearSpaceRow>,
-    /// A `linear.bind_handoff` is on the way; a second choice sends nothing.
-    pub handoff_in_flight: bool,
-    /// The picker (list kind and argument) that started the handoff in
-    /// flight; only that picker closes when it succeeds.
-    pub handoff_picker: Option<(LinearListKind, Option<String>)>,
-    /// Set when a handoff opened its tab; the board names the refresh key
-    /// until the next refresh.
-    pub bind_note: Option<String>,
     /// The fetched detail for the issue page that is open, and the issue it was
     /// fetched for. Keyed so a read that lands after the reader has moved on is
     /// dropped rather than painted over the page they are looking at.
@@ -390,9 +381,6 @@ impl LinearState {
             strip_focus: false,
             strip_sel: 0,
             bind_space: None,
-            handoff_in_flight: false,
-            handoff_picker: None,
-            bind_note: None,
             detail_doc: None,
             detail_in_flight: None,
             detail_reads: 0,
@@ -834,7 +822,6 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
                 issue_arrived(app, &issue, generation, *result);
                 vec![]
             }
-            LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
             LinearArrival::State(result) => local_state_arrived(app, *result),
             LinearArrival::Wrote { write, result } => write_arrived(app, write, result),
             LinearArrival::Session(_) => vec![],
@@ -969,7 +956,6 @@ fn request_snapshot(app: &mut App, force: bool) -> Vec<Effect> {
         return vec![];
     };
     state.in_flight = true;
-    state.bind_note = None;
     let mut effects = vec![Effect::LinearSnapshot { force }];
     // The strip's space list is read with every snapshot.
     if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
@@ -982,7 +968,7 @@ fn request_snapshot(app: &mut App, force: bool) -> Vec<Effect> {
 }
 
 /// An automatic refresh: sent now, or queued behind the one in flight.
-fn request_or_queue(app: &mut App) -> Vec<Effect> {
+pub(super) fn request_or_queue(app: &mut App) -> Vec<Effect> {
     match app.linear.as_mut() {
         Some(state) if state.in_flight => {
             state.queued = true;
@@ -1219,7 +1205,13 @@ fn write_arrived(
             effects.extend(request_local_state(app));
             effects
         }
-        (LinearWrite::Bind { .. }, Err(WriteFailure::Gone(text) | WriteFailure::Failed(text))) => {
+        (LinearWrite::SpaceBind { space }, Ok(())) => {
+            super::linear_picker::space_bound(app, &space)
+        }
+        (
+            LinearWrite::Bind { .. } | LinearWrite::SpaceBind { .. },
+            Err(WriteFailure::Gone(text) | WriteFailure::Failed(text)),
+        ) => {
             app.set_toast(format!("bind failed: {}", sanitise(&text)), true);
             vec![]
         }

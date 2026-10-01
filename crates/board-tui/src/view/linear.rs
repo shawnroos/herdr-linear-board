@@ -174,7 +174,7 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
             "mapping {mapping} is not the default; rendering as default"
         ));
     }
-    let mut second = if warnings.is_empty() {
+    let second = if warnings.is_empty() {
         vec![Span::styled(
             " Enter detail · r refresh · ? help · q quit",
             Style::default().fg(Color::DarkGray),
@@ -185,13 +185,6 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
             Style::default().fg(Color::LightYellow),
         )]
     };
-    if let Some(note) = &state.bind_note {
-        // Ahead of the key hints and warnings, which the width may cut.
-        second.insert(
-            0,
-            Span::styled(format!(" {note} ·"), Style::default().fg(Color::LightGreen)),
-        );
-    }
     (vec![Line::from(first), Line::from(second)], view_span)
 }
 
@@ -794,12 +787,6 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         Line::from("Press s (or click a space below) to pick a project for it,"),
         Line::from("or run /work:bind in this space; then press r to refresh."),
     ]);
-    if let Some(note) = &state.bind_note {
-        lines.push(Line::from(Span::styled(
-            note.clone(),
-            Style::default().fg(Color::LightGreen),
-        )));
-    }
     for warning in state.source_warnings() {
         lines.push(Line::from(Span::styled(
             format!("! {warning}"),

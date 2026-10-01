@@ -2,7 +2,7 @@
 //! become the board view: tabs in the strip, columns, and swimlane rows across
 //! the columns (R6-R8). Ports the display half of the work plugin's
 //! `lib/board-plan.sh` (group values, "No <field>" groups, sort order) and the
-//! no-config grouping of `bin/work-snapshot.sh`; pane placement is not ported.
+//! no-config grouping of its snapshot script; pane placement is not ported.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -526,9 +526,8 @@ fn cell_order(issue: &GroupingIssue, sub_ticket: bool) -> ((String, i64), bool, 
 
 const VIEW_GROUPINGS: [&str; 5] = ["workflowState", "assignee", "priority", "label", "project"];
 
-/// The script-era groups one issue belongs to under a view grouping
-/// (`bin/work-snapshot.sh`), keys included, so the no-config board is
-/// unchanged. Only `label` can place one issue in several groups.
+/// The script-era groups one issue belongs to under a view grouping, keys
+/// included, so the no-config board is unchanged. Only `label` can place one issue in several groups.
 fn view_keys(
     issue: &GroupingIssue,
     grouping: &str,

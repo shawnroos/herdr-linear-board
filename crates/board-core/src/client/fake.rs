@@ -11,13 +11,12 @@ use crate::protocol::{
     CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams,
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DeletedResult, Event, LinearBindHandoffParams, LinearBindHandoffResult,
-    LinearIssueDocument, LinearIssueParams, LinearListKind, LinearListParams, LinearListResult,
-    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
-    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
-    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
-    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
-    TemplateApplyParams, Trigger,
+    CommentUpdateParams, DeletedResult, Event, LinearIssueDocument, LinearIssueParams,
+    LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
+    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
+    RunFocusResult, TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -68,7 +67,6 @@ pub struct FakeLinear {
     pub snapshot: Result<LinearSnapshot, String>,
     pub focus: Result<PaneFocusResult, String>,
     pub lists: std::collections::BTreeMap<LinearListKind, Result<LinearListResult, String>>,
-    pub bind_handoff: Result<LinearBindHandoffResult, String>,
     /// Keyed by the issue asked for, so a test can seed several pages and prove
     /// a result is applied only to the issue still open.
     pub issues: std::collections::BTreeMap<String, Result<LinearIssueDocument, String>>,
@@ -86,7 +84,6 @@ impl Default for FakeLinear {
                 gone: false,
             }),
             lists: std::collections::BTreeMap::new(),
-            bind_handoff: Err("no linear bind handoff fixture configured".into()),
             issues: std::collections::BTreeMap::new(),
             issue_unsupported: false,
         }
@@ -233,18 +230,6 @@ impl FakeBoardClient {
     /// current but ships no `bin/work-issue.sh`.
     pub fn with_linear_issue_unsupported(mut self) -> FakeBoardClient {
         self.linear.issue_unsupported = true;
-        self
-    }
-
-    pub fn with_linear_bind_handoff(mut self, result: LinearBindHandoffResult) -> FakeBoardClient {
-        self.linear.bind_handoff = Ok(result);
-        self
-    }
-
-    /// Make `linear.bind_handoff` fail with `message`; every failure after the
-    /// tab exists reports herdr unavailable (code 4).
-    pub fn with_linear_bind_handoff_error(mut self, message: &str) -> FakeBoardClient {
-        self.linear.bind_handoff = Err(message.to_string());
         self
     }
 
@@ -895,18 +880,14 @@ fake_methods!(db, config, linear, now, params, {
             }
         }
     },
-    "linear.bind_handoff" => {
-        let _: LinearBindHandoffParams = serde_json::from_value(params)?;
-        match &linear.bind_handoff {
-            Ok(result) => serde_json::to_value(result.clone())?,
-            Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
-        }
-    },
     "linear.state.get" => {
         let p: crate::protocol::LinearStateGetParams = serde_json::from_value(params)?;
         serde_json::to_value(db.linear_state(&p.space, now)?)?
     },
     "linear.bind" => serde_json::to_value(db.linear_bind(&serde_json::from_value(params)?)?)?,
+    "linear.space.bind" => {
+        serde_json::to_value(db.linear_space_bind(&serde_json::from_value(params)?)?)?
+    },
     "linear.unbind" => serde_json::to_value(db.linear_unbind(&serde_json::from_value(params)?)?)?,
     "linear.grouping.get" => {
         serde_json::to_value(db.linear_grouping_get(&params_or_default(params)?)?)?
@@ -1152,34 +1133,54 @@ mod tests {
     }
 
     #[test]
-    fn linear_bind_handoff_answers_the_configured_result_or_error() {
-        let params = LinearBindHandoffParams {
-            space: "space-one".into(),
-            project: "project-one".into(),
-            origin_socket: "/tmp/herdr.sock".into(),
-            ..LinearBindHandoffParams::default()
-        };
+    fn linear_space_bind_writes_the_binding_and_returns_before_and_after() {
+        use crate::protocol::{ActivityClaims, LinearSpaceBindParams, LinearStateGetParams};
+        let mut client = FakeBoardClient::new().unwrap();
+        let first = client
+            .linear_space_bind(&LinearSpaceBindParams {
+                space: "wA".into(),
+                project: "p1".into(),
+                view: None,
+                claims: ActivityClaims {
+                    herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+                    ..ActivityClaims::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(first.before, None);
+        let after = first.after.unwrap();
+        assert_eq!(after.project_id, "p1");
+        assert_eq!(after.view, None);
 
-        let mut unconfigured = FakeBoardClient::new().unwrap();
-        assert!(unconfigured.linear_bind_handoff(&params).is_err());
+        let second = client
+            .linear_space_bind(&LinearSpaceBindParams {
+                space: "wA".into(),
+                project: "p2".into(),
+                view: Some("v9".into()),
+                claims: ActivityClaims {
+                    herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+                    ..ActivityClaims::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(second.before.unwrap().project_id, "p1");
+        assert_eq!(
+            second.after.unwrap().view,
+            Some(serde_json::json!({"id": "v9"}))
+        );
 
-        let result = LinearBindHandoffResult {
-            tab_id: "tab-1".into(),
-            pane_id: "pane-1".into(),
-        };
-        let mut client = FakeBoardClient::new()
-            .unwrap()
-            .with_linear_bind_handoff(result.clone());
-        assert_eq!(client.linear_bind_handoff(&params).unwrap(), result);
+        let state = client
+            .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+            .unwrap();
+        assert_eq!(state.space_bindings.len(), 1);
+        assert_eq!(state.space_bindings[0].project_id, "p2");
 
-        let mut failing = FakeBoardClient::new()
-            .unwrap()
-            .with_linear_bind_handoff_error("herdr is not running");
-        let err = failing.linear_bind_handoff(&params).unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<crate::Error>(),
-            Some(crate::Error::HerdrUnavailable(m)) if m == "herdr is not running"
-        ));
+        let refused = client.linear_space_bind(&LinearSpaceBindParams {
+            space: "wA".into(),
+            project: "-rf".into(),
+            ..LinearSpaceBindParams::default()
+        });
+        assert!(refused.is_err(), "an option-shaped project id is refused");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! module only applies the environment overrides, after parsing, so malformed
 //! config cannot be hidden by a second best-effort parse.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use board_core::config::SpawnerKind;
 use board_core::config::{DaemonConfig, RootConfig};
@@ -38,6 +38,9 @@ impl EnvLookup for ProcessEnv {
     }
 }
 
+const RETIRED_PLUGIN_ROOT_KEY: &str = "[daemon] work_plugin_root";
+const RETIRED_PLUGIN_ROOT_ENV: &str = "BOARD_WORK_PLUGIN_ROOT";
+
 /// Resolved daemon settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonSettings {
@@ -49,9 +52,8 @@ pub struct DaemonSettings {
     pub local_poll_ms: u64,
     /// Timeout/idle ticker interval (ms). Default 1000.
     pub tick_ms: u64,
-    /// `[daemon] work_plugin_root`, the TOML step of the plugin root
-    /// resolution `ops::linear` performs.
-    pub work_plugin_root: Option<PathBuf>,
+    /// Retired settings that are still set. They are accepted and ignored.
+    pub retired: Vec<&'static str>,
     /// `[linear] show_request_ttl_secs`, at least 1.
     pub show_request_ttl_secs: i64,
 }
@@ -63,7 +65,7 @@ impl Default for DaemonSettings {
             timeout_unit_secs: 60,
             local_poll_ms: 2000,
             tick_ms: 1000,
-            work_plugin_root: None,
+            retired: Vec::new(),
             show_request_ttl_secs: board_core::db::SHOW_REQUEST_TTL_DEFAULT_SECS,
         }
     }
@@ -78,10 +80,18 @@ impl DaemonSettings {
             timeout_unit_secs: config.timeout_unit_secs.max(1),
             local_poll_ms: config.local_poll_ms.max(1),
             tick_ms: config.tick_ms.max(1),
-            work_plugin_root: config.work_plugin_root.clone(),
             ..Self::default()
         };
 
+        if config.work_plugin_root.is_some() {
+            settings.retired.push(RETIRED_PLUGIN_ROOT_KEY);
+        }
+        if env
+            .var(RETIRED_PLUGIN_ROOT_ENV)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            settings.retired.push(RETIRED_PLUGIN_ROOT_ENV);
+        }
         if let Some(value) = env.var("BOARD_SPAWNER") {
             settings.spawner = parse_spawner(&value)?;
         }
@@ -96,6 +106,16 @@ impl DaemonSettings {
         }
 
         Ok(settings)
+    }
+
+    /// The one startup warning for every retired setting still set.
+    pub fn retired_warning(&self) -> Option<String> {
+        (!self.retired.is_empty()).then(|| {
+            format!(
+                "ignoring {}: the board reads Linear itself and runs no work-plugin scripts",
+                self.retired.join(" and ")
+            )
+        })
     }
 
     /// Resolve settings from a complete, already-parsed root config.

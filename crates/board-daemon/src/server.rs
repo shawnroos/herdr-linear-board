@@ -254,25 +254,7 @@ async fn handle_conn(d: Arc<Daemon>, stream: UnixStream, conn_id: u64) {
                     }
                     continue;
                 }
-                // While the handler runs, a closed read side means the client
-                // has gone: the token tells a long handler to stop. Data
-                // arriving instead is a pipelined request and is left unread.
-                let token = crate::cancel::RequestCancel::default();
-                let handler =
-                    dispatch_request(&d, conn_id, request_correlation, req, token.clone());
-                tokio::pin!(handler);
-                let mut watching = true;
-                let resp = loop {
-                    tokio::select! {
-                        resp = &mut handler => break resp,
-                        closed = async { reader.fill_buf().await.map(|buf| buf.is_empty()) }, if watching => {
-                            watching = false;
-                            if closed.unwrap_or(true) {
-                                token.cancel();
-                            }
-                        }
-                    }
-                };
+                let resp = dispatch_request(&d, conn_id, request_correlation, req).await;
                 if !outbox.response(to_line(&resp)).await {
                     break;
                 }
@@ -302,7 +284,6 @@ async fn dispatch_request(
     conn_id: u64,
     request_correlation: u64,
     req: Request,
-    token: crate::cancel::RequestCancel,
 ) -> Response {
     let Request { id, method, params } = req;
     let diagnostic_method = if ops::ROUTED_METHODS.contains(&method.as_str()) {
@@ -321,9 +302,7 @@ async fn dispatch_request(
     let handler_method = method.clone();
     let handled = tokio::task::spawn_blocking(move || {
         let _entered = span.enter();
-        crate::cancel::scoped(token, || {
-            ops::handle_request(&handler_d, &handler_method, params)
-        })
+        ops::handle_request(&handler_d, &handler_method, params)
     })
     .await;
     let duration_ms = started.elapsed().as_millis() as u64;

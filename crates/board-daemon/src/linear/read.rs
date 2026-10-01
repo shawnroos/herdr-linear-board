@@ -1,6 +1,6 @@
 //! What one space's board needs from Linear, read in one pass: the view (when
 //! the binding names one), the issues, and the project with its teams'
-//! workflow states. Ports the reads of the plugin's `bin/work-snapshot.sh`.
+//! workflow states. Ports the reads of the work plugin's snapshot script.
 
 use serde_json::Value;
 

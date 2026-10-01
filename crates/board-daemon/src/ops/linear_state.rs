@@ -71,6 +71,12 @@ pub(super) fn bind(d: &Arc<Daemon>, p: LinearBindParams) -> Result<Value> {
     Ok(json!(bound))
 }
 
+pub(super) fn space_bind(d: &Arc<Daemon>, p: LinearSpaceBindParams) -> Result<Value> {
+    let change = d.store.lock().linear_space_bind(&p).map_err(ls)?;
+    announce(d, Some(p.space.clone()));
+    Ok(json!(change))
+}
+
 pub(super) fn unbind(d: &Arc<Daemon>, p: LinearUnbindParams) -> Result<Value> {
     let space = claimed_space(p.space.as_deref(), &clean_claims(&p.claims));
     let change = d.store.lock().linear_unbind(&p).map_err(ls)?;

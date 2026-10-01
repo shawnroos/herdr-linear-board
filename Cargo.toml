@@ -65,7 +65,6 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Dev / test
 insta = "1"
 tempfile = "3"
-sha2 = "0.10"
 
 # Internal crates
 board-core = { path = "crates/board-core" }

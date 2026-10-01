@@ -8,16 +8,14 @@ use std::sync::mpsc;
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
-    LinearBindHandoffParams, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, LinearStateGetParams, PaneFocusParams,
-    LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT, LINEAR_ISSUE_CLIENT_TIMEOUT,
-    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    ActivityClaims, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
+    LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams, PaneFocusParams,
+    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
 use crate::app::{
-    BindTarget, LinearArrival, LinearFailure, LinearWrite, LocalStateSignals, Mode, Msg,
-    WriteFailure,
+    LinearArrival, LinearFailure, LinearWrite, LocalStateSignals, Mode, Msg, WriteFailure,
 };
 use crate::Driver;
 
@@ -40,7 +38,6 @@ pub(super) enum Pending {
         kind: LinearListKind,
         id: Option<String>,
     },
-    Handoff(LinearBindHandoffParams),
 }
 
 /// The only effects the driver executes in Linear mode. Everything else is
@@ -59,7 +56,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::OpenIssueUrl(_)
             | Effect::CopyWorktreePath { .. }
             | Effect::SetLinearPaneTitle(_)
-            | Effect::BindHandoff { .. }
+            | Effect::LinearSpaceBind { .. }
             | Effect::LinearMarkClear { .. }
             | Effect::LinearShowAccept { .. }
             | Effect::LinearShowDismiss { .. }
@@ -98,7 +95,7 @@ pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
         | Effect::OpenIssueUrl(_)
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
-        | Effect::BindHandoff { .. }
+        | Effect::LinearSpaceBind { .. }
         | Effect::LinearMarkClear { .. }
         | Effect::LinearShowAccept { .. }
         | Effect::LinearShowDismiss { .. }
@@ -156,7 +153,7 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::OpenIssueUrl(_)
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
-        | Effect::BindHandoff { .. }
+        | Effect::LinearSpaceBind { .. }
         | Effect::LinearMarkClear { .. }
         | Effect::LinearShowAccept { .. }
         | Effect::LinearShowDismiss { .. }
@@ -365,7 +362,6 @@ impl Driver {
         let params = LinearIssueParams {
             issue: issue.clone(),
             origin_socket: self.origin.origin_socket.clone(),
-            plugin_root: self.origin.plugin_root.clone(),
         };
         self.run_linear_read(
             LINEAR_ISSUE_CLIENT_TIMEOUT,
@@ -391,36 +387,6 @@ impl Driver {
         );
     }
 
-    /// Start `linear.bind_handoff` off the event loop. It can take as long as
-    /// a slow new pane's shell, so it runs on a worker like the reads.
-    pub(super) fn start_bind_handoff(&mut self, params: BindTarget) {
-        let Some(origin_socket) = self.origin.origin_socket.clone() else {
-            self.handle(Msg::LinearArrived(Box::new(LinearArrival::Handoff(Err(
-                LinearFailure::Failed(
-                    "binding requires Herdr (HERDR_SOCKET_PATH is unset)".to_string(),
-                ),
-            )))));
-            return;
-        };
-        let params = LinearBindHandoffParams {
-            space: params.space,
-            project: params.project,
-            view: params.view,
-            issue: params.issue,
-            working_directory: params.working_directory,
-            origin_socket,
-        };
-        if let Some(pending) = self.deferred_linear.as_mut() {
-            pending.push_back(Pending::Handoff(params));
-            return;
-        }
-        self.run_linear_read(
-            LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
-            move |client| client.linear_bind_handoff(&params),
-            LinearArrival::Handoff,
-        );
-    }
-
     /// Open the Linear picker for `kind` (`id` is a views list's project id)
     /// and read its list through the effect gate.
     pub fn open_linear_picker(&mut self, kind: LinearListKind, id: Option<String>) {
@@ -434,7 +400,6 @@ impl Driver {
         Some(LinearSnapshotParams {
             workspace_id,
             origin_socket: self.origin.origin_socket.clone(),
-            plugin_root: self.origin.plugin_root.clone(),
             force,
         })
     }
@@ -449,7 +414,6 @@ impl Driver {
             kind,
             id,
             origin_socket: self.origin.origin_socket.clone(),
-            plugin_root: self.origin.plugin_root.clone(),
         }
     }
 
@@ -496,21 +460,6 @@ impl Driver {
         true
     }
 
-    /// Run the oldest held handoff synchronously and feed its arrival.
-    /// Returns whether one was pending.
-    pub fn deliver_pending_linear_handoff(&mut self) -> bool {
-        let Some(Pending::Handoff(params)) =
-            self.take_pending(|p| matches!(p, Pending::Handoff(_)))
-        else {
-            return false;
-        };
-        let result = self.client.linear_bind_handoff(&params);
-        self.handle(Msg::LinearArrived(Box::new(LinearArrival::Handoff(
-            classify(result, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT),
-        ))));
-        true
-    }
-
     /// Run the oldest held issue read synchronously and feed its arrival.
     /// Returns whether one was pending. A test drives overlapping reads by
     /// holding two and delivering them in the order it wants.
@@ -523,7 +472,6 @@ impl Driver {
         let params = LinearIssueParams {
             issue: issue.clone(),
             origin_socket: self.origin.origin_socket.clone(),
-            plugin_root: self.origin.plugin_root.clone(),
         };
         let result = self.client.linear_issue(&params);
         self.handle(Msg::LinearArrived(Box::new(LinearArrival::Issue {
@@ -636,6 +584,21 @@ impl Driver {
             ..LinearBindParams::default()
         }));
         self.wrote(LinearWrite::Bind { mark, issue }, result);
+    }
+
+    /// The herdr session the space belongs to is the one this board runs in,
+    /// as the snapshot read keys it.
+    pub(super) fn bind_space(&mut self, space: String, project: String, view: Option<String>) {
+        let result = classify_write(self.client.linear_space_bind(&LinearSpaceBindParams {
+            space: space.clone(),
+            project,
+            view,
+            claims: ActivityClaims {
+                herdr_socket: self.origin.origin_socket.clone(),
+                ..ActivityClaims::default()
+            },
+        }));
+        self.wrote(LinearWrite::SpaceBind { space }, result);
     }
 
     pub(super) fn focus_pane(&mut self, pane_id: String) {
@@ -781,12 +744,10 @@ mod tests {
                 issue: s(),
                 generation: 1,
             },
-            Effect::BindHandoff {
+            Effect::LinearSpaceBind {
                 space: s(),
                 project: s(),
                 view: None,
-                issue: None,
-                working_directory: None,
             },
             Effect::LinearMarkClear {
                 ids: vec![1],
@@ -908,12 +869,9 @@ mod tests {
             std::io::ErrorKind::WouldBlock,
             "Resource temporarily unavailable",
         );
-        match classify::<()>(
-            Err(anyhow::Error::new(io)),
-            LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
-        ) {
+        match classify::<()>(Err(anyhow::Error::new(io)), LINEAR_ISSUE_CLIENT_TIMEOUT) {
             Err(LinearFailure::TimedOut(limit)) => {
-                assert_eq!(limit, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT)
+                assert_eq!(limit, LINEAR_ISSUE_CLIENT_TIMEOUT)
             }
             other => panic!("{other:?}"),
         }

@@ -15,20 +15,19 @@ use crate::protocol::{
     CommentDeleteParams, CommentGetParams, CommentHistoryParams, CommentUpdateParams, DaemonStatus,
     DeletedResult, Event, GroupingConfig, HarnessCapabilitiesParams, HarnessListResult,
     LinearActivityListParams, LinearActivityListResult, LinearActivityRecordParams,
-    LinearActivityRecordResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearBindParams,
-    LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
-    LinearIdParams, LinearImportParams, LinearImportResult, LinearIssueDocument, LinearIssueParams,
-    LinearListParams, LinearListResult, LinearMarkClearParams, LinearMarkSetParams,
-    LinearMarkUnmarkParams, LinearNoteSetParams, LinearRemoved, LinearReplace,
-    LinearSessionGetParams, LinearSessionGetResult, LinearShowRequestParams,
-    LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams, LinearState,
-    LinearStateGetParams, LinearUnbindParams, Mark, Note, PaneFocusParams, PaneFocusResult,
-    PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
-    ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
-    ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams,
-    RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams,
-    SessionListResult, ShowRequest, SpaceListParams, SpaceListResult, StopResult,
-    TemplateApplyParams, Visibility, WorktreeBinding,
+    LinearActivityRecordResult, LinearBindParams, LinearChange, LinearGroupingGetParams,
+    LinearGroupingGetResult, LinearGroupingSetParams, LinearIdParams, LinearImportParams,
+    LinearImportResult, LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
+    LinearMarkClearParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
+    LinearRemoved, LinearReplace, LinearSessionGetParams, LinearSessionGetResult,
+    LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams,
+    LinearSpaceBindParams, LinearState, LinearStateGetParams, LinearUnbindParams, Mark, Note,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
+    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
+    RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
+    RunPaneExitedParams, SessionListResult, ShowRequest, SpaceBinding, SpaceListParams,
+    SpaceListResult, StopResult, TemplateApplyParams, Visibility, WorktreeBinding,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -562,15 +561,6 @@ pub trait BoardClient {
         )?)
     }
 
-    fn linear_bind_handoff(
-        &mut self,
-        p: &LinearBindHandoffParams,
-    ) -> anyhow::Result<LinearBindHandoffResult> {
-        Ok(serde_json::from_value(
-            self.call("linear.bind_handoff", serde_json::to_value(p)?)?,
-        )?)
-    }
-
     fn linear_state_get(&mut self, p: &LinearStateGetParams) -> anyhow::Result<LinearState> {
         Ok(serde_json::from_value(
             self.call("linear.state.get", serde_json::to_value(p)?)?,
@@ -583,6 +573,15 @@ pub trait BoardClient {
     ) -> anyhow::Result<LinearChange<WorktreeBinding>> {
         Ok(serde_json::from_value(
             self.call("linear.bind", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_space_bind(
+        &mut self,
+        p: &LinearSpaceBindParams,
+    ) -> anyhow::Result<LinearChange<SpaceBinding>> {
+        Ok(serde_json::from_value(
+            self.call("linear.space.bind", serde_json::to_value(p)?)?,
         )?)
     }
 

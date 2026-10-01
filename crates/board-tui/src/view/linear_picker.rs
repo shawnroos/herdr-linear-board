@@ -53,12 +53,6 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
             Style::default().fg(Color::LightCyan),
         ));
     }
-    if state.handoff_in_flight {
-        notes.push((
-            "starting the bind in a new tab…".to_string(),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
     let in_flight = state.list_in_flight(kind, picker.list_id.as_deref());
     if in_flight {
         notes.push((format!("loading {noun}…"), dim));

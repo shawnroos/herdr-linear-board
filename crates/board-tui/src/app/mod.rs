@@ -57,7 +57,7 @@ pub use linear::{
     StripView, WriteFailure,
 };
 pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
-pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};
+pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use session::{session_lane, SessionLane, SessionState, SessionView};
 pub use state::{

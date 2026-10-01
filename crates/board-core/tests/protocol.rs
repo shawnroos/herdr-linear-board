@@ -653,7 +653,6 @@ fn linear_list_params_serialise_kind_lowercase_and_omit_absent_fields() {
         kind: LinearListKind::Views,
         id: Some("project-one".into()),
         origin_socket: Some("/tmp/herdr.sock".into()),
-        plugin_root: None,
     };
     roundtrip(&views);
     assert_eq!(
@@ -820,40 +819,45 @@ fn linear_list_unknown_status_fails_to_parse() {
 }
 
 #[test]
-fn linear_bind_handoff_params_and_result_round_trip() {
-    use board_core::protocol::{LinearBindHandoffParams, LinearBindHandoffResult};
+fn a_retired_plugin_root_field_in_a_read_request_is_accepted_and_dropped() {
+    use board_core::protocol::{LinearIssueParams, LinearListParams, LinearSnapshotParams};
 
-    let minimal = LinearBindHandoffParams {
-        space: "space-one".into(),
-        project: "project-one".into(),
-        view: None,
-        issue: None,
-        working_directory: None,
-        origin_socket: "/tmp/herdr.sock".into(),
-    };
-    roundtrip(&minimal);
+    let snapshot: LinearSnapshotParams =
+        serde_json::from_value(json!({"workspace_id": "wA", "plugin_root": "/opt/work-plugin"}))
+            .unwrap();
     assert_eq!(
-        serde_json::to_value(&minimal).unwrap(),
-        json!({"space": "space-one", "project": "project-one", "origin_socket": "/tmp/herdr.sock"})
+        serde_json::to_value(&snapshot).unwrap(),
+        json!({"workspace_id": "wA"})
     );
+    let list: LinearListParams =
+        serde_json::from_value(json!({"kind": "projects", "plugin_root": "/opt/work-plugin"}))
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(&list).unwrap(),
+        json!({"kind": "projects"})
+    );
+    let issue: LinearIssueParams =
+        serde_json::from_value(json!({"issue": "EX-1", "plugin_root": null})).unwrap();
+    assert_eq!(
+        serde_json::to_value(&issue).unwrap(),
+        json!({"issue": "EX-1"})
+    );
+}
 
-    let full = LinearBindHandoffParams {
+#[test]
+fn linear_space_bind_params_round_trip() {
+    use board_core::protocol::LinearSpaceBindParams;
+
+    let minimal: LinearSpaceBindParams =
+        serde_json::from_value(json!({"space": "wA", "project": "project-one"})).unwrap();
+    assert_eq!(minimal.view, None);
+    roundtrip(&minimal);
+    let full = LinearSpaceBindParams {
         view: Some("view-one".into()),
-        issue: Some("EX-1".into()),
-        working_directory: Some("/work/example".into()),
         ..minimal
     };
     roundtrip(&full);
-
-    let result = LinearBindHandoffResult {
-        tab_id: "tab-1".into(),
-        pane_id: "pane-1".into(),
-    };
-    roundtrip(&result);
-    assert_eq!(
-        serde_json::to_value(&result).unwrap(),
-        json!({"tab_id": "tab-1", "pane_id": "pane-1"})
-    );
+    assert_eq!(serde_json::to_value(&full).unwrap()["view"], "view-one");
 }
 
 #[test]

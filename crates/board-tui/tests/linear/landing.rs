@@ -192,7 +192,7 @@ fn a_valid_board_show_space_names_the_board_and_an_invalid_one_does_not() {
 }
 
 #[test]
-fn b_on_the_issue_page_binds_through_linear_bind_not_a_handoff() {
+fn b_on_the_issue_page_binds_through_linear_bind() {
     let worktree = Worktree::new("u10-b");
     let path = worktree.0.to_str().unwrap().to_string();
     let mut snapshot = bound_with_view();
@@ -203,7 +203,7 @@ fn b_on_the_issue_page_binds_through_linear_bind_not_a_handoff() {
     open_web_3302(&mut d);
     log.lock().unwrap().clear();
     press(&mut d, KeyCode::Char('b'));
-    assert_eq!(count(&log, "linear.bind_handoff"), 0);
+    assert_eq!(count(&log, "linear.space.bind"), 0);
     let binds: Vec<Value> = log
         .lock()
         .unwrap()

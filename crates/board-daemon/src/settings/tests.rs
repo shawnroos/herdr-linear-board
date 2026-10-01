@@ -54,14 +54,31 @@ fn malformed_file_is_not_replaced_with_defaults() {
 }
 
 #[test]
-fn work_plugin_root_passes_through_from_typed_config() {
+fn the_retired_plugin_root_settings_are_accepted_and_give_one_warning() {
     let root =
         RootConfig::from_toml("[daemon]\nwork_plugin_root = \"/opt/work-plugin\"\n").unwrap();
-    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
-    assert_eq!(
-        settings.work_plugin_root.as_deref(),
-        Some(std::path::Path::new("/opt/work-plugin"))
+    let settings = DaemonSettings::from_root(
+        &root,
+        &env(&[("BOARD_WORK_PLUGIN_ROOT", "/opt/other-plugin")]),
+    )
+    .unwrap();
+    let warning = settings.retired_warning().expect("one warning");
+    assert!(warning.contains("[daemon] work_plugin_root"), "{warning}");
+    assert!(warning.contains("BOARD_WORK_PLUGIN_ROOT"), "{warning}");
+    assert!(
+        !warning.contains("/opt/"),
+        "the value is not echoed: {warning}"
     );
+
+    let config_only = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(config_only.retired, ["[daemon] work_plugin_root"]);
+
+    let blank = DaemonSettings::from_root(
+        &RootConfig::default(),
+        &env(&[("BOARD_WORK_PLUGIN_ROOT", " ")]),
+    )
+    .unwrap();
+    assert_eq!(blank.retired_warning(), None);
 }
 
 #[test]

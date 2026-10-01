@@ -15,7 +15,7 @@ expression: frame
 "│                                      ││                                      ││                                      │"
 "│                                      ││                                      ││                                      │"
 "│              ┌ Snapshot failed ───────────────────────────────────────────────────────────────────────┐              │"
-"│              │plugin unavailable: running /plug/bin/work-snapshot.sh: timed out[0m                    │              │"
+"│              │plugin unavailable: running /plug/bin/linear-read.sh: timed out[0m                      │              │"
 "│              │                                                                                        │              │"
 "│              │The last good snapshot stays on screen behind this message.                             │              │"
 "│              │                                                                                        │              │"

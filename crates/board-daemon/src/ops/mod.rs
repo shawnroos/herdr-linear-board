@@ -14,7 +14,6 @@ pub(crate) fn now_secs(d: &Arc<Daemon>) -> i64 {
     d.wall_now_ms() / 1000
 }
 
-mod bind_handoff;
 mod boards;
 mod cards;
 mod columns;
@@ -131,9 +130,9 @@ routes!(d, params, {
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
     "linear.list" => linear::linear_list(d, from(params)?),
     "linear.issue" => linear::linear_issue(d, from(params)?),
-    "linear.bind_handoff" => bind_handoff::linear_bind_handoff(d, from(params)?),
     "linear.state.get" => linear_state::state_get(d, from(params)?),
     "linear.bind" => linear_state::bind(d, from(params)?),
+    "linear.space.bind" => linear_state::space_bind(d, from(params)?),
     "linear.unbind" => linear_state::unbind(d, from(params)?),
     "linear.grouping.get" => linear_state::grouping_get(d, from_or_default(params)?),
     "linear.grouping.set" => linear_state::grouping_set(d, from(params)?),

@@ -1,5 +1,4 @@
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -61,10 +60,8 @@ impl TestDaemon {
             .env("BOARD_TICK_MS", "150")
             .env("BOARD_LOCAL_POLL_MS", "150")
             .env("FAKE_AGENT_SLEEP", "0.3")
-            // The daemon resolves the work plugin root from its own
-            // environment; a root set in the shell that runs the suite would
-            // make the "no root" test pass for the wrong reason.
-            .env_remove("BOARD_WORK_PLUGIN_ROOT")
+            .env_remove("LINEAR_API_KEY")
+            .env_remove("BOARD_LINEAR_API_URL")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -95,11 +92,6 @@ impl TestDaemon {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-    }
-
-    /// Whether the daemon process has exited (and is reaped).
-    pub(crate) fn try_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     pub(crate) fn client(&self) -> UnixClient {
@@ -138,9 +130,6 @@ impl TestDaemon {
             .env("HOME", self._dir.path())
             .env_remove("BOARD_SCOPE_PATH")
             .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
-            // The CLI sends its own plugin root with a snapshot request; one
-            // set in the shell running the suite would answer for the daemon.
-            .env_remove("BOARD_WORK_PLUGIN_ROOT")
             // The suite may itself run inside a herdr pane; `board tui`
             // would read the ambient space id and open Linear mode.
             .env_remove("HERDR_WORKSPACE_ID")
@@ -234,45 +223,38 @@ impl Drop for TestDaemon {
     }
 }
 
-/// A work plugin root under a temp dir: `.claude-plugin/plugin.json` at
-/// `version`, `bin/work-snapshot.sh` running `fixtures/fake-work-snapshot.sh`
-/// and the three list scripts running `fixtures/fake-work-list.sh`, each with
-/// `knobs` exported. The daemon builds the child environment from scratch,
-/// so the knobs can only reach the fake through this wrapper.
-pub(crate) fn fake_plugin_root(version: &str, knobs: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
-    std::fs::write(
-        dir.path().join(".claude-plugin/plugin.json"),
-        format!(r#"{{"name":"work","version":"{version}"}}"#),
-    )
-    .unwrap();
-    std::fs::create_dir_all(dir.path().join("bin")).unwrap();
-    let mut wrapper = String::from("#!/usr/bin/env bash\n");
-    for (key, value) in knobs {
-        wrapper.push_str(&format!("export {key}='{value}'\n"));
-    }
-    wrapper.push_str(&format!(
-        "exec bash '{}' \"$@\"\n",
-        fixtures_dir().join("fake-work-snapshot.sh").display()
-    ));
-    let script = dir.path().join("bin/work-snapshot.sh");
-    std::fs::write(&script, wrapper).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    for kind in ["spaces", "projects", "views"] {
-        let mut wrapper = String::from("#!/usr/bin/env bash\n");
-        for (key, value) in knobs {
-            wrapper.push_str(&format!("export {key}='{value}'\n"));
+/// A loopback stand-in for Linear's GraphQL endpoint, answering each request
+/// body with `reply`; the thread outlives the test and ends with the process.
+pub(crate) fn fake_linear(reply: impl Fn(&str) -> Value + Send + 'static) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/graphql", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream);
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = std::io::Read::read_exact(&mut reader, &mut body);
+            let answer = reply(&String::from_utf8_lossy(&body)).to_string();
+            let mut stream = reader.into_inner();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
         }
-        wrapper.push_str(&format!(
-            "exec bash '{}' {kind} \"$@\"\n",
-            fixtures_dir().join("fake-work-list.sh").display()
-        ));
-        let script = dir.path().join(format!("bin/work-{kind}.sh"));
-        std::fs::write(&script, wrapper).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    dir
+    });
+    url
 }
 
 // -- assertion helpers --------------------------------------------------------
