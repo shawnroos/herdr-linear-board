@@ -1,11 +1,12 @@
 use super::mem;
 use board_core::db::{
-    Db, LinearOwner, LocalStateError, LocalStateRejection, MarkKind, NewMark, ShowOutcome,
-    SpaceBinding,
+    ActivityClaims, Db, LinearOwner, LocalStateError, LocalStateRejection, MarkKind, NewMark,
+    ShowOutcome, SpaceBinding,
 };
 use board_core::protocol::{
-    parse_timestamp, LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams,
-    LinearSessionGetParams, LinearShowRequestParams, LinearShowWithdrawParams,
+    parse_timestamp, LinearActivityOutcome, LinearActivityRecordParams, LinearBindParams,
+    LinearMarkSetParams, LinearMarkUnmarkParams, LinearSessionGetParams, LinearShowRequestParams,
+    LinearShowWithdrawParams,
 };
 use serde_json::json;
 
@@ -596,4 +597,32 @@ fn state_lists_the_space_resolved_requests_newest_first_up_to_the_cap() {
         state.show_requests.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![still_pending]
     );
+}
+
+#[test]
+fn a_save_issue_from_a_worktree_bound_to_that_issue_records_activity_only() {
+    let db = mem();
+    bind_space(&db);
+    let dir = tempfile::tempdir().unwrap();
+    let wt = worktree(&dir, "wt");
+    db.linear_bind(&bind(&wt, "ENG-5")).unwrap();
+
+    let result = db
+        .linear_activity_record(&LinearActivityRecordParams {
+            tool_name: "mcp__linear__save_issue".into(),
+            issue: Some("ENG-5".into()),
+            space: Some(SPACE.into()),
+            cwd: Some(format!("{wt}/src/deep")),
+            claims: ActivityClaims {
+                herdr_socket: Some(SOCKET.into()),
+                herdr_pane_id: Some("p-a".into()),
+                herdr_workspace_id: Some(SPACE.into()),
+                ..ActivityClaims::default()
+            },
+        })
+        .unwrap();
+
+    assert_eq!(result.outcome, LinearActivityOutcome::Recorded);
+    assert!(result.mark.is_none());
+    assert!(db.list_marks(SPACE).unwrap().is_empty());
 }

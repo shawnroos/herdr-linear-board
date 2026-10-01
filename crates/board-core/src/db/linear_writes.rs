@@ -857,6 +857,14 @@ impl Db {
             (Some(session), Some(_)) => self.space_binding(&session, space)?.is_some(),
             _ => false,
         };
+        if let Some(path) = worktree.as_deref() {
+            if self
+                .worktree_binding(path)?
+                .is_some_and(|binding| binding.issue == issue)
+            {
+                return Ok(recorded(activity));
+            }
+        }
         if let (true, Some(path)) = (known_session, worktree.as_deref()) {
             if self.worktree_binding(path)?.is_none() && self.issue_holder(issue, path)?.is_none() {
                 let binding = self.linear_bind(&LinearBindParams {
