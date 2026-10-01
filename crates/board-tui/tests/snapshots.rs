@@ -19,6 +19,8 @@ use ratatui::layout::Rect;
 
 #[path = "linear/mod.rs"]
 mod linear;
+#[path = "session/mod.rs"]
+mod session;
 
 const NOW_STR: &str = "2026-07-14 12:00:00";
 const RUN_START: &str = "2026-07-14 11:58:00"; // 2m before NOW

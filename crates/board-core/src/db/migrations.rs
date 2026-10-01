@@ -363,11 +363,14 @@ CREATE TABLE IF NOT EXISTS linear_marks (
   id               INTEGER PRIMARY KEY,
   space            TEXT NOT NULL,
   issue_identifier TEXT NOT NULL,
-  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','question','done','suggestion')),
   text             TEXT,
   detail_json      TEXT,
   created_by       TEXT,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS linear_notes (
@@ -376,7 +379,10 @@ CREATE TABLE IF NOT EXISTS linear_notes (
   issue_identifier TEXT NOT NULL,
   body             TEXT NOT NULL,
   author           TEXT NOT NULL,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS linear_show_requests (
@@ -386,7 +392,12 @@ CREATE TABLE IF NOT EXISTS linear_show_requests (
   reason           TEXT,
   requested_by     TEXT,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-  acknowledged_at  TEXT
+  acknowledged_at  TEXT,
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT,
+  expires_at              TEXT,
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
 );
 
 CREATE TABLE IF NOT EXISTS linear_activity (
@@ -416,8 +427,68 @@ CREATE TABLE IF NOT EXISTS linear_board_panes (
 CREATE INDEX IF NOT EXISTS idx_linear_marks_space ON linear_marks(space, issue_identifier);
 CREATE INDEX IF NOT EXISTS idx_linear_notes_space ON linear_notes(space, issue_identifier);
 CREATE INDEX IF NOT EXISTS idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_linear_activity_space ON linear_activity(space, id);
 CREATE INDEX IF NOT EXISTS idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);
+";
+
+const V16_OWNER_COLUMNS: [&str; 3] = [
+    "owner_herdr_socket",
+    "owner_herdr_pane_id",
+    "owner_claude_session_id",
+];
+
+/// Rebuilds the v16 `linear_marks` of databases stamped 16 before mark
+/// owners existed: SQLite cannot widen the `kind` CHECK in place.
+const V16_MARKS_AMEND_SQL: &str = "
+CREATE TABLE linear_marks_amended (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','question','done','suggestion')),
+  text             TEXT,
+  detail_json      TEXT,
+  created_by       TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
+);
+INSERT INTO linear_marks_amended
+  (id, space, issue_identifier, kind, text, detail_json, created_by, created_at)
+  SELECT id, space, issue_identifier, kind, text, detail_json, created_by, created_at
+  FROM linear_marks;
+DROP TABLE linear_marks;
+ALTER TABLE linear_marks_amended RENAME TO linear_marks;
+CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
+";
+
+/// Rebuilds the v16 `linear_show_requests` of databases stamped 16 before
+/// request owners, expiry and outcome existed. Copied rows stay pending.
+const V16_RESOLVED_INDEX_SQL: &str = "CREATE INDEX IF NOT EXISTS idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL";
+
+const V16_SHOW_REQUESTS_AMEND_SQL: &str = "
+CREATE TABLE linear_show_requests_amended (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  reason           TEXT,
+  requested_by     TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged_at  TEXT,
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT,
+  expires_at              TEXT,
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
+);
+INSERT INTO linear_show_requests_amended
+  (id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at)
+  SELECT id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at
+  FROM linear_show_requests;
+DROP TABLE linear_show_requests;
+ALTER TABLE linear_show_requests_amended RENAME TO linear_show_requests;
+CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
 ";
 
 impl Db {
@@ -679,6 +750,41 @@ impl Db {
             self.conn
                 .pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        // Outside the `version < SCHEMA_VERSION` chain: a database already
+        // stamped 16 skips that chain, yet may still hold the pre-amendment
+        // v16 tables. A future stamp is left alone.
+        if version <= SCHEMA_VERSION {
+            self.amend_v16_local_state()?;
+        }
+        Ok(())
+    }
+
+    fn amend_v16_local_state(&self) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let has_column = |table: &str, column: &str| -> rusqlite::Result<bool> {
+            tx.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
+                params![column],
+                |r| r.get(0),
+            )
+        };
+        for column in V16_OWNER_COLUMNS {
+            if !has_column("linear_notes", column)? {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE linear_notes ADD COLUMN {column} TEXT"
+                ))?;
+            }
+        }
+        if !has_column("linear_marks", "owner_herdr_socket")? {
+            tx.execute_batch(V16_MARKS_AMEND_SQL)?;
+        }
+        if !has_column("linear_show_requests", "outcome")? {
+            tx.execute_batch(V16_SHOW_REQUESTS_AMEND_SQL)?;
+        }
+        // After the rebuild, which drops the table's indexes, and also for a
+        // database amended before this index existed.
+        tx.execute_batch(V16_RESOLVED_INDEX_SQL)?;
+        tx.commit()?;
         Ok(())
     }
 }

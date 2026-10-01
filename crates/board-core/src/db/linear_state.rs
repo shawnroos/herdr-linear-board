@@ -14,6 +14,9 @@ use crate::{Error, Result};
 
 /// Chosen, not measured: activity is a recent-history view, not an audit log.
 pub const LINEAR_ACTIVITY_KEEP_PER_SPACE: usize = 500;
+/// A count, not a time window: `acknowledged_at` comes from SQLite's own
+/// clock, not the injected `now`, so a window would mix the two clocks.
+pub const RECENT_RESOLVED_SHOW_REQUESTS: usize = 20;
 
 pub const GROUPING_LEVELS: [&str; 4] = ["space", "tab", "column", "row"];
 pub const GROUPING_FIELD_KINDS: [&str; 8] = [
@@ -99,6 +102,13 @@ fn require_absolute_path(value: &str, what: &str) -> Result<()> {
             shown_str(value)
         )))
     }
+}
+
+pub fn is_space_id(space: &str) -> bool {
+    (1..=64).contains(&space.len())
+        && space
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
 /// A Linear issue key (`WEB-123`) or an issue UUID in its hyphenated form.
@@ -422,6 +432,8 @@ pub struct SessionScope {
 #[serde(rename_all = "snake_case")]
 pub enum MarkKind {
     Attention,
+    Question,
+    Done,
     Suggestion,
 }
 
@@ -429,6 +441,8 @@ impl MarkKind {
     pub fn as_str(self) -> &'static str {
         match self {
             MarkKind::Attention => "attention",
+            MarkKind::Question => "question",
+            MarkKind::Done => "done",
             MarkKind::Suggestion => "suggestion",
         }
     }
@@ -436,9 +450,62 @@ impl MarkKind {
     fn parse(text: &str) -> rusqlite::Result<Self> {
         match text {
             "attention" => Ok(MarkKind::Attention),
+            "question" => Ok(MarkKind::Question),
+            "done" => Ok(MarkKind::Done),
             "suggestion" => Ok(MarkKind::Suggestion),
             _ => Err(super::conv_err("linear_marks.kind")),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowOutcome {
+    Accepted,
+    Rejected,
+    Withdrawn,
+    Expired,
+}
+
+impl ShowOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShowOutcome::Accepted => "accepted",
+            ShowOutcome::Rejected => "rejected",
+            ShowOutcome::Withdrawn => "withdrawn",
+            ShowOutcome::Expired => "expired",
+        }
+    }
+
+    fn parse(text: &str) -> rusqlite::Result<Self> {
+        match text {
+            "accepted" => Ok(ShowOutcome::Accepted),
+            "rejected" => Ok(ShowOutcome::Rejected),
+            "withdrawn" => Ok(ShowOutcome::Withdrawn),
+            "expired" => Ok(ShowOutcome::Expired),
+            _ => Err(super::conv_err("linear_show_requests.outcome")),
+        }
+    }
+}
+
+/// Who wrote a mark, note or request. Attribution, not access
+/// control: the fields are the caller's own claims. All three `None` is no
+/// owner, which only the person can clear.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearOwner {
+    #[serde(default)]
+    pub herdr_socket: Option<String>,
+    #[serde(default)]
+    pub herdr_pane_id: Option<String>,
+    #[serde(default)]
+    pub claude_session_id: Option<String>,
+}
+
+impl LinearOwner {
+    pub fn is_anonymous(&self) -> bool {
+        self.herdr_socket.is_none()
+            && self.herdr_pane_id.is_none()
+            && self.claude_session_id.is_none()
     }
 }
 
@@ -450,6 +517,17 @@ pub struct NewMark<'a> {
     pub text: Option<&'a str>,
     pub detail: Option<Value>,
     pub created_by: Option<&'a str>,
+    pub owner: &'a LinearOwner,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewShowRequest<'a> {
+    pub space: &'a str,
+    pub issue: &'a str,
+    pub reason: Option<&'a str>,
+    pub requested_by: Option<&'a str>,
+    pub owner: &'a LinearOwner,
+    pub expires_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -462,6 +540,19 @@ pub struct Mark {
     pub detail: Option<Value>,
     pub created_by: Option<String>,
     pub created_at: String,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
+}
+
+impl Mark {
+    pub fn owner(&self) -> LinearOwner {
+        LinearOwner {
+            herdr_socket: self.owner_herdr_socket.clone(),
+            herdr_pane_id: self.owner_herdr_pane_id.clone(),
+            claude_session_id: self.owner_claude_session_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,6 +563,9 @@ pub struct Note {
     pub body: String,
     pub author: String,
     pub created_at: String,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -483,6 +577,33 @@ pub struct ShowRequest {
     pub requested_by: Option<String>,
     pub created_at: String,
     pub acknowledged_at: Option<String>,
+    pub owner_herdr_socket: Option<String>,
+    pub owner_herdr_pane_id: Option<String>,
+    pub owner_claude_session_id: Option<String>,
+    pub expires_at: Option<String>,
+    pub outcome: Option<ShowOutcome>,
+}
+
+impl ShowRequest {
+    pub fn owner(&self) -> LinearOwner {
+        LinearOwner {
+            herdr_socket: self.owner_herdr_socket.clone(),
+            herdr_pane_id: self.owner_herdr_pane_id.clone(),
+            claude_session_id: self.owner_claude_session_id.clone(),
+        }
+    }
+
+    /// A request with no readable `expires_at` never expires.
+    pub fn is_overdue(&self, now: i64) -> bool {
+        self.expires_at
+            .as_deref()
+            .and_then(crate::protocol::parse_timestamp)
+            .is_some_and(|expires| now >= expires)
+    }
+
+    pub fn is_pending(&self, now: i64) -> bool {
+        self.outcome.is_none() && self.acknowledged_at.is_none() && !self.is_overdue(now)
+    }
 }
 
 // -- activity and board panes -------------------------------------------------
@@ -568,10 +689,10 @@ fn is_tool_name(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
-const MARK_SELECT: &str = "SELECT id, space, issue_identifier, kind, text, detail_json, created_by, created_at FROM linear_marks";
+const MARK_SELECT: &str = "SELECT id, space, issue_identifier, kind, text, detail_json, created_by, created_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id FROM linear_marks";
 const NOTE_SELECT: &str =
-    "SELECT id, space, issue_identifier, body, author, created_at FROM linear_notes";
-const SHOW_SELECT: &str = "SELECT id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at FROM linear_show_requests";
+    "SELECT id, space, issue_identifier, body, author, created_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id FROM linear_notes";
+const SHOW_SELECT: &str = "SELECT id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at, outcome FROM linear_show_requests";
 const ACTIVITY_SELECT: &str = "SELECT id, space, tool_name, issue_identifier, herdr_socket, herdr_pane_id, herdr_workspace_id, card_id, run_id, created_at FROM linear_activity";
 const PANE_SELECT: &str = "SELECT herdr_socket, pane_id, context_key, placement, workspace_id, origin_pane_id, created_at FROM linear_board_panes";
 const SPACE_BINDING_SELECT: &str = "SELECT herdr_session, space, project_id, display_name, team_ids_json, view_json FROM linear_space_bindings";
@@ -587,6 +708,9 @@ fn row_to_mark(r: &Row) -> rusqlite::Result<Mark> {
         detail: optional_json(r.get(5)?)?,
         created_by: r.get(6)?,
         created_at: r.get(7)?,
+        owner_herdr_socket: r.get(8)?,
+        owner_herdr_pane_id: r.get(9)?,
+        owner_claude_session_id: r.get(10)?,
     })
 }
 
@@ -598,6 +722,9 @@ fn row_to_note(r: &Row) -> rusqlite::Result<Note> {
         body: r.get(3)?,
         author: r.get(4)?,
         created_at: r.get(5)?,
+        owner_herdr_socket: r.get(6)?,
+        owner_herdr_pane_id: r.get(7)?,
+        owner_claude_session_id: r.get(8)?,
     })
 }
 
@@ -610,6 +737,14 @@ fn row_to_show(r: &Row) -> rusqlite::Result<ShowRequest> {
         requested_by: r.get(4)?,
         created_at: r.get(5)?,
         acknowledged_at: r.get(6)?,
+        owner_herdr_socket: r.get(7)?,
+        owner_herdr_pane_id: r.get(8)?,
+        owner_claude_session_id: r.get(9)?,
+        expires_at: r.get(10)?,
+        outcome: r
+            .get::<_, Option<String>>(11)?
+            .map(|text| ShowOutcome::parse(&text))
+            .transpose()?,
     })
 }
 
@@ -946,6 +1081,19 @@ impl Db {
         Ok(rows)
     }
 
+    /// When the binding last changed. There is no creation column, so a
+    /// re-bind of the same worktree restarts this time.
+    pub fn worktree_binding_since(&self, worktree_path: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT updated_at FROM linear_worktree_bindings WHERE worktree_path = ?1",
+                params![worktree_path],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn remove_worktree_binding(&self, worktree_path: &str) -> Result<bool> {
         Ok(self.conn.execute(
             "DELETE FROM linear_worktree_bindings WHERE worktree_path = ?1",
@@ -1040,15 +1188,19 @@ impl Db {
         require_issue(mark.issue)?;
         require_optional_text(mark.created_by, "mark author")?;
         self.conn.execute(
-            "INSERT INTO linear_marks (space, issue_identifier, kind, text, detail_json, created_by)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO linear_marks (space, issue_identifier, kind, text, detail_json, created_by,
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 mark.space,
                 mark.issue,
                 mark.kind.as_str(),
                 mark.text,
                 mark.detail.as_ref().map(to_json_text).transpose()?,
-                mark.created_by
+                mark.created_by,
+                mark.owner.herdr_socket,
+                mark.owner.herdr_pane_id,
+                mark.owner.claude_session_id
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -1065,6 +1217,26 @@ impl Db {
             .prepare(&format!("{MARK_SELECT} WHERE space = ?1 ORDER BY id"))?;
         let rows = statement
             .query_map(params![space], row_to_mark)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn space_issue_marks(&self, space: &str, issue: &str) -> Result<Vec<Mark>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{MARK_SELECT} WHERE space = ?1 AND issue_identifier = ?2 ORDER BY id"
+        ))?;
+        let rows = statement
+            .query_map(params![space, issue], row_to_mark)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn issue_marks(&self, issue: &str) -> Result<Vec<Mark>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{MARK_SELECT} WHERE issue_identifier = ?1 ORDER BY id"
+        ))?;
+        let rows = statement
+            .query_map(params![issue], row_to_mark)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1109,7 +1281,14 @@ impl Db {
             > 0)
     }
 
-    pub fn add_note(&self, space: &str, issue: &str, body: &str, author: &str) -> Result<Note> {
+    pub fn add_note(
+        &self,
+        space: &str,
+        issue: &str,
+        body: &str,
+        author: &str,
+        owner: &LinearOwner,
+    ) -> Result<Note> {
         require_text(space, "space")?;
         require_issue(issue)?;
         require_text(author, "note author")?;
@@ -1117,9 +1296,18 @@ impl Db {
             return Err(refuse("a note body must not be empty".into()));
         }
         self.conn.execute(
-            "INSERT INTO linear_notes (space, issue_identifier, body, author)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![space, issue, body, author],
+            "INSERT INTO linear_notes (space, issue_identifier, body, author,
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                space,
+                issue,
+                body,
+                author,
+                owner.herdr_socket,
+                owner.herdr_pane_id,
+                owner.claude_session_id
+            ],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(self.conn.query_row(
@@ -1146,20 +1334,24 @@ impl Db {
             > 0)
     }
 
-    pub fn add_show_request(
-        &self,
-        space: &str,
-        issue: &str,
-        reason: Option<&str>,
-        requested_by: Option<&str>,
-    ) -> Result<ShowRequest> {
-        require_text(space, "space")?;
-        require_issue(issue)?;
-        require_optional_text(requested_by, "requester")?;
+    pub fn add_show_request(&self, request: &NewShowRequest<'_>) -> Result<ShowRequest> {
+        require_text(request.space, "space")?;
+        require_issue(request.issue)?;
+        require_optional_text(request.requested_by, "requester")?;
         self.conn.execute(
-            "INSERT INTO linear_show_requests (space, issue_identifier, reason, requested_by)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![space, issue, reason, requested_by],
+            "INSERT INTO linear_show_requests (space, issue_identifier, reason, requested_by,
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime(?8, 'unixepoch'))",
+            params![
+                request.space,
+                request.issue,
+                request.reason,
+                request.requested_by,
+                request.owner.herdr_socket,
+                request.owner.herdr_pane_id,
+                request.owner.claude_session_id,
+                request.expires_at
+            ],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(self.conn.query_row(
@@ -1169,9 +1361,30 @@ impl Db {
         )?)
     }
 
-    pub fn pending_show_requests(&self, space: &str) -> Result<Vec<ShowRequest>> {
+    /// Keeps the request's id and `created_at`, so its place in the pinned
+    /// line does not move.
+    pub fn refresh_show_request(
+        &self,
+        id: i64,
+        reason: Option<&str>,
+        requested_by: Option<&str>,
+        expires_at: i64,
+    ) -> Result<bool> {
+        require_optional_text(requested_by, "requester")?;
+        Ok(self.conn.execute(
+            "UPDATE linear_show_requests
+             SET reason = ?2, requested_by = ?3, expires_at = datetime(?4, 'unixepoch')
+             WHERE id = ?1 AND outcome IS NULL AND acknowledged_at IS NULL",
+            params![id, reason, requested_by, expires_at],
+        )? > 0)
+    }
+
+    /// Requests with no outcome yet, including overdue ones the sweep has
+    /// not reached.
+    fn open_show_requests(&self, space: Option<&str>) -> Result<Vec<ShowRequest>> {
         let mut statement = self.conn.prepare(&format!(
-            "{SHOW_SELECT} WHERE space = ?1 AND acknowledged_at IS NULL ORDER BY id"
+            "{SHOW_SELECT} WHERE (?1 IS NULL OR space = ?1)
+               AND outcome IS NULL AND acknowledged_at IS NULL ORDER BY id"
         ))?;
         let rows = statement
             .query_map(params![space], row_to_show)?
@@ -1179,13 +1392,52 @@ impl Db {
         Ok(rows)
     }
 
-    /// False when the request is unknown or already acknowledged.
-    pub fn acknowledge_show_request(&self, id: i64) -> Result<bool> {
+    pub fn pending_show_requests(&self, space: &str, now: i64) -> Result<Vec<ShowRequest>> {
+        let mut rows = self.open_show_requests(Some(space))?;
+        rows.retain(|r| r.is_pending(now));
+        Ok(rows)
+    }
+
+    pub fn recent_resolved_show_requests(&self, space: &str) -> Result<Vec<ShowRequest>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{SHOW_SELECT} WHERE space = ?1 AND outcome IS NOT NULL
+             ORDER BY acknowledged_at DESC, id DESC LIMIT ?2"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![space, RECENT_RESOLVED_SHOW_REQUESTS as i64],
+                row_to_show,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Sets `outcome` and `acknowledged_at` together: readers that predate
+    /// `outcome` still treat only `acknowledged_at IS NULL` as pending.
+    /// False when the request is unknown or already closed.
+    pub fn close_show_request(&self, id: i64, outcome: ShowOutcome) -> Result<bool> {
         Ok(self.conn.execute(
-            "UPDATE linear_show_requests SET acknowledged_at = datetime('now')
-             WHERE id = ?1 AND acknowledged_at IS NULL",
-            params![id],
+            "UPDATE linear_show_requests
+             SET outcome = ?2, acknowledged_at = datetime('now')
+             WHERE id = ?1 AND outcome IS NULL AND acknowledged_at IS NULL",
+            params![id, outcome.as_str()],
         )? > 0)
+    }
+
+    /// Marks every overdue request `expired` and returns the spaces that
+    /// changed, sorted and once each.
+    pub fn expire_overdue(&self, now: i64) -> Result<Vec<String>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut spaces = std::collections::BTreeSet::new();
+        for request in self.open_show_requests(None)? {
+            if request.is_overdue(now)
+                && self.close_show_request(request.id, ShowOutcome::Expired)?
+            {
+                spaces.insert(request.space);
+            }
+        }
+        tx.commit()?;
+        Ok(spaces.into_iter().collect())
     }
 
     // -- activity ---------------------------------------------------------------

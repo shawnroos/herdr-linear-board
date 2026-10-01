@@ -175,6 +175,15 @@ impl<P: Clone + PartialEq, T> SnapshotCache<P, T> {
         self.settled.notify_all();
     }
 
+    /// The key's last read when it succeeded, with its plan, without
+    /// fetching or waiting on a fetch in flight.
+    pub fn peek_good(&self, key: &SpaceKey) -> Option<(Arc<T>, P)> {
+        let entries = locked(&self.entries);
+        let entry = entries.get(key).filter(|entry| entry.error.is_none())?;
+        let (value, _) = entry.good.as_ref()?;
+        Some((value.clone(), entry.plan.clone()))
+    }
+
     /// Whether any session's last good read of `space` satisfies `test`.
     pub fn any_good(&self, space: &str, test: impl Fn(&T) -> bool) -> bool {
         locked(&self.entries)

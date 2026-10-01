@@ -1,5 +1,6 @@
 plugin_version 0.5.0
 c819a78126b8ff00026e280de85b456f61811345789141068ccfcd6886b837c3  bound-no-view.json
+bfb0b2d708b396e510e14805ca126aa0ee872f68cbb0d8120b30919a08ce88be  bound-tabs-lanes.json
 005a5c384b39c5dedb853ee8ffab5f8eb7675408c7c38dd5d3c168c47e46cd47  bound-view-unsupported-grouping.json
 9609e6593efc1fb921f2acf3182254962cd50075a71820179ea001e288de4793  bound-with-view.json
 14e191dfc02b0480d4b3508ae8457bcff69a923138afb623384b0cadffca7d76  herdr-unavailable.json

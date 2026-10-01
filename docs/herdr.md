@@ -435,6 +435,27 @@ PreToolUse and PostToolUse hooks, all started from a shell that set `HERDR_PANE_
   identifier (`TEAM-123`), `uuid` is Linear's id, and `createdAt == updatedAt` on a create. The
   `mcp__linear__` server's shape was not observed; parse it defensively.
 
+## Status line identity and pane-id lifetime (observed 2026-09-30)
+
+Observed on the host (herdr 0.9.3, Claude Code 2.1.286) in a disposable workspace (`hb-spike-u1`),
+with an interactive `claude --settings <file>` whose `statusLine` command logged its stdin and
+environment. Nothing was sent to a model.
+
+- **The status-line command inherits the pane's herdr environment.** It saw `HERDR_PANE_ID`,
+  `HERDR_SOCKET_PATH`, `HERDR_WORKSPACE_ID` and `HERDR_TAB_ID` for the pane Claude ran in.
+- **Its stdin is one JSON object** with `session_id`, `transcript_path`, `cwd`,
+  `workspace {current_dir, project_dir, added_dirs}`, `model {id, display_name}`, `version`, `cost`,
+  `context_window` and `rate_limits`. It runs on UI events, not on a timer: an idle session ran it
+  once.
+- **A new pane gets its own `HERDR_PANE_ID`**, even when split from an agent's pane.
+- **A process started inside a pane inherits that pane's id**, and a Claude background-job session
+  has been seen carrying an unrelated session's pane id (2026-09-11). A pane id alone therefore does
+  not identify a Claude session. Every Claude session exports its own `CLAUDE_CODE_SESSION_ID` to
+  child processes, and the status line receives the same value as `session_id`.
+- **Pane ids are not reused within a running session.** After closing `w2:p2`, the next splits were
+  `w2:p3` and `w2:p4`. Reuse across a herdr server restart was not observed: restarting the host's
+  server would have touched the user's session.
+
 Linear's GraphQL `CustomView` exposes its board grouping through `viewPreferencesValues`
 (`issueGrouping`, `issueSubGrouping`, `issueNesting`, `layout`, `hiddenColumns`, `hiddenRows`,
 `columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK

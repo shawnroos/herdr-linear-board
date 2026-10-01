@@ -82,6 +82,7 @@ fn claims(pane: &str) -> Value {
 fn changed(space: Option<&str>) -> Event {
     Event::LocalStateChanged {
         space: space.map(str::to_owned),
+        snapshot: false,
     }
 }
 
@@ -702,4 +703,268 @@ fn state_get_lists_the_space_marks_notes_and_pending_show_requests() {
     assert_eq!(state["notes"][0]["body"], "b");
     assert_eq!(state["show_requests"][0]["issue"], "WEB-1");
     assert_eq!(state["worktree_bindings"][0]["issue"], "WEB-1");
+}
+
+fn owner(pane: &str) -> Value {
+    json!({
+        "herdr_socket": SESSION_SOCKET,
+        "herdr_pane_id": pane,
+        "claude_session_id": format!("session-{pane}"),
+    })
+}
+
+#[test]
+fn each_owner_scoped_write_emits_exactly_one_local_state_changed_for_its_space() {
+    let mut fx = Fixture::new();
+    fx.bind_space();
+    let wt = fx.worktree("wt-a");
+    fx.ok(
+        "linear.bind",
+        json!({"cwd": path_str(&wt), "issue": "WEB-1"}),
+    );
+    fx.events();
+    let space = Some(SPACE);
+
+    expect_one(
+        &mut fx,
+        "linear.mark.set",
+        json!({"space": SPACE, "issue": "WEB-1", "kind": "question", "owner": owner("w1:p1")}),
+        space,
+    );
+    let unmarked = expect_one(
+        &mut fx,
+        "linear.mark.unmark",
+        json!({"space": SPACE, "issue": "WEB-1", "owner": owner("w1:p1")}),
+        space,
+    );
+    assert_eq!(unmarked["removed"][0]["kind"], "question");
+
+    expect_one(
+        &mut fx,
+        "linear.show.request",
+        json!({"space": SPACE, "issue": "WEB-1", "owner": owner("w1:p1")}),
+        space,
+    );
+    let withdrawn = expect_one(
+        &mut fx,
+        "linear.show.withdraw",
+        json!({"space": SPACE, "issue": "WEB-1", "owner": owner("w1:p1")}),
+        space,
+    );
+    assert_eq!(withdrawn["after"]["outcome"], "withdrawn");
+
+    let a = fx.ok(
+        "linear.mark.set",
+        json!({"space": SPACE, "issue": "WEB-1", "kind": "attention"}),
+    );
+    let b = fx.ok(
+        "linear.mark.set",
+        json!({"space": SPACE, "issue": "WEB-1", "kind": "done"}),
+    );
+    fx.events();
+    let cleared = expect_one(
+        &mut fx,
+        "linear.mark.clear",
+        json!({"ids": [a["after"]["id"].clone(), b["after"]["id"].clone()]}),
+        space,
+    );
+    assert_eq!(cleared["removed"].as_array().unwrap().len(), 2);
+
+    fx.ok(
+        "linear.mark.clear",
+        json!({"ids": [a["after"]["id"].clone()]}),
+    );
+    assert!(
+        fx.events().is_empty(),
+        "a bulk clear that removed nothing announced a change"
+    );
+    assert_eq!(
+        fx.ok(
+            "linear.session.get",
+            json!({"space": SPACE, "herdr_socket": SESSION_SOCKET})
+        )["space_bound"],
+        true
+    );
+    assert!(fx.events().is_empty(), "a session read announced a change");
+}
+
+#[test]
+fn unmark_without_claims_is_refused_while_the_id_keyed_clear_still_works() {
+    let mut fx = Fixture::new();
+    let wt = fx.worktree("wt-a");
+    fx.ok(
+        "linear.bind",
+        json!({"cwd": path_str(&wt), "issue": "WEB-1"}),
+    );
+    let mark = fx.ok(
+        "linear.mark.set",
+        json!({"space": SPACE, "issue": "WEB-1", "kind": "attention"}),
+    );
+    fx.events();
+
+    let err = fx
+        .call(
+            "linear.mark.unmark",
+            json!({"space": SPACE, "issue": "WEB-1"}),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), 1, "{err}");
+    assert!(
+        err.to_string().contains("only be cleared on the board"),
+        "{err}"
+    );
+    let err = fx
+        .call(
+            "linear.show.withdraw",
+            json!({"space": SPACE, "issue": "WEB-1", "owner": {"herdr_pane_id": ""}}),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), 1, "{err}");
+    assert!(fx.events().is_empty());
+
+    let cleared = expect_one(
+        &mut fx,
+        "linear.mark.clear",
+        json!({"id": mark["after"]["id"].clone()}),
+        Some(SPACE),
+    );
+    assert_eq!(cleared["before"]["id"], mark["after"]["id"]);
+    assert_eq!(cleared["after"], Value::Null);
+
+    let err = fx.call("linear.mark.clear", json!({})).unwrap_err();
+    assert_eq!(err.code(), 1, "{err}");
+}
+
+#[test]
+fn the_sweep_expires_an_overdue_request_and_announces_its_space_once() {
+    let mut fx = Fixture::new();
+    let wt = fx.worktree("wt-a");
+    fx.ok(
+        "linear.bind",
+        json!({"cwd": path_str(&wt), "issue": "WEB-1"}),
+    );
+    let requested = fx.ok(
+        "linear.show.request",
+        json!({"space": SPACE, "issue": "WEB-1"}),
+    );
+    fx.events();
+    let expires_at =
+        board_core::protocol::parse_timestamp(requested["after"]["expires_at"].as_str().unwrap())
+            .unwrap();
+
+    assert!(crate::watchers::sweep_show_requests_at(&fx.d, expires_at - 1).is_empty());
+    assert!(fx.events().is_empty());
+
+    assert_eq!(
+        crate::watchers::sweep_show_requests_at(&fx.d, expires_at + 1),
+        vec![SPACE.to_string()]
+    );
+    assert_eq!(fx.events(), vec![changed(Some(SPACE))]);
+
+    assert!(crate::watchers::sweep_show_requests_at(&fx.d, expires_at + 2).is_empty());
+    assert!(fx.events().is_empty(), "a second sweep announced again");
+}
+
+#[test]
+fn a_show_request_expires_after_the_configured_linear_ttl() {
+    let settings = crate::settings::DaemonSettings {
+        show_request_ttl_secs: 90,
+        ..crate::settings::DaemonSettings::default()
+    };
+    let d = testkit::daemon().settings(settings).build_daemon();
+    let dir = tempfile::tempdir().unwrap();
+    let wt = std::fs::canonicalize(dir.path()).unwrap().join("wt");
+    std::fs::create_dir_all(wt.join(".git")).unwrap();
+    handle_request(
+        &d,
+        "linear.bind",
+        json!({"cwd": path_str(&wt), "issue": "WEB-1"}),
+    )
+    .unwrap();
+    let requested = handle_request(
+        &d,
+        "linear.show.request",
+        json!({"space": SPACE, "issue": "WEB-1"}),
+    )
+    .unwrap();
+    let at = |field: &str| {
+        board_core::protocol::parse_timestamp(requested["after"][field].as_str().unwrap()).unwrap()
+    };
+    let ttl = at("expires_at") - at("created_at");
+    assert!((89..=91).contains(&ttl), "ttl {ttl}");
+}
+
+/// A suggestion in `space-2` naming `wt`, left by a save_issue report from a
+/// session that space does not know.
+fn suggest_elsewhere(fx: &Fixture, wt: &Path, issue: &str) {
+    let result = fx.ok(
+        "linear.activity.record",
+        json!({
+            "tool_name": "mcp__linear__save_issue",
+            "issue": issue,
+            "space": "space-2",
+            "cwd": path_str(wt),
+            "claims": claims("w1:p1"),
+        }),
+    );
+    assert_eq!(result["outcome"], "suggested");
+}
+
+#[test]
+fn a_bind_announces_each_space_whose_suggestion_it_cleared() {
+    let mut fx = Fixture::new();
+    fx.bind_space();
+    let wt = fx.worktree("wt-a");
+    suggest_elsewhere(&fx, &wt, "WEB-20");
+    fx.events();
+
+    let bound = fx.ok(
+        "linear.bind",
+        json!({"cwd": path_str(&wt), "issue": "WEB-20", "claims": claims("w1:p1")}),
+    );
+    assert_eq!(bound["cleared_suggestions"][0]["space"], "space-2");
+    assert_eq!(
+        fx.events(),
+        vec![changed(Some(SPACE)), changed(Some("space-2"))]
+    );
+}
+
+#[test]
+fn a_save_issue_report_that_links_announces_each_space_whose_suggestion_it_cleared() {
+    let mut fx = Fixture::new();
+    fx.bind_space();
+    let wt = fx.worktree("wt-a");
+    suggest_elsewhere(&fx, &wt, "WEB-21");
+    fx.events();
+
+    let result = fx.ok(
+        "linear.activity.record",
+        json!({
+            "tool_name": "mcp__linear__save_issue",
+            "issue": "WEB-21",
+            "cwd": path_str(&wt),
+            "claims": claims("w1:p1"),
+        }),
+    );
+    assert_eq!(result["outcome"], "linked");
+    assert_eq!(result["cleared_suggestions"][0]["space"], "space-2");
+    assert_eq!(
+        fx.events(),
+        vec![changed(Some(SPACE)), changed(Some("space-2"))]
+    );
+}
+
+#[test]
+fn a_report_with_no_space_takes_it_from_the_workspace_claim() {
+    let mut fx = Fixture::new();
+    let result = fx.ok(
+        "linear.activity.record",
+        json!({
+            "tool_name": "mcp__linear__save_comment",
+            "issue": "WEB-22",
+            "claims": {"herdr_socket": SESSION_SOCKET, "herdr_pane_id": "w1:p1", "herdr_workspace_id": SPACE},
+        }),
+    );
+    assert_eq!(result["activity"]["space"], SPACE);
+    assert_eq!(fx.events(), vec![changed(Some(SPACE))]);
 }

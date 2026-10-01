@@ -6,6 +6,7 @@ use board_core::protocol::{
 };
 use serde_json::json;
 
+use super::env_text;
 use crate::args::{
     HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
 };
@@ -85,14 +86,15 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             // Resolved before connecting, so a missing id never starts a daemon.
             let workspace_id = match workspace_id.filter(|id| !id.is_empty()) {
                 Some(id) => id,
-                None => non_empty_env("HERDR_WORKSPACE_ID")
+                None => env_text("HERDR_WORKSPACE_ID")
                     .ok_or_else(|| anyhow!("no space id given and $HERDR_WORKSPACE_ID is unset"))?,
             };
             let document = with_read_timeout(ctx, LINEAR_SNAPSHOT_CLIENT_TIMEOUT, |client| {
                 client.linear_snapshot(&LinearSnapshotParams {
                     workspace_id,
-                    origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
-                    plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+                    origin_socket: env_text("HERDR_SOCKET_PATH"),
+                    plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
+                    force: false,
                 })
             })?;
             let text = serde_json::to_string_pretty(&document)?;
@@ -102,8 +104,8 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             let document = with_read_timeout(ctx, LINEAR_ISSUE_CLIENT_TIMEOUT, |client| {
                 client.linear_issue(&LinearIssueParams {
                     issue,
-                    origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
-                    plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+                    origin_socket: env_text("HERDR_SOCKET_PATH"),
+                    plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
                 })
             })?;
             let text = serde_json::to_string_pretty(&document)?;
@@ -122,6 +124,11 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             super::linear_report::run();
             Ok(())
         }
+        LinearCmd::Session { workspace_id } => super::linear_session::session(workspace_id, json),
+        LinearCmd::StatusLine => {
+            super::linear_session::status_line(json);
+            Ok(())
+        }
     }
 }
 
@@ -131,15 +138,11 @@ fn linear_list(ctx: &mut Ctx, kind: LinearListKind, id: Option<String>) -> Resul
         client.linear_list(&LinearListParams {
             kind,
             id,
-            origin_socket: non_empty_env("HERDR_SOCKET_PATH"),
-            plugin_root: non_empty_env("BOARD_WORK_PLUGIN_ROOT"),
+            origin_socket: env_text("HERDR_SOCKET_PATH"),
+            plugin_root: env_text("BOARD_WORK_PLUGIN_ROOT"),
         })
     })?;
     emit(&list, json)
-}
-
-fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// A plugin script can outlast the client's default read timeout; the timeout

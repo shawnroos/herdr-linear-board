@@ -3,12 +3,16 @@
 //! stdout carries only the MCP JSON-RPC stream, so nothing here may print
 //! through `render.rs`; diagnostics go to stderr.
 
+use std::path::PathBuf;
+
 use anyhow::{anyhow, Context, Result};
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::db::clean_owner;
 use board_core::protocol::{
     ActivityClaims, BoardNotifyParams, BoardPaneCloseParams, BoardPaneContext, BoardPaneOpenParams,
-    LinearActivityListParams, LinearBindParams, LinearMarkSetParams, LinearNoteSetParams,
-    LinearShowRequestParams, LinearStateGetParams, LinearUnbindParams, MarkKind,
+    LinearActivityListParams, LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams,
+    LinearNoteSetParams, LinearOwner, LinearShowRequestParams, LinearShowWithdrawParams,
+    LinearState, LinearStateGetParams, LinearUnbindParams, MarkKind,
 };
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
@@ -17,6 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::commands::{canonical_text, env_text};
 use crate::daemon::connect_or_start;
 
 /// Must not contain "linear": the work plugin's PostToolUse matcher is
@@ -45,17 +50,25 @@ pub(crate) fn run() -> Result<()> {
 
 struct Caller {
     claims: ActivityClaims,
+    owner: LinearOwner,
 }
 
 impl Caller {
     fn from_environment() -> Caller {
+        let herdr_socket = env_text("HERDR_SOCKET_PATH");
+        let herdr_pane_id = env_text("HERDR_PANE_ID");
         Caller {
             claims: ActivityClaims {
-                herdr_socket: env_text("HERDR_SOCKET_PATH"),
-                herdr_pane_id: env_text("HERDR_PANE_ID"),
+                herdr_socket: herdr_socket.clone(),
+                herdr_pane_id: herdr_pane_id.clone(),
                 herdr_workspace_id: env_text("HERDR_WORKSPACE_ID"),
                 card_id: env_id("BOARD_CARD_ID"),
                 run_id: env_id("BOARD_RUN_ID"),
+            },
+            owner: LinearOwner {
+                herdr_socket,
+                herdr_pane_id,
+                claude_session_id: env_text("CLAUDE_CODE_SESSION_ID"),
             },
         }
     }
@@ -81,10 +94,6 @@ impl Caller {
     fn origin_pane(&self) -> String {
         self.claims.herdr_pane_id.clone().unwrap_or_default()
     }
-}
-
-fn env_text(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// An empty or malformed id is no claim: a rescued pane carries an empty
@@ -119,6 +128,41 @@ where
         Ok(value) => CallToolResult::structured(value),
         Err(error) => tool_error(&error),
     }
+}
+
+/// Agents set needs_you, question and done; a suggestion is the board's own,
+/// set only from a reported Linear write.
+const AGENT_KINDS: [(&str, MarkKind); 3] = [
+    ("needs_you", MarkKind::Attention),
+    ("question", MarkKind::Question),
+    ("done", MarkKind::Done),
+];
+
+fn agent_kind(given: &str) -> Result<MarkKind, CallToolResult> {
+    AGENT_KINDS
+        .iter()
+        .find(|(name, _)| *name == given)
+        .map(|(_, kind)| *kind)
+        .ok_or_else(|| {
+            refused(&format!(
+                "mark kind {given:?} is not one an agent can set; use needs_you, question or done"
+            ))
+        })
+}
+
+fn kind_name(kind: MarkKind) -> &'static str {
+    AGENT_KINDS
+        .iter()
+        .find(|(_, agent)| *agent == kind)
+        .map_or(kind.as_str(), |(name, _)| name)
+}
+
+fn refused(message: &str) -> CallToolResult {
+    let mut result = CallToolResult::structured_error(json!({"message": message}));
+    result.content = vec![rmcp::model::ContentBlock::text(format!(
+        "board refused: {message}"
+    ))];
+    result
 }
 
 fn tool_error(error: &anyhow::Error) -> CallToolResult {
@@ -182,8 +226,20 @@ struct UnbindArgs {
 struct MarkArgs {
     /// Linear issue key of the card to flag.
     issue: String,
-    /// Short text shown on the card, for example "needs you", "done" or "has a question".
+    /// One of needs_you, question or done.
+    kind: String,
+    /// Optional detail shown with the mark, for example the question itself.
     text: Option<String>,
+    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    space: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UnmarkArgs {
+    /// Linear issue key of the card.
+    issue: String,
+    /// needs_you, question or done; without it every mark this caller set on the card clears.
+    kind: Option<String>,
     /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
     space: Option<String>,
 }
@@ -224,6 +280,8 @@ struct OpenBoardArgs {
     issue: Option<String>,
     /// Board card id to show.
     card: Option<i64>,
+    /// true opens this session's side pane instead: your bound issue, your lane, or the bind hint. Takes no space, issue or card.
+    session: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -232,6 +290,8 @@ struct CloseBoardArgs {
     space: Option<String>,
     issue: Option<String>,
     card: Option<i64>,
+    /// true closes this session's side pane.
+    session: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,14 +300,16 @@ struct BoardMcp;
 #[tool_router]
 impl BoardMcp {
     #[tool(
-        description = "Show the board's local state for a space: bindings, marks, notes and pending show-requests.",
+        description = "Show the board's local state for a space: bindings, marks with their kind, notes, and pending show-requests with their expiry. `yours` flags the marks and requests this caller set; `your_resolved_requests` lists this caller's recently closed requests with their outcome (accepted, rejected, withdrawn or expired).",
         annotations(read_only_hint = true)
     )]
     async fn state(&self, Parameters(args): Parameters<SpaceArgs>) -> CallToolResult {
+        let caller = Caller::from_environment();
         let params = LinearStateGetParams {
-            space: Caller::from_environment().space(args.space),
+            space: caller.space(args.space),
         };
-        forward(move |c| c.linear_state_get(&params)).await
+        let owner = caller.owner;
+        forward(move |c| state_for(&owner, c.linear_state_get(&params)?)).await
     }
 
     #[tool(
@@ -298,19 +360,43 @@ impl BoardMcp {
     }
 
     #[tool(
-        description = "Flag a card for the person's attention. Replaces the card's earlier flag and returns both.",
+        description = "Mark a card for the person: kind needs_you, question or done. Replaces this caller's earlier mark of the same kind on the card and returns both; other agents' marks stay.",
         annotations(read_only_hint = false)
     )]
     async fn mark(&self, Parameters(args): Parameters<MarkArgs>) -> CallToolResult {
+        let kind = match agent_kind(&args.kind) {
+            Ok(kind) => kind,
+            Err(refusal) => return refusal,
+        };
         let caller = Caller::from_environment();
         let params = LinearMarkSetParams {
             space: caller.space(args.space),
             issue: args.issue,
-            kind: MarkKind::Attention,
+            kind,
             text: args.text,
             created_by: Some(caller.author()),
+            owner: caller.owner,
         };
         forward(move |c| c.linear_mark_set(&params)).await
+    }
+
+    #[tool(
+        description = "Clear this caller's own marks on a card, of one kind or of every kind. Other agents' marks stay. Returns the marks it removed.",
+        annotations(read_only_hint = false)
+    )]
+    async fn unmark(&self, Parameters(args): Parameters<UnmarkArgs>) -> CallToolResult {
+        let kind = match args.kind.as_deref().map(agent_kind).transpose() {
+            Ok(kind) => kind,
+            Err(refusal) => return refusal,
+        };
+        let caller = Caller::from_environment();
+        let params = LinearMarkUnmarkParams {
+            space: caller.space(args.space),
+            issue: args.issue,
+            kind,
+            owner: caller.owner,
+        };
+        forward(move |c| c.linear_mark_unmark(&params)).await
     }
 
     #[tool(
@@ -324,6 +410,7 @@ impl BoardMcp {
             issue: args.issue,
             body: args.body,
             author: caller.author(),
+            owner: caller.owner,
         };
         forward(move |c| c.linear_note_set(&params)).await
     }
@@ -342,7 +429,7 @@ impl BoardMcp {
     }
 
     #[tool(
-        description = "Ask the person to look at an issue. The board shows the request; the view moves only when the person accepts it.",
+        description = "Ask the person to look at an issue. The board shows the request until the person accepts or rejects it, or it expires; the view moves only when the person accepts. Asking again for the same issue refreshes this caller's request.",
         annotations(read_only_hint = false)
     )]
     async fn ask_to_show(&self, Parameters(args): Parameters<AskToShowArgs>) -> CallToolResult {
@@ -352,25 +439,49 @@ impl BoardMcp {
             issue: args.issue,
             reason: args.reason,
             requested_by: Some(caller.author()),
+            owner: caller.owner,
         };
         forward(move |c| c.linear_show_request(&params)).await
     }
 
     #[tool(
-        description = "Open a board beside this pane (split) or in a new tab, showing a space, issue or card, without taking focus. Reuses a board already open for the same context.",
+        description = "Withdraw this caller's own pending request to show an issue. The view does not move. Returns the request before and after, with outcome withdrawn.",
+        annotations(read_only_hint = false)
+    )]
+    async fn withdraw_show(&self, Parameters(args): Parameters<IssueArgs>) -> CallToolResult {
+        let caller = Caller::from_environment();
+        let params = LinearShowWithdrawParams {
+            space: caller.space(args.space),
+            issue: args.issue,
+            owner: caller.owner,
+        };
+        forward(move |c| c.linear_show_withdraw(&params)).await
+    }
+
+    #[tool(
+        description = "Open a board beside this pane (split) or in a new tab, showing a space, issue or card, without taking focus. With session: true it opens this session's side pane instead: your bound issue, your lane list, or the bind hint. Reuses a board already open for the same context.",
         annotations(read_only_hint = false)
     )]
     async fn open_board(&self, Parameters(args): Parameters<OpenBoardArgs>) -> CallToolResult {
         let caller = Caller::from_environment();
+        let session = args.session.unwrap_or(false);
+        // The session pane runs in the plugin root, so it reads the agent's
+        // worktree from here; canonical, as the status line sends it.
+        let session_cwd = session.then(|| canonical_text(PathBuf::from(cwd_or_current(None))));
         let params = BoardPaneOpenParams {
             context: BoardPaneContext {
                 space: args.space,
                 issue: args.issue,
                 card: args.card,
+                session,
             },
             placement: args.placement.unwrap_or_else(|| "split".to_string()),
             origin_socket: caller.origin_socket(),
             origin_pane: caller.origin_pane(),
+            session_cwd,
+            claude_session_id: session
+                .then(|| caller.owner.claude_session_id.clone())
+                .flatten(),
         };
         forward(move |c| c.board_pane_open(&params)).await
     }
@@ -380,13 +491,17 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn close_board(&self, Parameters(args): Parameters<CloseBoardArgs>) -> CallToolResult {
+        let caller = Caller::from_environment();
+        let session = args.session.unwrap_or(false);
         let params = BoardPaneCloseParams {
             context: BoardPaneContext {
                 space: args.space,
                 issue: args.issue,
                 card: args.card,
+                session,
             },
-            origin_socket: Caller::from_environment().origin_socket(),
+            origin_socket: caller.origin_socket(),
+            origin_pane: session.then(|| caller.origin_pane()),
         };
         forward(move |c| c.board_pane_close(&params)).await
     }
@@ -398,6 +513,45 @@ impl ServerHandler for BoardMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION")))
     }
+}
+
+/// Ownership compares all three owner parts; a caller with no claims
+/// owns nothing, matching the daemon's refusal of an anonymous unmark.
+fn state_for(caller: &LinearOwner, state: LinearState) -> Result<Value> {
+    let caller = clean_owner(caller);
+    let yours = |owner: LinearOwner| !caller.is_anonymous() && owner == caller;
+    let marks = state
+        .marks
+        .iter()
+        .map(|mark| {
+            let mut row = serde_json::to_value(mark)?;
+            row["kind"] = json!(kind_name(mark.kind));
+            row["yours"] = json!(yours(mark.owner()));
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let pending = state
+        .show_requests
+        .iter()
+        .map(|request| {
+            let mut row = serde_json::to_value(request)?;
+            row["yours"] = json!(yours(request.owner()));
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let resolved: Vec<_> = state
+        .resolved_show_requests
+        .iter()
+        .filter(|request| yours(request.owner()))
+        .collect();
+    let mut value = serde_json::to_value(&state)?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("resolved_show_requests");
+        object.insert("marks".into(), json!(marks));
+        object.insert("show_requests".into(), json!(pending));
+        object.insert("your_resolved_requests".into(), json!(resolved));
+    }
+    Ok(value)
 }
 
 fn panes_for(issue: &str, activity: Vec<board_core::protocol::Activity>) -> Value {

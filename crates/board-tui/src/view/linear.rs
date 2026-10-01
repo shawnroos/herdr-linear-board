@@ -11,13 +11,14 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{sanitise, App, LinearState, Screen};
+use crate::app::{lane_sections, sanitise, App, CardOverlay, CardOverlays, LinearState, Screen};
 use crate::widgets::{HitMap, Zone};
 
 use super::linear_strip::{draw_strip, strip_lines};
 use super::{centered_rect_abs, linear_help_keys, truncate};
 
-// Identifier, two title lines, assignee, then the blank separator row.
+// Identifier, two title lines, assignee, then the blank separator row; a
+// card with a note has one row more.
 const CARD_H: u16 = 5;
 const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
@@ -249,8 +250,26 @@ fn title_lines(title: &str, width: usize) -> [String; 2] {
     [first.to_string(), fit(rest.trim_start(), width)]
 }
 
-fn card_lines(issue: &LinearIssue, width: usize) -> Vec<String> {
-    let mut first = line(&issue.identifier);
+fn card_height(overlay: CardOverlay<'_>) -> u16 {
+    CARD_H + u16::from(overlay.latest_note.is_some())
+}
+
+fn card_lines(
+    state: &LinearState,
+    overlay: CardOverlay<'_>,
+    issue: &LinearIssue,
+    width: usize,
+) -> Vec<String> {
+    let mut first = overlay.gutter();
+    first.push_str(&line(&issue.identifier));
+    let running = issue
+        .bindings
+        .iter()
+        .flat_map(|b| &b.panes)
+        .any(|pane| state.pane_status(pane) == "working");
+    if running {
+        first.push_str(" ▶");
+    }
     if let Some(p) = issue.priority {
         first.push_str(&format!("  P{p}"));
     }
@@ -268,12 +287,18 @@ fn card_lines(issue: &LinearIssue, width: usize) -> Vec<String> {
         .map(|n| format!("@{}", line(n)))
         .unwrap_or_else(|| "unassigned".to_string());
     let [title_first, title_second] = title_lines(&line(&issue.title), width);
-    vec![
-        fit(&first, width),
-        title_first,
-        title_second,
-        fit(&assignee, width),
-    ]
+    let mut lines = vec![fit(&first, width), title_first, title_second];
+    if let Some(note) = overlay.latest_note {
+        lines.push(fit(&format!("› {}", line(&note.body)), width));
+    }
+    lines.push(fit(&assignee, width));
+    lines
+}
+
+/// How many columns one page holds at `width` cells: at least one, so a
+/// sidebar narrower than a column still shows a column.
+pub fn linear_columns_per_page(width: u16) -> usize {
+    usize::from(width / MIN_COL_W).max(1)
 }
 
 fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
@@ -300,21 +325,275 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     };
     let strip = strip_lines(state, snapshot, area.width as usize);
     let strip_h = strip.len() as u16;
+    let pinned = pinned_line(state, area.width as usize);
+    let pinned_h = u16::from(pinned.is_some());
     let footer_h: u16 = 1;
-    let body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
-    let body = Rect::new(area.x, area.y + HEADER_ROWS, area.width, body_h);
-    draw_columns(state, snapshot, f, body, &mut app.hit_map.borrow_mut());
-    draw_strip(app, strip, f, area, body.bottom());
+    let mut y = area.y + HEADER_ROWS;
+    let mut body_h = area
+        .height
+        .saturating_sub(HEADER_ROWS + pinned_h + strip_h + footer_h);
+    let per_page = linear_columns_per_page(area.width);
+    let overlays = state.overlays();
+    let rows = [
+        tab_row(state, &overlays, area.width as usize),
+        (state.groups().len() > per_page)
+            .then(|| pager_row(state, &overlays, per_page, area.width as usize)),
+    ];
+    for row in rows.into_iter().flatten() {
+        if body_h == 0 {
+            break;
+        }
+        f.render_widget(Paragraph::new(row), Rect::new(area.x, y, area.width, 1));
+        y += 1;
+        body_h -= 1;
+    }
+    let body = Rect::new(area.x, y, area.width, body_h);
+    draw_columns(
+        state,
+        &overlays,
+        snapshot,
+        f,
+        body,
+        per_page,
+        &mut app.hit_map.borrow_mut(),
+    );
+    if let Some(pinned) = pinned {
+        if body.bottom() < area.bottom() {
+            f.render_widget(
+                Paragraph::new(pinned),
+                Rect::new(area.x, body.bottom(), area.width, 1),
+            );
+        }
+    }
+    draw_strip(app, strip, f, area, body.bottom() + pinned_h);
+}
+
+/// `a` and `x` act on the selected card's suggestion before any request, so
+/// while one is selected the request's keys dim and the footer names the
+/// suggestion's.
+fn suggestion_selected(state: &LinearState) -> bool {
+    state.selected_suggestion().is_some()
+}
+
+const PINNED_KEYS: &str = "a show · x dismiss";
+
+/// The oldest pending show-request: who asked, the issue, its title, the keys
+/// and how many more wait. Only the title and then the head give way to a
+/// narrow pane; the keys and the count are never cut.
+fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
+    let requests = state.pending_requests();
+    let oldest = requests.first()?;
+    let more = match requests.len() - 1 {
+        0 => String::new(),
+        n => format!(" +{n}"),
+    };
+    let who = oldest
+        .requested_by
+        .as_deref()
+        .map(line)
+        .filter(|w| !w.trim().is_empty())
+        .unwrap_or_else(|| "an agent".to_string());
+    let title = state
+        .issue(&oldest.issue)
+        .map(|i| line(&i.title))
+        .or_else(|| oldest.reason.as_deref().map(line))
+        .unwrap_or_default();
+    let tail = PINNED_KEYS.width() + more.width();
+    let room = width.saturating_sub(tail + 2);
+    let head = fit(&format!("◉ {who} · {} ", line(&oldest.issue)), room);
+    let title = fit(&title, room.saturating_sub(head.width()));
+    let gap = width
+        .saturating_sub(head.width() + title.width() + tail)
+        .max(1);
+    let keys = if suggestion_selected(state) {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::LightCyan)
+    };
+    Some(Line::from(vec![
+        Span::styled(head, Style::default().fg(Color::LightMagenta)),
+        Span::raw(title),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(PINNED_KEYS, keys),
+        Span::styled(more, keys),
+    ]))
+}
+
+/// ` !N` for the cards among `identifiers` that need attention, or nothing.
+fn attention_count<'a>(
+    overlays: &CardOverlays<'_>,
+    identifiers: impl Iterator<Item = &'a String>,
+) -> String {
+    let needing: std::collections::BTreeSet<&str> = identifiers
+        .map(String::as_str)
+        .filter(|id| overlays.get(id).needs_attention())
+        .collect();
+    match needing.len() {
+        0 => String::new(),
+        n => format!(" !{n}"),
+    }
+}
+
+/// The tab row, the active tab in brackets. `None` for a document from
+/// before tabs, whose one tab has no name to show. When the row is too narrow
+/// it starts at a later tab so the active one stays in view.
+fn tab_row(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    width: usize,
+) -> Option<Line<'static>> {
+    let tabs = state.tabs();
+    if tabs.iter().all(|tab| tab.label.is_empty()) {
+        return None;
+    }
+    let names: Vec<String> = tabs
+        .iter()
+        .enumerate()
+        .map(|(at, tab)| {
+            let label = line(&tab.label);
+            let label = if label.is_empty() {
+                "(no label)".to_string()
+            } else {
+                label
+            };
+            if at == state.sel_tab {
+                format!("[{label}]")
+            } else {
+                let count =
+                    attention_count(overlays, tab.groups.iter().flat_map(|g| g.issues.iter()));
+                format!(" {label}{count} ")
+            }
+        })
+        .collect();
+    let active = state.sel_tab.min(names.len() - 1);
+    let mut first = 0;
+    while first < active
+        && 2 + names[first..=active]
+            .iter()
+            .map(|n| n.width() + 1)
+            .sum::<usize>()
+            > width
+    {
+        first += 1;
+    }
+    let mut spans = vec![Span::raw(if first > 0 { "‹" } else { " " })];
+    for (at, name) in names.into_iter().enumerate().skip(first) {
+        let style = if at == active {
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(name, style));
+        spans.push(Span::raw(" "));
+    }
+    Some(Line::from(spans))
+}
+
+/// `‹ <hidden column> <cards>` on the left, `<hidden column> <cards> ›` on the
+/// right, and the page number between them when there is room.
+fn pager_row(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    per_page: usize,
+    width: usize,
+) -> Line<'static> {
+    let groups = state.groups();
+    let start = state.sel_group.min(groups.len().saturating_sub(1)) / per_page * per_page;
+    let end = (start + per_page).min(groups.len());
+    let named = |at: usize| {
+        let group = &groups[at];
+        format!("{} {}", line(&group.label), group.issues.len())
+    };
+    let hidden = |range: std::ops::Range<usize>| {
+        attention_count(overlays, groups[range].iter().flat_map(|g| g.issues.iter()))
+    };
+    let left = if start > 0 {
+        format!("‹ {}{}", named(start - 1), hidden(0..start))
+    } else {
+        String::new()
+    };
+    let right = if end < groups.len() {
+        format!("{}{} ›", named(end), hidden(end..groups.len()))
+    } else {
+        String::new()
+    };
+    let page = format!(
+        "{}/{}",
+        start / per_page + 1,
+        groups.len().div_ceil(per_page)
+    );
+    let half = width / 2;
+    let (left, right) = if left.width() + right.width() + 1 > width {
+        let left = fit(&left, half.saturating_sub(1));
+        let right = fit(&right, width - half);
+        (left, right)
+    } else {
+        (left, right)
+    };
+    let gap = width.saturating_sub(left.width() + right.width());
+    let middle = if page.width() + 2 <= gap {
+        let before = (gap - page.width()) / 2;
+        format!(
+            "{}{page}{}",
+            " ".repeat(before),
+            " ".repeat(gap - page.width() - before)
+        )
+    } else {
+        " ".repeat(gap)
+    };
+    let dim = Style::default().fg(Color::DarkGray);
+    Line::from(vec![
+        Span::raw(left),
+        Span::styled(middle, dim),
+        Span::raw(right),
+    ])
+}
+
+/// The first and one-past-last item of a column's list to draw so `focus` is
+/// in view: from the top when everything up to it fits, else as far back as
+/// fits with `focus` last.
+fn visible_items(heights: &[u16], focus: usize, avail: u16) -> (usize, usize) {
+    if heights.is_empty() {
+        return (0, 0);
+    }
+    let focus = focus.min(heights.len() - 1);
+    let mut start = 0;
+    while start < focus && heights[start..=focus].iter().sum::<u16>() > avail {
+        start += 1;
+    }
+    let mut used: u16 = heights[start..=focus].iter().sum();
+    let mut end = focus + 1;
+    while end < heights.len() && used + heights[end] <= avail {
+        used += heights[end];
+        end += 1;
+    }
+    (start, end)
+}
+
+enum ColumnItem<'a> {
+    Lane {
+        label: &'a str,
+        count: usize,
+    },
+    Card {
+        lane: &'a str,
+        identifier: &'a str,
+        height: u16,
+    },
 }
 
 fn draw_columns(
     state: &LinearState,
+    overlays: &CardOverlays<'_>,
     snapshot: &LinearSnapshot,
     f: &mut Frame,
     body: Rect,
+    per_page: usize,
     hit_map: &mut HitMap,
 ) {
-    let groups = &snapshot.groups;
+    let groups = state.groups();
     if body.height == 0 {
         return;
     }
@@ -332,20 +611,14 @@ fn draw_columns(
         );
         return;
     }
-    let stacked = body.width < 2 * MIN_COL_W;
     let sel_group = state.sel_group.min(groups.len() - 1);
-    let sel_card = state
-        .sel_card
-        .min(groups[sel_group].issues.len().saturating_sub(1));
-    let visible = if stacked {
-        1
+    let (start, visible) = if groups.len() > per_page {
+        (sel_group / per_page * per_page, per_page)
     } else {
-        ((body.width / MIN_COL_W) as usize).min(groups.len())
+        (0, groups.len())
     };
-    let start = sel_group
-        .saturating_sub(visible - 1)
-        .min(groups.len() - visible);
     let col_w = body.width / visible as u16;
+    let selected_slot = state.selected_slot();
     for (slot, (idx, group)) in groups
         .iter()
         .enumerate()
@@ -356,17 +629,8 @@ fn draw_columns(
         let x = body.x + slot as u16 * col_w;
         let rect = Rect::new(x, body.y, col_w, body.height);
         let focused = idx == sel_group;
-        let position = if stacked {
-            format!("· {}/{} ", idx + 1, groups.len())
-        } else {
-            String::new()
-        };
         let title = fit(
-            &format!(
-                " {} ({}) {position}",
-                line(&group.label),
-                group.issues.len()
-            ),
+            &format!(" {} ({}) ", line(&group.label), group.issues.len()),
             col_w.saturating_sub(2) as usize,
         );
         let block = Block::default()
@@ -383,45 +647,107 @@ fn draw_columns(
             Rect::new(x, body.y, col_w, 1),
             Zone::LinearGroup(group.key.clone()),
         );
-        // The last card may drop its separator row at the column's bottom edge.
-        let per_col = ((inner.height + 1) / CARD_H).max(1) as usize;
-        let first = if focused {
-            sel_card.saturating_sub(per_col - 1)
+        let mut items = Vec::new();
+        for section in lane_sections(group) {
+            if let Some(label) = section.label {
+                items.push(ColumnItem::Lane {
+                    label,
+                    count: section.issues.len(),
+                });
+            }
+            items.extend(
+                section
+                    .issues
+                    .into_iter()
+                    .map(|identifier| ColumnItem::Card {
+                        lane: section.key,
+                        identifier,
+                        height: card_height(overlays.get(identifier)),
+                    }),
+            );
+        }
+        let heights: Vec<u16> = items
+            .iter()
+            .map(|item| match item {
+                ColumnItem::Lane { .. } => 1,
+                ColumnItem::Card { height, .. } => *height,
+            })
+            .collect();
+        let focus = if focused {
+            items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| matches!(item, ColumnItem::Card { .. }))
+                .nth(state.sel_card)
+                .map_or(0, |(at, _)| at)
         } else {
             0
         };
-        for (row, identifier) in group.issues.iter().enumerate().skip(first).take(per_col) {
-            let y = inner.y + ((row - first) as u16) * CARD_H;
-            let card = Rect::new(
-                inner.x,
-                y,
-                inner.width,
-                (CARD_H - 1).min(inner.bottom().saturating_sub(y)),
-            );
-            let selected = focused && row == sel_card;
-            let lines: Vec<Line> = match snapshot.issues.get(identifier) {
-                Some(issue) => card_lines(issue, inner.width as usize)
-                    .into_iter()
-                    .map(Line::from)
-                    .collect(),
-                None => vec![Line::from(fit(
-                    &format!("{identifier} (missing)"),
-                    inner.width as usize,
-                ))],
-            };
-            let style = if selected {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            f.render_widget(Paragraph::new(lines).style(style), card);
-            hit_map.push(
-                card,
-                Zone::LinearCard {
-                    group: group.key.clone(),
-                    identifier: identifier.clone(),
-                },
-            );
+        // The last card may drop its separator row at the column's bottom edge.
+        let (first, end) = visible_items(&heights, focus, inner.height + 1);
+        let mut y = inner.y;
+        for item in &items[first..end] {
+            if y >= inner.bottom() {
+                break;
+            }
+            match *item {
+                ColumnItem::Lane { label, count } => {
+                    let text = fit(
+                        &format!("── {} {count} ", line(label)),
+                        inner.width as usize,
+                    );
+                    let rule = "─".repeat((inner.width as usize).saturating_sub(text.width()));
+                    f.render_widget(
+                        Paragraph::new(format!("{text}{rule}")).style(
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Rect::new(inner.x, y, inner.width, 1),
+                    );
+                    y += 1;
+                }
+                ColumnItem::Card {
+                    lane,
+                    identifier,
+                    height,
+                } => {
+                    let card = Rect::new(
+                        inner.x,
+                        y,
+                        inner.width,
+                        (height - 1).min(inner.bottom().saturating_sub(y)),
+                    );
+                    let selected = focused && selected_slot == Some((lane, identifier));
+                    let lines: Vec<Line> = match snapshot.issues.get(identifier) {
+                        Some(issue) => {
+                            card_lines(state, overlays.get(identifier), issue, inner.width as usize)
+                                .into_iter()
+                                .map(Line::from)
+                                .collect()
+                        }
+                        None => vec![Line::from(fit(
+                            &format!("{identifier} (missing)"),
+                            inner.width as usize,
+                        ))],
+                    };
+                    let style = if selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    f.render_widget(Paragraph::new(lines).style(style), card);
+                    hit_map.push(
+                        card,
+                        Zone::LinearCard {
+                            group: group.key.clone(),
+                            lane: lane.to_string(),
+                            identifier: identifier.to_string(),
+                        },
+                    );
+                    y += height;
+                }
+            }
         }
     }
 }
@@ -458,10 +784,16 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
             state.workspace_id
         )),
         Line::from(record),
+    ];
+    if let Some(message) = not_imported(state) {
+        lines.push(Line::from(""));
+        lines.extend(message);
+    }
+    lines.extend([
         Line::from(""),
         Line::from("Press s (or click a space below) to pick a project for it,"),
         Line::from("or run /work:bind in this space; then press r to refresh."),
-    ];
+    ]);
     if let Some(note) = &state.bind_note {
         lines.push(Line::from(Span::styled(
             note.clone(),
@@ -492,6 +824,29 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let above = Rect::new(area.x, area.y, area.width, strip_y - area.y);
     boxed(f, above, "Not bound", Color::LightYellow, lines);
     draw_strip(app, strip, f, area, strip_y);
+}
+
+/// The daemon's own not-imported words, which name the import command.
+pub(super) fn not_imported(state: &LinearState) -> Option<Vec<Line<'static>>> {
+    let snapshot = state
+        .snapshot()
+        .filter(|s| s.linear.status == "not_imported")?;
+    let message = snapshot
+        .linear
+        .message
+        .as_deref()
+        .unwrap_or("the work store has not been imported; run `board import work-store`");
+    Some(
+        message
+            .lines()
+            .map(|text| {
+                Line::from(Span::styled(
+                    text.to_string(),
+                    Style::default().fg(Color::LightYellow),
+                ))
+            })
+            .collect(),
+    )
 }
 
 fn draw_stale_daemon(state: &LinearState, f: &mut Frame, area: Rect) {
@@ -680,13 +1035,24 @@ fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
 }
 
 fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
-    let Some(toast) = &app.toast else {
-        return;
-    };
     if area.height == 0 {
         return;
     }
     let rect = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+    let Some(toast) = &app.toast else {
+        let cue = app.screen == Screen::LinearBoard
+            && app.linear.as_ref().is_some_and(suggestion_selected);
+        if cue {
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    fit(" a bind · x dismiss", area.width as usize),
+                    Style::default().fg(Color::LightCyan),
+                )),
+                rect,
+            );
+        }
+        return;
+    };
     let style = if toast.is_error {
         Style::default().fg(Color::White).bg(Color::Red)
     } else {

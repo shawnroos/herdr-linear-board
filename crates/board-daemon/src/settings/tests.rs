@@ -63,3 +63,17 @@ fn work_plugin_root_passes_through_from_typed_config() {
         Some(std::path::Path::new("/opt/work-plugin"))
     );
 }
+
+#[test]
+fn the_show_request_ttl_comes_from_the_linear_table_and_defaults_to_thirty_minutes() {
+    let defaults = DaemonSettings::from_root(&RootConfig::default(), &env(&[])).unwrap();
+    assert_eq!(defaults.show_request_ttl_secs, 1800);
+
+    let root = RootConfig::from_toml("[linear]\nshow_request_ttl_secs = 600\n").unwrap();
+    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(settings.show_request_ttl_secs, 600);
+
+    let root = RootConfig::from_toml("[linear]\nshow_request_ttl_secs = 0\n").unwrap();
+    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(settings.show_request_ttl_secs, 1, "a zero TTL is clamped");
+}

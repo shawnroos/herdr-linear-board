@@ -96,6 +96,11 @@ impl DaemonBuilder {
         self
     }
 
+    pub(crate) fn settings(mut self, settings: DaemonSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
     pub(crate) fn spawner(mut self, spawner: Arc<dyn Spawner>) -> Self {
         self.spawner = spawner;
         self

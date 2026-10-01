@@ -7,16 +7,25 @@ use std::sync::Arc;
 
 use crate::state::Daemon;
 
+mod expiry;
 mod herdr;
 mod local;
 mod signals;
 mod timeout;
+
+#[cfg(test)]
+pub(crate) use expiry::sweep_show_requests_at;
 
 pub(crate) use signals::apply_signal;
 
 /// Crate-private entrypoint for the timeout ticker.
 pub async fn timeout_ticker(d: Arc<Daemon>) {
     timeout::timeout_ticker(d).await;
+}
+
+/// Crate-private entrypoint for the show-request expiry sweep.
+pub async fn show_request_sweeper(d: Arc<Daemon>) {
+    expiry::show_request_sweeper(d).await;
 }
 
 /// Crate-private entrypoint for local process liveness polling.

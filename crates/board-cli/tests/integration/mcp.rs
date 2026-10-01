@@ -15,15 +15,17 @@ use serde_json::{json, Value};
 
 use super::{fixtures_dir, TestDaemon, BOARD_BIN};
 
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 12] = [
     "state",
     "panes_for_issue",
     "bind",
     "unbind",
     "mark",
+    "unmark",
     "note",
     "notify",
     "ask_to_show",
+    "withdraw_show",
     "open_board",
     "close_board",
 ];
@@ -70,6 +72,7 @@ impl Mcp {
             .env_remove("HERDR_PANE_ID")
             .env_remove("BOARD_CARD_ID")
             .env_remove("BOARD_RUN_ID")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -237,7 +240,7 @@ fn git_worktree(parent: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
-fn initialize_then_tools_list_returns_the_ten_tools_with_read_only_hints_on_reads() {
+fn initialize_then_tools_list_returns_the_twelve_tools_with_read_only_hints_on_reads() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("boardd.sock");
     let mut mcp = Mcp::spawn(McpEnv {
@@ -348,7 +351,10 @@ fn nothing_but_json_rpc_reaches_stdout_during_tool_calls() {
     structured(&mcp.call("state", json!({})));
     structured(&mcp.call("bind", json!({"issue": "ENG-1"})));
     structured(&mcp.call("panes_for_issue", json!({"issue": "ENG-1"})));
-    error_text(&mcp.call("mark", json!({"issue": "not an issue"})));
+    error_text(&mcp.call(
+        "mark",
+        json!({"issue": "not an issue", "kind": "needs_you"}),
+    ));
     error_text(&mcp.call("close_board", json!({"issue": "ENG-1"})));
 
     let lines = mcp.finish();
@@ -495,4 +501,250 @@ fn open_board_with_an_overlay_placement_returns_a_tool_error() {
     assert!(text.contains("overlay"), "{text}");
 
     mcp.finish();
+}
+
+#[test]
+fn open_board_with_session_reaches_the_daemon_as_a_session_context() {
+    let td = TestDaemon::start(&[]);
+    let cwd = tempfile::tempdir().unwrap();
+    let claims = [
+        ("HERDR_SOCKET_PATH", "/tmp/herdr-test.sock"),
+        ("HERDR_PANE_ID", "w1:p2"),
+        ("HERDR_WORKSPACE_ID", "w1"),
+    ];
+    let mut mcp = Mcp::spawn(for_daemon(&td, cwd.path(), &claims));
+    mcp.initialize();
+
+    // A session pane takes no other target: the daemon's refusal names it,
+    // which only a context carrying `session` can reach.
+    let result = mcp.call("open_board", json!({"session": true, "issue": "ENG-1"}));
+    let text = error_text(&result);
+    assert!(text.contains("session pane"), "{text}");
+    // Past the context check (a bare context is refused there) to the
+    // caller's herdr socket, which this test does not run.
+    let result = mcp.call("close_board", json!({"session": true}));
+    let text = error_text(&result);
+    assert!(text.contains("Herdr socket"), "{text}");
+
+    mcp.finish();
+}
+
+/// Two agents that share a herdr pane (a nested or background session
+/// inherits `HERDR_PANE_ID`) and differ only in their Claude session.
+fn agent(session: &str) -> [(&'static str, String); 4] {
+    [
+        ("HERDR_SOCKET_PATH", "/tmp/herdr-test.sock".to_string()),
+        ("HERDR_PANE_ID", "w1:p2".to_string()),
+        ("HERDR_WORKSPACE_ID", "w1".to_string()),
+        ("CLAUDE_CODE_SESSION_ID", session.to_string()),
+    ]
+}
+
+fn borrowed<'a>(claims: &'a [(&'static str, String); 4]) -> [(&'static str, &'a str); 4] {
+    claims.each_ref().map(|(key, value)| (*key, value.as_str()))
+}
+
+fn marks_on(state: &Value, issue: &str) -> Vec<Value> {
+    state["marks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("state without marks: {state}"))
+        .iter()
+        .filter(|mark| mark["issue"] == issue)
+        .cloned()
+        .collect()
+}
+
+fn pending_for(state: &Value, issue: &str) -> Vec<Value> {
+    state["show_requests"]
+        .as_array()
+        .unwrap_or_else(|| panic!("state without show_requests: {state}"))
+        .iter()
+        .filter(|request| request["issue"] == issue)
+        .cloned()
+        .collect()
+}
+
+fn resolved(state: &Value) -> Vec<Value> {
+    state["your_resolved_requests"]
+        .as_array()
+        .unwrap_or_else(|| panic!("state without your_resolved_requests: {state}"))
+        .clone()
+}
+
+#[test]
+fn ae9_two_callers_each_hold_their_own_needs_you_and_unmark_clears_only_the_callers() {
+    let td = TestDaemon::start(&[]);
+    let repo = tempfile::tempdir().unwrap();
+    let worktree = git_worktree(repo.path(), "wt");
+    let (a_env, b_env) = (agent("session-a"), agent("session-b"));
+    let (a_claims, b_claims) = (borrowed(&a_env), borrowed(&b_env));
+    let mut a = Mcp::spawn(for_daemon(&td, &worktree, &a_claims));
+    let mut b = Mcp::spawn(for_daemon(&td, &worktree, &b_claims));
+    a.initialize();
+    b.initialize();
+    structured(&a.call("bind", json!({"issue": "ENG-148"})));
+
+    let set = |mcp: &mut Mcp, text: &str| {
+        let result = mcp.call(
+            "mark",
+            json!({"issue": "ENG-148", "kind": "needs_you", "text": text}),
+        );
+        structured(&result).clone()
+    };
+    assert_eq!(set(&mut a, "from a")["after"]["text"], "from a");
+    let b_set = set(&mut b, "from b");
+    assert_eq!(
+        b_set["before"],
+        json!([]),
+        "B's mark replaces nothing of A's: {b_set}"
+    );
+
+    for (mcp, mine) in [(&mut a, "from a"), (&mut b, "from b")] {
+        let state = mcp.call("state", json!({}));
+        let marks = marks_on(structured(&state), "ENG-148");
+        assert_eq!(marks.len(), 2, "both callers' marks stay (R9): {marks:?}");
+        for mark in &marks {
+            assert_eq!(mark["kind"], "needs_you", "{mark}");
+            assert_eq!(
+                mark["yours"],
+                json!(mark["text"] == mine),
+                "only the caller's own mark is flagged yours: {mark}"
+            );
+        }
+    }
+
+    let removed = a.call("unmark", json!({"issue": "ENG-148"}));
+    let removed = structured(&removed)["removed"].as_array().unwrap().clone();
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    assert_eq!(removed[0]["text"], "from a");
+
+    let state = b.call("state", json!({}));
+    let marks = marks_on(structured(&state), "ENG-148");
+    assert_eq!(marks.len(), 1, "B's mark stays: {marks:?}");
+    assert_eq!(marks[0]["text"], "from b");
+    assert_eq!(marks[0]["yours"], true);
+
+    a.finish();
+    b.finish();
+}
+
+#[test]
+fn mark_refuses_suggestion_and_unknown_kinds_and_writes_nothing() {
+    let td = TestDaemon::start(&[]);
+    let repo = tempfile::tempdir().unwrap();
+    let worktree = git_worktree(repo.path(), "wt");
+    let env = agent("session-a");
+    let claims = borrowed(&env);
+    let mut mcp = Mcp::spawn(for_daemon(&td, &worktree, &claims));
+    mcp.initialize();
+    structured(&mcp.call("bind", json!({"issue": "ENG-148"})));
+
+    for kind in ["suggestion", "attention", "blocked", ""] {
+        let text = error_text(&mcp.call("mark", json!({"issue": "ENG-148", "kind": kind})));
+        assert!(
+            text.contains("needs_you") && text.contains("question") && text.contains("done"),
+            "the refusal names the kinds an agent may set: {text}"
+        );
+    }
+    let state = mcp.call("state", json!({}));
+    assert_eq!(
+        structured(&state)["marks"],
+        json!([]),
+        "nothing was written"
+    );
+
+    for (kind, shown) in [("question", "question"), ("done", "done")] {
+        let result = mcp.call("mark", json!({"issue": "ENG-148", "kind": kind}));
+        assert_eq!(structured(&result)["after"]["kind"], shown);
+    }
+
+    mcp.finish();
+}
+
+#[test]
+fn ae11_asking_twice_keeps_one_request_and_withdraw_show_closes_it_as_withdrawn() {
+    let td = TestDaemon::start(&[]);
+    let repo = tempfile::tempdir().unwrap();
+    let worktree = git_worktree(repo.path(), "wt");
+    let env = agent("session-a");
+    let claims = borrowed(&env);
+    let mut a = Mcp::spawn(for_daemon(&td, &worktree, &claims));
+    a.initialize();
+    structured(&a.call("bind", json!({"issue": "ENG-160"})));
+
+    let first = a.call("ask_to_show", json!({"issue": "ENG-160", "reason": "one"}));
+    let id = structured(&first)["after"]["id"].clone();
+    let again = a.call("ask_to_show", json!({"issue": "ENG-160", "reason": "two"}));
+    assert_eq!(
+        structured(&again)["after"]["id"],
+        id,
+        "a re-ask refreshes (R31)"
+    );
+
+    let state = a.call("state", json!({}));
+    let pending = pending_for(structured(&state), "ENG-160");
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0]["reason"], "two");
+    assert_eq!(pending[0]["yours"], true);
+    assert!(
+        pending[0]["expires_at"].is_string(),
+        "each pending request shows its expiry: {}",
+        pending[0]
+    );
+
+    let withdrawn = a.call("withdraw_show", json!({"issue": "ENG-160"}));
+    assert_eq!(structured(&withdrawn)["after"]["outcome"], "withdrawn");
+
+    let state = a.call("state", json!({}));
+    let state = structured(&state);
+    assert!(pending_for(state, "ENG-160").is_empty(), "{state}");
+    let resolved = resolved(state);
+    assert_eq!(resolved.len(), 1, "{resolved:?}");
+    assert_eq!(resolved[0]["id"], id);
+    assert_eq!(resolved[0]["outcome"], "withdrawn");
+
+    a.finish();
+}
+
+#[test]
+fn another_caller_cannot_withdraw_a_request_and_sees_none_of_its_outcomes() {
+    let td = TestDaemon::start(&[]);
+    let repo = tempfile::tempdir().unwrap();
+    let worktree = git_worktree(repo.path(), "wt");
+    let (a_env, b_env) = (agent("session-a"), agent("session-b"));
+    let (a_claims, b_claims) = (borrowed(&a_env), borrowed(&b_env));
+    let mut a = Mcp::spawn(for_daemon(&td, &worktree, &a_claims));
+    let mut b = Mcp::spawn(for_daemon(&td, &worktree, &b_claims));
+    a.initialize();
+    b.initialize();
+    structured(&a.call("bind", json!({"issue": "ENG-160"})));
+
+    let asked = a.call("ask_to_show", json!({"issue": "ENG-160"}));
+    let id = structured(&asked)["after"]["id"].as_i64().unwrap();
+
+    error_text(&b.call("withdraw_show", json!({"issue": "ENG-160"})));
+    let state = b.call("state", json!({}));
+    let pending = pending_for(structured(&state), "ENG-160");
+    assert_eq!(pending.len(), 1, "A's request stays pending: {pending:?}");
+    assert_eq!(pending[0]["yours"], false);
+
+    UnixClient::connect(&td.socket)
+        .unwrap()
+        .linear_show_dismiss(id)
+        .expect("the person rejects A's request");
+
+    let state = a.call("state", json!({}));
+    let resolved_a = resolved(structured(&state));
+    assert_eq!(resolved_a.len(), 1, "{resolved_a:?}");
+    assert_eq!(resolved_a[0]["id"], id);
+    assert_eq!(resolved_a[0]["outcome"], "rejected");
+    let state = b.call("state", json!({}));
+    assert_eq!(
+        resolved(structured(&state)),
+        Vec::<Value>::new(),
+        "B never sees A's outcomes"
+    );
+
+    a.finish();
+    b.finish();
 }

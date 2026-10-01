@@ -1,25 +1,37 @@
 //! Linear-mode effects: the snapshot fetch (worker thread in production,
-//! synchronous against a client with no reconnect path), `pane.focus`, the
-//! URL opener and the clipboard, plus the daemon-signal policy the runtime
-//! delegates to.
+//! synchronous against a client with no reconnect path), the local-state
+//! writes, `pane.focus`, the URL opener and the clipboard, plus the
+//! daemon-signal policy the runtime delegates to.
 
 use std::sync::mpsc;
 
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
-    LinearBindHandoffParams, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, PaneFocusParams, LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearBindHandoffParams, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
+    LinearSnapshotParams, LinearStateGetParams, PaneFocusParams,
+    LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT, LINEAR_ISSUE_CLIENT_TIMEOUT,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
-use crate::app::{BindTarget, LinearArrival, LinearFailure, Mode, Msg};
+use crate::app::{
+    BindTarget, LinearArrival, LinearFailure, LinearWrite, LocalStateSignals, Mode, Msg,
+    WriteFailure,
+};
 use crate::Driver;
+
+/// `linear.state.get` reads SQLite only, never Linear or herdr, so a daemon
+/// that has not answered by now is wedged rather than slow.
+const LINEAR_STATE_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A read held by the test hook instead of running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Pending {
-    Snapshot,
+    Snapshot {
+        force: bool,
+    },
+    State,
     Issue {
         issue: String,
         generation: u64,
@@ -39,7 +51,8 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
     matches!(
         eff,
         Effect::Refetch
-            | Effect::LinearSnapshot
+            | Effect::LinearSnapshot { .. }
+            | Effect::LinearStateGet
             | Effect::LinearList { .. }
             | Effect::LinearIssue { .. }
             | Effect::FocusPane(_)
@@ -47,28 +60,50 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::CopyWorktreePath { .. }
             | Effect::SetLinearPaneTitle(_)
             | Effect::BindHandoff { .. }
+            | Effect::LinearMarkClear { .. }
+            | Effect::LinearShowAccept { .. }
+            | Effect::LinearShowDismiss { .. }
+            | Effect::LinearBind { .. }
             | Effect::Quit
     )
 }
 
-/// The effects Linear mode refuses, named one by one. With [`linear_allows`]
-/// this classifies every effect: the match has no catch-all, so a new variant
-/// does not build until someone places it.
+/// The only effects the session pane executes: reads, and closing itself.
+/// It writes nothing, not even its own pane title.
+pub(super) fn session_allows(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    matches!(
+        eff,
+        Effect::LinearSessionGet
+            | Effect::LinearSnapshot { force: false }
+            | Effect::LinearStateGet
+            | Effect::LinearIssue { .. }
+            | Effect::Quit
+    )
+}
+
+/// The effects the session pane refuses. No catch-all, as for Linear mode.
 #[cfg(test)]
-pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
+pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
     use crate::app::Effect;
     match eff {
-        Effect::Refetch
-        | Effect::LinearSnapshot
-        | Effect::LinearList { .. }
+        Effect::LinearSessionGet
+        | Effect::LinearStateGet
         | Effect::LinearIssue { .. }
+        | Effect::Quit => false,
+        Effect::LinearSnapshot { force } => *force,
+        Effect::Refetch
+        | Effect::LinearList { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::BindHandoff { .. }
-        | Effect::Quit => false,
-        Effect::LoadProjects
+        | Effect::LinearMarkClear { .. }
+        | Effect::LinearShowAccept { .. }
+        | Effect::LinearShowDismiss { .. }
+        | Effect::LinearBind { .. }
+        | Effect::LoadProjects
         | Effect::LoadProjectPicker
         | Effect::LoadBoardPicker { .. }
         | Effect::SelectProject { .. }
@@ -105,6 +140,114 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
     }
 }
 
+/// The effects Linear mode refuses, named one by one. With [`linear_allows`]
+/// this classifies every effect: the match has no catch-all, so a new variant
+/// does not build until someone places it.
+#[cfg(test)]
+pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    match eff {
+        Effect::Refetch
+        | Effect::LinearSnapshot { .. }
+        | Effect::LinearStateGet
+        | Effect::LinearList { .. }
+        | Effect::LinearIssue { .. }
+        | Effect::FocusPane(_)
+        | Effect::OpenIssueUrl(_)
+        | Effect::CopyWorktreePath { .. }
+        | Effect::SetLinearPaneTitle(_)
+        | Effect::BindHandoff { .. }
+        | Effect::LinearMarkClear { .. }
+        | Effect::LinearShowAccept { .. }
+        | Effect::LinearShowDismiss { .. }
+        | Effect::LinearBind { .. }
+        | Effect::Quit => false,
+        Effect::LinearSessionGet
+        | Effect::LoadProjects
+        | Effect::LoadProjectPicker
+        | Effect::LoadBoardPicker { .. }
+        | Effect::SelectProject { .. }
+        | Effect::SelectBoard(_)
+        | Effect::ProjectCreate(_)
+        | Effect::BoardCreate(_)
+        | Effect::LoadMoveColumns { .. }
+        | Effect::LoadDetail(_)
+        | Effect::CardCreate(_)
+        | Effect::CardUpdate(_)
+        | Effect::CardDelete(_)
+        | Effect::CardDuplicate(_)
+        | Effect::CardArchive { .. }
+        | Effect::BoardArchive { .. }
+        | Effect::ProjectArchive { .. }
+        | Effect::CardMove(_)
+        | Effect::ColumnCreate(_)
+        | Effect::ColumnUpdate(_)
+        | Effect::ColumnReorder { .. }
+        | Effect::ColumnDelete { .. }
+        | Effect::CommentAdd { .. }
+        | Effect::CommentUpdate { .. }
+        | Effect::CommentDelete { .. }
+        | Effect::LoadCommentHistory { .. }
+        | Effect::TemplateApply(_)
+        | Effect::RunCancel(_)
+        | Effect::RunRetry(_)
+        | Effect::RunDone(..)
+        | Effect::FocusRun(..)
+        | Effect::EditFocusedTextArea
+        | Effect::LoadFormOptions
+        | Effect::SetPaneTitle(_)
+        | Effect::ReloadPickers => true,
+    }
+}
+
+/// The protocol code and message of a failed request. A local client answers
+/// with `board_core::Error` itself rather than a wire error, so the code is
+/// read from whichever arrived. Keying only on the wire error left the whole
+/// in-process tier unable to see a code at all, which is where it is tested.
+fn code_and_message(error: &anyhow::Error) -> Option<(i32, String)> {
+    let rpc = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<RpcClientError>())
+        .map(|rpc| (rpc.code, rpc.message.clone()));
+    rpc.or_else(|| {
+        error.chain().find_map(|cause| {
+            if let Some(e) = cause.downcast_ref::<board_core::Error>() {
+                return Some((e.code(), e.to_string()));
+            }
+            let e = cause.downcast_ref::<LocalStateError>()?;
+            Some((local_state_code(e), e.to_string()))
+        })
+    })
+}
+
+/// The codes boardd's `ops/errors.rs` gives a local-state failure; an
+/// in-process client hands over the store's error before that mapping.
+fn local_state_code(error: &LocalStateError) -> i32 {
+    match error {
+        LocalStateError::Store(e) => e.code(),
+        LocalStateError::Rejected(LocalStateRejection::Refused(_)) => 1,
+        LocalStateError::Rejected(
+            LocalStateRejection::UnknownIssue { .. } | LocalStateRejection::Missing(_),
+        ) => 2,
+        LocalStateError::Rejected(
+            LocalStateRejection::IssueBoundElsewhere { .. }
+            | LocalStateRejection::ShowRequestAnswered { .. },
+        ) => 3,
+    }
+}
+
+/// A local-state write's failure. Not found (2) and invalid state (3) are
+/// how boardd answers a request or mark that someone else already closed.
+fn classify_write<T>(result: anyhow::Result<T>) -> Result<(), WriteFailure> {
+    result
+        .map(|_| ())
+        .map_err(|error| match code_and_message(&error) {
+            Some((2 | 3, message)) => WriteFailure::Gone(message),
+            Some((_, message)) => WriteFailure::Failed(message),
+            None => WriteFailure::Failed(format!("{error:#}")),
+        })
+}
+
 /// The daemon reports an unknown method as protocol code 1 with the message
 /// `bad request: unknown method: <name>`; code 1 alone also covers bad params.
 pub(crate) fn classify<T>(
@@ -127,18 +270,7 @@ pub(crate) fn classify<T>(
         if rpc.is_none() && timed_out {
             return LinearFailure::TimedOut(timeout);
         }
-        // A local client answers with `board_core::Error` itself rather than a
-        // wire error, so the code is read from whichever arrived. Keying only
-        // on the wire error left the whole in-process tier unable to see a
-        // code at all, which is where this distinction is tested.
-        let local_code = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<board_core::Error>())
-            .map(|e| (e.code(), e.to_string()));
-        let code_and_message = rpc
-            .map(|rpc| (rpc.code, rpc.message.clone()))
-            .or(local_code);
-        match code_and_message {
+        match code_and_message(&error) {
             Some((1, message)) if message.contains("unknown method") => {
                 LinearFailure::MethodNotFound
             }
@@ -184,18 +316,44 @@ impl Driver {
         }
     }
 
-    pub(super) fn fetch_linear_snapshot(&mut self) {
+    pub(super) fn fetch_linear_snapshot(&mut self, force: bool) {
         if let Some(pending) = self.deferred_linear.as_mut() {
-            pending.push_back(Pending::Snapshot);
+            pending.push_back(Pending::Snapshot { force });
             return;
         }
-        let Some(params) = self.linear_params() else {
+        let Some(params) = self.linear_params(force) else {
             return;
         };
         self.run_linear_read(
             LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
             move |client| client.linear_snapshot(&params),
             |result| LinearArrival::Snapshot(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_linear_state(&mut self) {
+        if let Some(pending) = self.deferred_linear.as_mut() {
+            pending.push_back(Pending::State);
+            return;
+        }
+        let Some(params) = self.state_params() else {
+            return;
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.linear_state_get(&params),
+            |result| LinearArrival::State(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_session(&mut self) {
+        let Some(params) = self.app.session.as_ref().map(|s| s.identity.params()) else {
+            return;
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.linear_session_get(&params),
+            |result| LinearArrival::Session(Box::new(result)),
         );
     }
 
@@ -271,13 +429,19 @@ impl Driver {
         }
     }
 
-    fn linear_params(&self) -> Option<LinearSnapshotParams> {
+    fn linear_params(&self, force: bool) -> Option<LinearSnapshotParams> {
         let workspace_id = self.app.linear.as_ref()?.workspace_id.clone();
         Some(LinearSnapshotParams {
             workspace_id,
             origin_socket: self.origin.origin_socket.clone(),
             plugin_root: self.origin.plugin_root.clone(),
+            force,
         })
+    }
+
+    fn state_params(&self) -> Option<LinearStateGetParams> {
+        let space = self.app.linear.as_ref()?.workspace_id.clone();
+        Some(LinearStateGetParams { space })
     }
 
     fn list_params(&self, kind: LinearListKind, id: Option<String>) -> LinearListParams {
@@ -317,13 +481,12 @@ impl Driver {
     /// Run the oldest held snapshot fetch synchronously and feed its arrival.
     /// Returns whether one was pending.
     pub fn deliver_pending_linear_snapshot(&mut self) -> bool {
-        if self
-            .take_pending(|p| matches!(p, Pending::Snapshot))
-            .is_none()
-        {
+        let Some(Pending::Snapshot { force }) =
+            self.take_pending(|p| matches!(p, Pending::Snapshot { .. }))
+        else {
             return false;
-        }
-        let Some(params) = self.linear_params() else {
+        };
+        let Some(params) = self.linear_params(force) else {
             return false;
         };
         let result = self.client.linear_snapshot(&params);
@@ -388,17 +551,43 @@ impl Driver {
         true
     }
 
+    /// Run the oldest held local-state read synchronously and feed its
+    /// arrival. Returns whether one was pending.
+    pub fn deliver_pending_linear_state(&mut self) -> bool {
+        if self.take_pending(|p| matches!(p, Pending::State)).is_none() {
+            return false;
+        }
+        let Some(params) = self.state_params() else {
+            return false;
+        };
+        let result = self.client.linear_state_get(&params);
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::State(
+            Box::new(classify(result, LINEAR_STATE_CLIENT_TIMEOUT)),
+        ))));
+        true
+    }
+
+    /// The runtime's coalesced `local_state_changed` events for one loop
+    /// iteration; the reducer decides whether any concern this space.
+    pub fn on_local_state_changed(&mut self, signals: LocalStateSignals) {
+        self.handle(Msg::LocalStateChanged(signals));
+    }
+
     /// The runtime's coalesced subscription signals for one loop iteration.
     /// Upstream mode: a reconnect installs a fresh request client and forces
-    /// one refetch; a change refetches. Linear mode: a change is ignored and
-    /// a reconnect is the one automatic snapshot request (R21).
+    /// one refetch; a change refetches. Linear mode: a board change is
+    /// ignored and a reconnect requests one snapshot.
     pub fn on_daemon_signals(&mut self, changed: bool, reconnected: bool) {
-        if self.app.mode == Mode::Linear {
+        if matches!(self.app.mode, Mode::Linear | Mode::Session) {
             if reconnected {
                 if let Some(path) = self.reconnect_path() {
                     self.reconnect(&path);
                 }
                 self.handle(Msg::LinearRefresh);
+                // Changes made while the connection was down sent no event.
+                let mut any = LocalStateSignals::default();
+                any.add(None, false);
+                self.handle(Msg::LocalStateChanged(any));
             }
             return;
         }
@@ -412,6 +601,41 @@ impl Driver {
         if refreshed {
             self.handle(Msg::Refresh);
         }
+    }
+
+    fn wrote(&mut self, write: LinearWrite, result: Result<(), WriteFailure>) {
+        self.handle(Msg::LinearArrived(Box::new(LinearArrival::Wrote {
+            write,
+            result,
+        })));
+    }
+
+    pub(super) fn clear_marks(&mut self, ids: Vec<i64>, on_open: bool) {
+        let result = classify_write(self.client.linear_mark_clear_ids(&ids));
+        self.wrote(LinearWrite::ClearMarks { ids, on_open }, result);
+    }
+
+    pub(super) fn accept_show(&mut self, id: i64, issue: String) {
+        let result = classify_write(self.client.linear_show_accept(id));
+        self.wrote(LinearWrite::AcceptShow { id, issue }, result);
+    }
+
+    pub(super) fn dismiss_show(&mut self, id: i64) {
+        let result = classify_write(self.client.linear_show_dismiss(id));
+        self.wrote(LinearWrite::DismissShow { id }, result);
+    }
+
+    pub(super) fn bind_worktree(&mut self, mark: Option<i64>, issue: String, cwd: String) {
+        let Some(space) = self.app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
+            return;
+        };
+        let result = classify_write(self.client.linear_bind(&LinearBindParams {
+            cwd,
+            issue: issue.clone(),
+            space: Some(space),
+            ..LinearBindParams::default()
+        }));
+        self.wrote(LinearWrite::Bind { mark, issue }, result);
     }
 
     pub(super) fn focus_pane(&mut self, pane_id: String) {
@@ -546,7 +770,9 @@ mod tests {
             Effect::SetLinearPaneTitle(s()),
             Effect::ReloadPickers,
             Effect::Quit,
-            Effect::LinearSnapshot,
+            Effect::LinearSnapshot { force: false },
+            Effect::LinearStateGet,
+            Effect::LinearSessionGet,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
                 id: None,
@@ -561,6 +787,17 @@ mod tests {
                 view: None,
                 issue: None,
                 working_directory: None,
+            },
+            Effect::LinearMarkClear {
+                ids: vec![1],
+                on_open: true,
+            },
+            Effect::LinearShowAccept { id: 1, issue: s() },
+            Effect::LinearShowDismiss { id: 1 },
+            Effect::LinearBind {
+                mark: Some(1),
+                issue: s(),
+                cwd: s(),
             },
             Effect::FocusPane(s()),
             Effect::OpenIssueUrl(s()),
@@ -588,10 +825,58 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 10 since the issue page: `linear.issue` is the tenth read Linear mode
-        // may make. The number is pinned so widening what this mode can do is a
+        // 15 since the board acts on marks and show-requests: mark clear,
+        // show accept, show dismiss and bind joined `linear.state.get`'s 11.
+        // The number is pinned so widening what this mode can do is a
         // deliberate edit rather than a side effect of adding an effect.
-        assert_eq!(allowed, 10, "the allow set grew or shrank");
+        assert_eq!(allowed, 15, "the allow set grew or shrank");
+    }
+
+    #[test]
+    fn the_session_pane_allows_reads_and_quit_and_names_every_other_effect() {
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        for eff in &effects {
+            assert_ne!(
+                session_allows(eff),
+                session_denies(eff),
+                "{:?} must be allowed or denied, not both or neither",
+                std::mem::discriminant(eff)
+            );
+        }
+        let allowed: Vec<String> = effects
+            .iter()
+            .filter(|e| session_allows(e))
+            .map(|e| format!("{:?}", std::mem::discriminant(e)))
+            .collect();
+        // Session read, snapshot, local state, issue document and quit. A
+        // forced snapshot is refused: the pane never skips the daemon's cache.
+        assert_eq!(allowed.len(), 5, "the session allow set grew or shrank");
+        assert!(session_denies(&Effect::LinearSnapshot { force: true }));
+    }
+
+    #[cfg(feature = "fake-client")]
+    #[test]
+    fn every_write_the_session_pane_refuses_toasts_and_builds_no_request() {
+        use crate::testkit::{methods, session_driver, RecordingClient};
+        let client = board_core::client::FakeBoardClient::new().unwrap();
+        let (client, log) = RecordingClient::new(client);
+        let mut driver = session_driver(client, crate::SessionIdentity::default());
+        let before = methods(&log);
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        for eff in effects.into_iter().filter(session_denies) {
+            let name = format!("{:?}", std::mem::discriminant(&eff));
+            driver.app.toast = None;
+            driver.apply_effect(eff);
+            assert_eq!(
+                driver.app.toast.as_ref().map(|t| t.text.as_str()),
+                Some("not available in the session pane"),
+                "{name}"
+            );
+        }
+        assert_eq!(methods(&log), before, "no request left");
+        assert!(!driver.app.should_quit);
     }
 
     #[cfg(feature = "fake-client")]

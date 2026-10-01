@@ -173,6 +173,7 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
     }
     let retention = tokio::spawn(logging::retention_task(daemon.shutdown_rx()));
     tokio::spawn(watchers::timeout_ticker(daemon.clone()));
+    tokio::spawn(watchers::show_request_sweeper(daemon.clone()));
     tokio::spawn(watchers::local_liveness_poller(daemon.clone()));
     if matches!(daemon.settings.spawner, SpawnerKind::Herdr) {
         // The supervisor is independent of the startup best-effort client: a

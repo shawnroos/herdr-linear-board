@@ -120,9 +120,9 @@ calls into board socket requests.
 |---|---|---|
 | Read | what am I bound to; show the panes, tab and worktree for an issue; show the board for a space | read-only |
 | Link | bind this session to an issue; unbind | write |
-| Mark | flag a card "needs you", "done" or "has a question"; attach a short note to a card | write |
+| Mark | flag a card "needs you", "has a question" or "done"; clear your own marks (`unmark`); attach a short note to a card | write |
 | Notify | send a herdr notification ("ENG-123 is ready for review") | write |
-| Ask to show | ask the person to look at an issue: the board shows "Claude wants to show you ENG-123 — press enter" | write |
+| Ask to show | ask the person to look at an issue: the board pins one line, "◉ <who asked> · ENG-123 <title>  a show · x dismiss"; withdraw your own request (`withdraw_show`) | write |
 | Open a board | open the TUI in a new tab or a split beside the agent's own pane, already showing the issue, space or card the agent is working on | write |
 
 Agents point; they do not grab the person's view. No tool focuses a pane, moves the cursor, or
@@ -130,7 +130,16 @@ jumps an existing TUI to a screen. [skill/SKILL.md](../skill/SKILL.md) already r
 verb for focusing a pane because "it moves the person's view in herdr, which an agent has no
 reason to do", and this keeps that rule. An agent in a background pane would take focus while the
 person types, and several agents would fight over one view. "Ask to show" moves the view only when
-the person presses the key.
+the person presses `a`; `x` rejects the request, and a request nobody answers expires after
+`[linear] show_request_ttl_secs`. The agent reads the outcome (accepted, rejected, withdrawn or
+expired) from `state`.
+
+A mark has one of four kinds. Agents set three: needs you (`!`), question (`?`) and done (`✓`). The
+fourth, suggestion (`◇`), is the board's own: it records a Linear write that could not link a
+worktree, and only the board creates it. Each mark, note and request records which agent wrote it
+(herdr socket, pane and Claude session), so a second mark of the same kind replaces only that
+agent's own, and an agent can clear or withdraw only its own. Opening a card on the board clears
+the `!`, `?` and `✓` marks it showed.
 
 "Open a board" adds a board without taking the view. boardd calls herdr's `plugin.pane.open`
 (verified against the 0.9.0 schema, `docs/herdr-0.9.0-schema.json`) with:

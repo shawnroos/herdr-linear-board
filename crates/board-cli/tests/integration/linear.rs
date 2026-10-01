@@ -285,6 +285,7 @@ fn stopping_the_daemon_mid_snapshot_stops_the_script() {
                 workspace_id: "wA".into(),
                 origin_socket: None,
                 plugin_root: None,
+                force: false,
             },
         );
     });
@@ -557,5 +558,403 @@ fn bind_is_not_a_command_line_verb() {
         assert_eq!(code(&out), CLI_ERROR, "{args:?}");
         let error = json_error(&out);
         assert_eq!(error["error"]["kind"], "cli", "{args:?}");
+    }
+}
+
+mod session {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::path::Path;
+    use std::process::{Command, Output, Stdio};
+    use std::time::{Duration, Instant};
+
+    use board_core::client::BoardClient;
+    use board_core::protocol::{
+        LinearBindParams, LinearMarkSetParams, LinearSessionGetParams, LinearSessionGetResult,
+        LinearShowRequestParams, MarkKind,
+    };
+    use serde_json::{json, Value};
+
+    use super::super::report::{
+        daemon_with_bound_space, daemon_with_bound_space_and, git_worktree,
+    };
+    use super::super::{json_output, TestDaemon, BOARD_BIN};
+
+    const HERDR_SOCKET: &str = "/tmp/herdr-test.sock";
+
+    fn herdr_env() -> [(&'static str, &'static str); 3] {
+        [
+            ("HERDR_SOCKET_PATH", HERDR_SOCKET),
+            ("HERDR_PANE_ID", "wA:p2"),
+            ("HERDR_WORKSPACE_ID", "wA"),
+        ]
+    }
+
+    fn board_with_stdin(
+        socket: &Path,
+        home: &Path,
+        cwd: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        stdin: &str,
+    ) -> (Output, Duration) {
+        let mut cmd = Command::new(BOARD_BIN);
+        cmd.args(args)
+            .current_dir(cwd)
+            .env("BOARD_SOCKET", socket)
+            .env("BOARD_DB", home.join("board.db"))
+            .env("HERDR_BOARD_CONFIG", home.join("missing-config.toml"))
+            .env("HOME", home)
+            .env("BOARD_SPAWNER", "local")
+            .env("BOARD_BIN", BOARD_BIN)
+            .env_remove("BOARD_WORK_PLUGIN_ROOT")
+            .env_remove("BOARD_SCOPE_PATH")
+            .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_PLUGIN_ID")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+        let started = Instant::now();
+        let mut child = cmd.spawn().expect("spawn board");
+        let mut pipe = child.stdin.take().unwrap();
+        let _ = pipe.write_all(stdin.as_bytes());
+        drop(pipe);
+        let out = child.wait_with_output().expect("wait for board");
+        (out, started.elapsed())
+    }
+
+    fn status_line(td: &TestDaemon, cwd: &Path, env: &[(&str, &str)], stdin: &str) -> String {
+        let (out, _) = board_with_stdin(
+            &td.socket,
+            td._dir.path(),
+            cwd,
+            &["linear", "status-line"],
+            env,
+            stdin,
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn claude_input(cwd: &Path) -> String {
+        json!({
+            "session_id": "claude-1",
+            "cwd": cwd,
+            "workspace": {"current_dir": cwd, "project_dir": cwd},
+            "model": {"id": "x", "display_name": "X"},
+        })
+        .to_string()
+    }
+
+    fn bind(td: &TestDaemon, worktree: &Path, issue: &str) {
+        td.client()
+            .linear_bind(&LinearBindParams {
+                cwd: worktree.to_str().unwrap().into(),
+                issue: issue.into(),
+                space: Some("wA".into()),
+                branch: None,
+                tab: None,
+                display_name: None,
+                claims: Default::default(),
+            })
+            .unwrap();
+    }
+
+    fn mark(td: &TestDaemon, issue: &str, kind: MarkKind) {
+        td.client()
+            .linear_mark_set(&LinearMarkSetParams {
+                space: "wA".into(),
+                issue: issue.into(),
+                kind,
+                text: None,
+                created_by: None,
+                owner: Default::default(),
+            })
+            .unwrap();
+    }
+
+    fn request(td: &TestDaemon, issue: &str) {
+        td.client()
+            .linear_show_request(&LinearShowRequestParams {
+                space: "wA".into(),
+                issue: issue.into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    fn node(identifier: &str, state: (&str, &str, &str)) -> Value {
+        json!({
+            "id": format!("id-{identifier}"),
+            "identifier": identifier,
+            "title": format!("title {identifier}"),
+            "url": format!("https://linear.app/x/{identifier}"),
+            "state": {"id": state.0, "name": state.1, "type": state.2},
+            "team": {"id": "team-1", "key": "WEB", "name": "Web"},
+            "assignee": null,
+            "priority": 2,
+            "labels": {"nodes": []},
+        })
+    }
+
+    fn linear_reply(body: &str) -> Value {
+        if body.contains("issues(") {
+            json!({"data": {"issues": {
+                "nodes": [
+                    node("WEB-1", ("s-doing", "In Progress", "started")),
+                    node("WEB-2", ("s-todo", "Todo", "unstarted")),
+                ],
+                "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }}})
+        } else if body.contains("project(id") {
+            json!({"data": {"project": {
+                "id": "project-a", "name": "Project A", "url": "https://linear.app/p",
+                "teams": {"nodes": [{"id": "team-1", "key": "WEB", "name": "Web", "states": {"nodes": [
+                    {"id": "s-todo", "name": "Todo", "type": "unstarted"},
+                    {"id": "s-doing", "name": "In Progress", "type": "started"}
+                ]}}]}
+            }}})
+        } else {
+            json!({"errors": [{"message": "unexpected query"}]})
+        }
+    }
+
+    /// A loopback stand-in for Linear's GraphQL endpoint; the thread outlives
+    /// the test and ends with the test process.
+    fn fake_linear() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/graphql", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let reply = linear_reply(&String::from_utf8_lossy(&body)).to_string();
+                let mut stream = reader.into_inner();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        url
+    }
+
+    fn is_minutes(text: &str) -> bool {
+        text.strip_suffix('m')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    }
+
+    #[test]
+    fn a_bound_session_shows_issue_column_run_time_marks_and_pending_requests() {
+        let url = fake_linear();
+        let (td, _store) = daemon_with_bound_space_and(&[
+            ("BOARD_LINEAR_API_URL", &url),
+            ("LINEAR_API_KEY", "lin_api_u6test"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+        bind(&td, &worktree, "WEB-1");
+        let warm = td.board_with_env(
+            &["linear", "snapshot", "wA", "--json"],
+            &[("HERDR_SOCKET_PATH", HERDR_SOCKET)],
+        );
+        assert_eq!(json_output(&warm)["linear"]["status"], "ok");
+        mark(&td, "WEB-1", MarkKind::Question);
+        mark(&td, "WEB-1", MarkKind::Attention);
+        mark(&td, "WEB-2", MarkKind::Done);
+        request(&td, "WEB-2");
+
+        let line = status_line(&td, &worktree, &herdr_env(), &claude_input(&worktree));
+
+        let parts: Vec<&str> = line.trim_end_matches('\n').split(" · ").collect();
+        assert_eq!(parts.len(), 5, "{line:?}");
+        assert_eq!(parts[0], "WEB-1", "{line:?}");
+        assert_eq!(parts[1], "In Progress", "{line:?}");
+        assert!(is_minutes(parts[2]), "{line:?}");
+        assert_eq!(parts[3], "!?", "{line:?}");
+        assert_eq!(parts[4], "◉1", "{line:?}");
+        assert_eq!(line.lines().count(), 1, "{line:?}");
+    }
+
+    #[test]
+    fn a_cold_cache_leaves_the_column_out() {
+        let (td, _store) = daemon_with_bound_space();
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+        bind(&td, &worktree, "WEB-1");
+
+        let line = status_line(&td, &worktree, &herdr_env(), &claude_input(&worktree));
+
+        let parts: Vec<&str> = line.trim_end().split(" · ").collect();
+        assert_eq!(parts.len(), 2, "{line:?}");
+        assert_eq!(parts[0], "WEB-1");
+        assert!(is_minutes(parts[1]), "{line:?}");
+    }
+
+    #[test]
+    fn the_session_cwd_comes_from_stdin_before_the_process_cwd() {
+        let (td, _store) = daemon_with_bound_space();
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+        let elsewhere = git_worktree(dir.path(), "elsewhere");
+        bind(&td, &worktree, "WEB-1");
+        std::fs::create_dir_all(worktree.join("src")).unwrap();
+
+        let from_stdin = status_line(
+            &td,
+            &elsewhere,
+            &herdr_env(),
+            &claude_input(&worktree.join("src")),
+        );
+        assert!(from_stdin.starts_with("WEB-1 · "), "{from_stdin:?}");
+
+        let from_process = status_line(&td, &worktree, &herdr_env(), "");
+        assert!(from_process.starts_with("WEB-1 · "), "{from_process:?}");
+    }
+
+    #[test]
+    fn an_unbound_session_says_so() {
+        let (td, _store) = daemon_with_bound_space();
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+
+        let line = status_line(&td, &worktree, &herdr_env(), &claude_input(&worktree));
+        assert_eq!(line, "board: not bound\n");
+
+        let other_space = [
+            ("HERDR_SOCKET_PATH", HERDR_SOCKET),
+            ("HERDR_PANE_ID", "wZ:p1"),
+            ("HERDR_WORKSPACE_ID", "wZ"),
+        ];
+        let line = status_line(&td, &worktree, &other_space, &claude_input(&worktree));
+        assert_eq!(line, "board: not bound\n");
+    }
+
+    #[test]
+    fn a_daemon_that_is_not_running_reads_as_down_and_is_not_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("boardd.sock");
+
+        let (out, elapsed) = board_with_stdin(
+            &socket,
+            dir.path(),
+            dir.path(),
+            &["linear", "status-line"],
+            &herdr_env(),
+            &claude_input(dir.path()),
+        );
+
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "board: daemon down\n");
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!socket.exists(), "the status line started a daemon");
+
+        let (out, _) = board_with_stdin(
+            &socket,
+            dir.path(),
+            dir.path(),
+            &["linear", "session", "--json"],
+            &herdr_env(),
+            "",
+        );
+        assert_ne!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!socket.exists(), "the session verb started a daemon");
+    }
+
+    #[test]
+    fn without_a_herdr_environment_it_prints_nothing() {
+        let (td, _store) = daemon_with_bound_space();
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+        bind(&td, &worktree, "WEB-1");
+
+        assert_eq!(
+            status_line(&td, &worktree, &[], &claude_input(&worktree)),
+            ""
+        );
+    }
+
+    #[test]
+    fn session_json_is_the_protocol_result() {
+        let (td, _store) = daemon_with_bound_space();
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = git_worktree(dir.path(), "wt");
+        bind(&td, &worktree, "WEB-1");
+        mark(&td, "WEB-1", MarkKind::Attention);
+        request(&td, "WEB-1");
+
+        let (out, _) = board_with_stdin(
+            &td.socket,
+            td._dir.path(),
+            &worktree,
+            &["linear", "session", "--json"],
+            &herdr_env(),
+            "",
+        );
+        let doc = json_output(&out);
+        let expected = td
+            .client()
+            .linear_session_get(&LinearSessionGetParams {
+                space: "wA".into(),
+                herdr_socket: Some(HERDR_SOCKET.into()),
+                herdr_pane_id: Some("wA:p2".into()),
+                claude_session_id: None,
+                cwd: Some(worktree.to_str().unwrap().into()),
+            })
+            .unwrap();
+        let parsed: LinearSessionGetResult = serde_json::from_value(doc.clone()).unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(doc["space"], "wA");
+        assert_eq!(doc["space_bound"], true);
+        assert_eq!(doc["binding"]["issue"], "WEB-1");
+        assert_eq!(doc["marks"][0]["kind"], "attention");
+        assert_eq!(doc["pending_requests"], 1);
+
+        let (out, _) = board_with_stdin(
+            &td.socket,
+            td._dir.path(),
+            &worktree,
+            &["linear", "session"],
+            &herdr_env(),
+            "",
+        );
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for cell in ["WEB-1", "attention", "wA"] {
+            assert!(text.contains(cell), "{text}");
+        }
     }
 }

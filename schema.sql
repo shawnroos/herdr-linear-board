@@ -244,11 +244,14 @@ CREATE TABLE linear_marks (
   id               INTEGER PRIMARY KEY,
   space            TEXT NOT NULL,
   issue_identifier TEXT NOT NULL,
-  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','question','done','suggestion')),
   text             TEXT,
   detail_json      TEXT,
   created_by       TEXT,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE linear_notes (
@@ -257,7 +260,10 @@ CREATE TABLE linear_notes (
   issue_identifier TEXT NOT NULL,
   body             TEXT NOT NULL,
   author           TEXT NOT NULL,
-  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT
 );
 
 CREATE TABLE linear_show_requests (
@@ -267,7 +273,12 @@ CREATE TABLE linear_show_requests (
   reason           TEXT,
   requested_by     TEXT,
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-  acknowledged_at  TEXT
+  acknowledged_at  TEXT,
+  owner_herdr_socket      TEXT,
+  owner_herdr_pane_id     TEXT,
+  owner_claude_session_id TEXT,
+  expires_at              TEXT,
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
 );
 
 -- Never the raw hook payload: the tool, the issue and who claimed the call.
@@ -298,5 +309,6 @@ CREATE TABLE linear_board_panes (
 CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
 CREATE INDEX idx_linear_notes_space ON linear_notes(space, issue_identifier);
 CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+CREATE INDEX idx_linear_show_requests_resolved ON linear_show_requests(space, acknowledged_at, id) WHERE outcome IS NOT NULL;
 CREATE INDEX idx_linear_activity_space ON linear_activity(space, id);
 CREATE INDEX idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);

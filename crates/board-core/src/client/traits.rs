@@ -18,8 +18,10 @@ use crate::protocol::{
     LinearActivityRecordResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearBindParams,
     LinearChange, LinearGroupingGetParams, LinearGroupingGetResult, LinearGroupingSetParams,
     LinearIdParams, LinearImportParams, LinearImportResult, LinearIssueDocument, LinearIssueParams,
-    LinearListParams, LinearListResult, LinearMarkSetParams, LinearNoteSetParams, LinearReplace,
-    LinearShowRequestParams, LinearSnapshot, LinearSnapshotParams, LinearState,
+    LinearListParams, LinearListResult, LinearMarkClearParams, LinearMarkSetParams,
+    LinearMarkUnmarkParams, LinearNoteSetParams, LinearRemoved, LinearReplace,
+    LinearSessionGetParams, LinearSessionGetResult, LinearShowRequestParams,
+    LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams, LinearState,
     LinearStateGetParams, LinearUnbindParams, Mark, Note, PaneFocusParams, PaneFocusResult,
     PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams,
     ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult, ProjectOpenParams,
@@ -634,6 +636,25 @@ pub trait BoardClient {
         )?)?)
     }
 
+    fn linear_mark_clear_ids(&mut self, ids: &[i64]) -> anyhow::Result<LinearRemoved<Mark>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.mark.clear",
+            serde_json::to_value(LinearMarkClearParams {
+                id: None,
+                ids: Some(ids.to_vec()),
+            })?,
+        )?)?)
+    }
+
+    fn linear_mark_unmark(
+        &mut self,
+        p: &LinearMarkUnmarkParams,
+    ) -> anyhow::Result<LinearRemoved<Mark>> {
+        Ok(serde_json::from_value(
+            self.call("linear.mark.unmark", serde_json::to_value(p)?)?,
+        )?)
+    }
+
     fn linear_note_set(&mut self, p: &LinearNoteSetParams) -> anyhow::Result<LinearReplace<Note>> {
         Ok(serde_json::from_value(
             self.call("linear.note.set", serde_json::to_value(p)?)?,
@@ -668,6 +689,24 @@ pub trait BoardClient {
             "linear.show.dismiss",
             serde_json::to_value(LinearIdParams { id })?,
         )?)?)
+    }
+
+    fn linear_show_withdraw(
+        &mut self,
+        p: &LinearShowWithdrawParams,
+    ) -> anyhow::Result<LinearChange<ShowRequest>> {
+        Ok(serde_json::from_value(
+            self.call("linear.show.withdraw", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_session_get(
+        &mut self,
+        p: &LinearSessionGetParams,
+    ) -> anyhow::Result<LinearSessionGetResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.session.get", serde_json::to_value(p)?)?,
+        )?)
     }
 
     fn linear_activity_record(

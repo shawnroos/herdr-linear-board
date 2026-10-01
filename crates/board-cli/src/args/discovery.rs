@@ -67,6 +67,16 @@ pub(crate) enum LinearCmd {
     /// Report a Linear MCP write from a Claude Code PostToolUse hook. Reads
     /// the hook payload on stdin, prints nothing, and always exits 0.
     Report,
+    /// This agent session's board context: its bound issue, column, marks
+    /// and the space's pending show-requests. Never starts the daemon.
+    Session {
+        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
+        workspace_id: Option<String>,
+    },
+    /// One line of board status for Claude Code's `statusLine` setting.
+    /// Reads the herdr pane from the environment and the session from the
+    /// JSON on stdin; prints nothing outside herdr and always exits 0.
+    StatusLine,
 }
 
 #[derive(Subcommand)]

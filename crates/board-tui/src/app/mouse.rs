@@ -186,9 +186,11 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
         MouseEventKind::Down(MouseButton::Left) => {
             let hit = app.hit_map.borrow().hit(m.column, m.row);
             match hit {
-                Some(Zone::LinearCard { group, identifier }) => {
-                    super::linear::click_card(app, &group, &identifier)
-                }
+                Some(Zone::LinearCard {
+                    group,
+                    lane,
+                    identifier,
+                }) => super::linear::click_card(app, &group, &lane, &identifier),
                 Some(Zone::LinearGroup(group)) => {
                     super::linear::click_group(app, &group);
                     vec![]

@@ -933,8 +933,10 @@ Isolation rules for level 3–4: `BOARD_DB=/tmp/…` + dedicated daemon socket p
 Linear mode is the board rendered for one herdr space that the work plugin (`work@shrimpshack`)
 has bound to a Linear project. It is a view over the plugin's snapshot document; the upstream
 kanban, its SQLite rows, and its dispatch engine are not involved. The board never moves a card,
-edits an issue, or writes a Linear object, a plugin record or a SQLite row. Its herdr writes are
-its own pane title and, when a person starts a bind, one new `bind` tab running Claude.
+edits an issue, or writes a Linear object or a plugin record. Its only board writes are the
+person's answers to agents: clearing the marks a card's detail showed, accepting or rejecting a
+show-request, and binding a worktree (see "Agent marks"). Its herdr writes are its own pane title
+and, when a person starts a bind, one new `bind` tab running Claude.
 [board-owns-the-store.md](board-owns-the-store.md) proposes reversing this: boardd would own the
 plugin's store and write it. That is a proposal; this section describes what ships.
 
@@ -1028,9 +1030,11 @@ characters from every string before it answers. A plugin-side failure is protoco
 for the snapshot. `board linear space list`, `board linear project list` and
 `board linear view list <project id>` are the same reads from the command line.
 
-**Effects.** In Linear mode the driver executes only refetch, the snapshot request, a list read,
-pane focus, opening the issue URL, copying the worktree path, setting the Linear pane title, the
-bind handoff, and quit. Every other effect is refused with a toast before a request is built. A
+**Effects.** In Linear mode the driver executes only refetch, the snapshot request, the
+local-state read, a list read, the issue read, pane focus, opening the issue URL, copying the
+worktree path, setting the Linear pane title, the bind handoff, `linear.bind`, clearing marks,
+accepting or dismissing a show-request, and quit. The session side pane executes a smaller set:
+the session, snapshot, local-state and issue reads, and quit. Every other effect is refused with a toast before a request is built. A
 test classifies every effect variant as allowed or refused, so a new variant must be placed before
 the crate builds. This set guards the board's own code against a regression that adds a write
 path. It is not a boundary on socket clients: any client of the board socket can call any method.
@@ -1049,10 +1053,16 @@ reports (`kind`) puts them in Linear's own progression — triage, backlog, unst
 completed, canceled. A group with no type, which is every group under a grouping other than
 workflow state, keeps its place among its equals.
 
-**Layout.** Cards are five rows tall and columns are at least 36 cells wide. A title wraps to two
-lines by display width, so wide characters do not overflow the card. When the body is narrower
-than two columns (72 cells), the board stacks: one group fills the width and `←`/`→` move between
-groups. The header names the recorded view, or `view: project issues (default)` when none is
+**Layout.** The snapshot's tabs are a row under the header, the active one in brackets; `[` and
+`]` switch tabs, and each tab keeps its own cursor. A document from before tabs has no tab row.
+Columns are fixed at a page: a page holds as many 36-cell columns as fit, at least one, so a
+narrow pane shows one column a page. When not every column fits, a pager row names the hidden
+column and its card count at each edge (`‹ Todo 4`, `In Review 1 ›`); `←`/`→` flip the page past
+its edge and `<`/`>` jump a page. Inside a column, cards sit under lane sub-headers
+(`── Alpha 3`) with the lane's card count in that column; a board with no lane grouping has none.
+Cards are five rows tall, and a title wraps to two lines by display width, so wide characters do
+not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
+keeps it on the same card when it can. The header names the recorded view, or `view: project issues (default)` when none is
 chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
 herdr config (`$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`), read
 once at start. A missing, unreadable, oversized (over 64 KiB) or unparseable config leaves the
@@ -1063,9 +1073,10 @@ wheel moves the card selection. A click on a strip row opens the project picker 
 click on the header's view label opens the view picker, and a click on a picker row chooses it.
 Every other click is swallowed, which is also how an open picker shadows the board behind it.
 
-**Strip.** Below the header the strip lists the spaces that have no bound project, read with
-`linear.list {kind: spaces}` alongside every snapshot. A failed read says the list is unavailable;
-it never reads as "every space is bound". `s` focuses the strip, `↑`/`↓` select a space, `Enter`
+**Strip.** Below the board the strip lists the spaces that have no bound project, read with
+`linear.list {kind: spaces}` alongside every snapshot. It takes rows only when it has something to
+show: with no unbound space and no unmapped tab, or before the space list lands, it is not drawn.
+A failed read says the list is unavailable; it never reads as "every space is bound". `s` focuses the strip, `↑`/`↓` select a space, `Enter`
 opens the project picker for it, and `Esc` returns to the board. `t` switches the strip between
 the spaces and the snapshot's unmapped tabs.
 
@@ -1092,10 +1103,31 @@ left waiting; the person closes it. The daemon writes nothing; the bind skill's 
 session is the only write gate. The mechanism, and why it does not use `agent.prompt`, is in
 [`herdr.md`](herdr.md) → Linear bind handoff.
 
-**Refresh.** Refresh is manual. A reconnect to the daemon is the one automatic refresh and sends
-exactly one snapshot request; `board_changed` events are ignored, since no board row can change.
-One snapshot is in flight at a time and a refresh requested while one is running is dropped with a
-toast. A failed refresh keeps the last good snapshot on screen.
+**Agent marks.** Agents mark cards through `board mcp`: needs you (`!`), question (`?`) and done
+(`✓`). The board adds a suggestion (`◇`) when a reported Linear write could not link a worktree.
+A 2-cell gutter left of each identifier shows a card's marks, with `◉` for a pending show-request,
+and a card with a note shows the latest one under its title. Pending show-requests pin one line
+between the columns and the strip, oldest first. `a` accepts (binds a selected suggestion, or
+shows the oldest request's card), `x` rejects, and `n`/`N` walk the marked cards across columns,
+pages and tabs. Opening a card's detail clears the `!`, `?` and `✓` marks it showed. Pager arrows
+and other tabs' labels count hidden cards that carry a mark or request (`!N`). A request nobody
+answers expires after `[linear] show_request_ttl_secs` (see [`configuration.md`](configuration.md)).
+The keys are in [`tui-interactions.md`](tui-interactions.md) → Linear mode.
+
+**Session side pane.** `board tui --session` is the pane an agent opens beside itself with
+`open_board {session: true}`. It shows that agent's bound issue, its lane, or a bind hint, reads
+`linear.session.get` for the agent's identity, and writes nothing. `board linear status-line` puts
+the same read in Claude Code's status line. See [`tui-interactions.md`](tui-interactions.md) →
+Session side pane and [`protocol.md`](protocol.md) → `linear.session.get`.
+
+**Refresh.** The board follows local state live: it reads `linear.state.get` after its first
+snapshot, after a reconnect, and on each `local_state_changed` for its space. An event with the
+`snapshot` flag means the daemon already refetched Linear after an agent's Linear write, so the
+board reads one cached snapshot. A reconnect also sends one snapshot request. `board_changed`
+events are ignored, since no kanban row can change. `r` refreshes through the daemon's cache; `R`
+forces a fresh Linear read. One snapshot is in flight at a time: an `r` while one is running is
+dropped with a toast, and an `R` queues one forced read behind it. A failed refresh keeps the last
+good snapshot on screen.
 
 **Fixture contract.** `crates/board-core/tests/fixtures/linear-snapshot/` vendors the plugin's
 canonical snapshot documents. `VERSION` there records the plugin version and a sha256 per file; a

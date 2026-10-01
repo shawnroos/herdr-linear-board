@@ -52,6 +52,8 @@ pub struct DaemonSettings {
     /// `[daemon] work_plugin_root`, the TOML step of the plugin root
     /// resolution `ops::linear` performs.
     pub work_plugin_root: Option<PathBuf>,
+    /// `[linear] show_request_ttl_secs`, at least 1.
+    pub show_request_ttl_secs: i64,
 }
 
 impl Default for DaemonSettings {
@@ -62,6 +64,7 @@ impl Default for DaemonSettings {
             local_poll_ms: 2000,
             tick_ms: 1000,
             work_plugin_root: None,
+            show_request_ttl_secs: board_core::db::SHOW_REQUEST_TTL_DEFAULT_SECS,
         }
     }
 }
@@ -76,6 +79,7 @@ impl DaemonSettings {
             local_poll_ms: config.local_poll_ms.max(1),
             tick_ms: config.tick_ms.max(1),
             work_plugin_root: config.work_plugin_root.clone(),
+            ..Self::default()
         };
 
         if let Some(value) = env.var("BOARD_SPAWNER") {
@@ -96,7 +100,10 @@ impl DaemonSettings {
 
     /// Resolve settings from a complete, already-parsed root config.
     pub fn from_root(root: &RootConfig, env: &dyn EnvLookup) -> Result<Self> {
-        Self::from_config(&root.daemon, env)
+        Ok(Self {
+            show_request_ttl_secs: root.linear.show_request_ttl_secs.max(1),
+            ..Self::from_config(&root.daemon, env)?
+        })
     }
 
     /// Load and parse a root config once, then apply process environment

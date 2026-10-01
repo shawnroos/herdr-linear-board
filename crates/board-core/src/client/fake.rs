@@ -56,6 +56,9 @@ pub struct FakeBoardClient {
     /// the daemon answers (`run.focus`). Defaults mean built-ins only.
     config: crate::config::Config,
     linear: FakeLinear,
+    /// Unix seconds the local-state methods read as now; `None` is the wall
+    /// clock.
+    now: Option<i64>,
 }
 
 /// What the fake answers for the Linear-mode methods. There is no plugin
@@ -143,6 +146,26 @@ impl FakeBoardClient {
             db: Db::open_in_memory()?,
             config: crate::config::Config::default(),
             linear: FakeLinear::default(),
+            now: None,
+        })
+    }
+
+    /// Pin the clock the local-state methods read, so request expiry is
+    /// deterministic; the time can be moved with `set_now`.
+    pub fn with_now(mut self, now: i64) -> FakeBoardClient {
+        self.now = Some(now);
+        self
+    }
+
+    pub fn set_now(&mut self, now: i64) {
+        self.now = Some(now);
+    }
+
+    fn now(&self) -> i64 {
+        self.now.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         })
     }
 
@@ -246,7 +269,7 @@ impl FakeBoardClient {
 /// read (`db`, `config`, `linear`, `params`) are named at the invocation below so they
 /// keep ordinary call-site scoping.
 macro_rules! fake_methods {
-    ($db:ident, $config:ident, $linear:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
+    ($db:ident, $config:ident, $linear:ident, $now:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
         /// Every board method [`FakeBoardClient`] implements.
         ///
         /// The whole board-tui test tier runs against this fake, so its surface
@@ -259,6 +282,7 @@ macro_rules! fake_methods {
                 let $config = self.config.clone();
                 let $db = &self.db;
                 let $linear = &self.linear;
+                let $now = self.now();
                 let v = match method {
                     $($method => $arm,)*
                     other => anyhow::bail!("FakeBoardClient: unsupported method {other}"),
@@ -308,7 +332,7 @@ fn project_open_result(
     })?)
 }
 
-fake_methods!(db, config, linear, params, {
+fake_methods!(db, config, linear, now, params, {
     "board.get" => {
         let p: BoardGetParams = serde_json::from_value(params)?;
         let board_id = p.board_id.unwrap_or(BOARD_ID);
@@ -880,7 +904,7 @@ fake_methods!(db, config, linear, params, {
     },
     "linear.state.get" => {
         let p: crate::protocol::LinearStateGetParams = serde_json::from_value(params)?;
-        serde_json::to_value(db.linear_state(&p.space)?)?
+        serde_json::to_value(db.linear_state(&p.space, now)?)?
     },
     "linear.bind" => serde_json::to_value(db.linear_bind(&serde_json::from_value(params)?)?)?,
     "linear.unbind" => serde_json::to_value(db.linear_unbind(&serde_json::from_value(params)?)?)?,
@@ -897,8 +921,18 @@ fake_methods!(db, config, linear, params, {
         serde_json::to_value(db.linear_mark_set(&serde_json::from_value(params)?, false)?)?
     },
     "linear.mark.clear" => {
-        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
-        serde_json::to_value(db.linear_mark_clear(p.id)?)?
+        let p: crate::protocol::LinearMarkClearParams = serde_json::from_value(params)?;
+        match p.target()? {
+            crate::protocol::MarkClearTarget::One(id) => {
+                serde_json::to_value(db.linear_mark_clear(id)?)?
+            }
+            crate::protocol::MarkClearTarget::Many(ids) => {
+                serde_json::to_value(db.linear_mark_clear_ids(&ids)?)?
+            }
+        }
+    },
+    "linear.mark.unmark" => {
+        serde_json::to_value(db.linear_mark_unmark(&serde_json::from_value(params)?)?)?
     },
     "linear.note.set" => {
         serde_json::to_value(db.linear_note_set(&serde_json::from_value(params)?, false)?)?
@@ -907,16 +941,25 @@ fake_methods!(db, config, linear, params, {
         let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
         serde_json::to_value(db.linear_note_clear(p.id)?)?
     },
-    "linear.show.request" => {
-        serde_json::to_value(db.linear_show_request(&serde_json::from_value(params)?, false)?)?
-    },
+    "linear.show.request" => serde_json::to_value(db.linear_show_request(
+        &serde_json::from_value(params)?,
+        false,
+        now,
+        crate::db::SHOW_REQUEST_TTL_DEFAULT_SECS,
+    )?)?,
     "linear.show.accept" => {
         let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
-        serde_json::to_value(db.linear_show_answer(p.id)?)?
+        serde_json::to_value(db.linear_show_accept(p.id, now)?)?
     },
     "linear.show.dismiss" => {
         let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
-        serde_json::to_value(db.linear_show_answer(p.id)?)?
+        serde_json::to_value(db.linear_show_dismiss(p.id, now)?)?
+    },
+    "linear.show.withdraw" => {
+        serde_json::to_value(db.linear_show_withdraw(&serde_json::from_value(params)?, now)?)?
+    },
+    "linear.session.get" => {
+        serde_json::to_value(db.linear_session_get(&serde_json::from_value(params)?, now)?)?
     },
     "linear.activity.record" => {
         serde_json::to_value(db.linear_activity_record(&serde_json::from_value(params)?)?)?
@@ -1174,6 +1217,7 @@ mod tests {
                 kind: MarkKind::Attention,
                 text: Some("look".into()),
                 created_by: None,
+                owner: Default::default(),
             })
             .unwrap();
         client.linear_mark_clear(mark.after.id).unwrap();
@@ -1183,6 +1227,7 @@ mod tests {
                 issue: "WEB-1".into(),
                 body: "b\u{1b}".into(),
                 author: "a".into(),
+                owner: Default::default(),
             })
             .unwrap();
         assert_eq!(note.after.body, "b");

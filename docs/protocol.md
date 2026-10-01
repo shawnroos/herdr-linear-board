@@ -108,7 +108,7 @@ The typed catalog/action surface includes `harness.capabilities`, `harness.list`
 `board.pane.open`, `board.pane.close`, `board.notify`,
 `linear.snapshot`, `linear.list`, `linear.bind_handoff`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
-`linear.note.*`, `linear.show.*`, `linear.activity.*`, `linear.import`), in addition to the
+`linear.note.*`, `linear.show.*`, `linear.session.get`, `linear.activity.*`, `linear.import`), in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
 as `{}` while a named session serializes as `{ "session": "..." }`, preserving the v1 wire contract.
 
@@ -516,7 +516,8 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   never sent. The Linear-mode board uses it for the panes a snapshot names, which may be stale, so
   `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
   socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
-- `board.pane.open {context: {space?, issue?, card?}, placement, origin_socket, origin_pane}` →
+- `board.pane.open {context: {space?, issue?, card?, session?}, placement, origin_socket, origin_pane,
+  session_cwd?, claude_session_id?}` →
   `{pane_id, tab_id, workspace_id, placement, reused}` — open a board beside an agent's own pane,
   in the **caller's own** herdr session (`origin_socket`, as for `pane.focus`). `placement` is
   `tab` or `split`; `overlay`, `popup` and `zoomed` cover the person's view and are refused with
@@ -533,8 +534,19 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   for the context fields given. The returned pane is recorded in `linear_board_panes`, keyed by
   the canonical socket path and pane id. Error 4 for an unavailable socket, the protocol gate, or
   a herdr refusal.
-- `board.pane.close {context, origin_socket}` → `{pane_id, closed: bool, gone: bool}` — close the
-  board pane boardd recorded for `context` on that socket. With no recorded pane it is error 2
+  - **Session pane.** `context: {session: true}` opens the calling agent's session side pane
+    instead (`board tui --session`, entrypoint `session`). It takes no `space`, `issue` or `card`
+    (error 1), and each agent has one: the reuse key is the origin pane. The pane's `env` adds the
+    agent's identity, because the split's own `HERDR_PANE_ID` names the split:
+    `BOARD_SESSION_SOCKET` (`origin_socket` as sent), `BOARD_SESSION_PANE`,
+    `BOARD_SESSION_WORKSPACE` (the origin pane's workspace), and, when given,
+    `BOARD_SESSION_CWD` (`session_cwd`, an absolute path of at most 4096 bytes) and
+    `BOARD_SESSION_CLAUDE` (`claude_session_id`, 1 to 128 ASCII letters, digits, `_ - .`). A
+    malformed `session_cwd` or `claude_session_id` is error 1; an origin pane `pane.get` names no
+    workspace for is error 4.
+- `board.pane.close {context, origin_socket, origin_pane?}` → `{pane_id, closed: bool, gone: bool}`
+  — close the board pane boardd recorded for `context` on that socket. A session context needs
+  `origin_pane`, the agent's own pane (error 1 without it). With no recorded pane it is error 2
   before any herdr call, so it can never close a pane the board did not open. A recorded pane
   `pane.get` still lists gets one herdr `plugin.pane.close` (`closed:true`); one that is gone gets
   none (`gone:true`). Either way its row is cleared.
@@ -566,19 +578,21 @@ or `workspace.list` (the spaces list) on `origin_socket`.
   - Bound: `record {status: "ok", state: "bound", project_id}`. With a grouping config the issues
     are the config's compiled filter; with none, the binding's custom view (its own filter and
     grouping, `view.status` as the script names it, `not_in_project` when its filter no longer
-    names the project) or the project's issues grouped by the first team's workflow states (R8).
+    names the project) or the project's issues grouped by the first team's workflow states.
     `tabs`, `groups` and `issues` come from the grouping engine; `issues` holds only issues the
     board shows. Worktree bindings, `unmapped` tabs and `pane_status` come from the one herdr read;
     without it `herdr.status` is `unavailable` and every pane status `unknown`.
-  - **Shared read (KTD11).** The Linear half is cached per `(session, workspace_id)` and shared by
+  - **Shared read.** The Linear half is cached per `(session, workspace_id)` and shared by
     every reader for 15 s; concurrent readers of one space wait for one fetch. A changed binding or
     grouping is a new read. When Linear cannot be read, the last good read is returned with
     `linear.status: "unavailable"`, `linear.message` (why), `cache_age_seconds`, and every issue
     `stale: true`; with no earlier read the board is empty, never an error.
   - A `linear.activity.record` for a space that has a cached read marks it out of date and
     schedules one refetch 500 ms later; reports that land meanwhile fold into it. When it lands,
-    boardd emits one `local_state_changed {space}`, and a `linear.snapshot` inside the TTL returns
+    boardd emits one `local_state_changed {space, snapshot: true}`, and a `linear.snapshot` inside the TTL returns
     the refetched read without another Linear call.
+  - `force: true` drops the space's cached read first, so this request reads Linear again. The
+    board's `R` key sends it. A daemon that predates `force` ignores it.
   - Additive: `linear.message` (string, omitted when there is nothing to say).
 - **Native `linear.list`.** `spaces`: the live workspaces of `origin_socket`'s session
   (`workspace.list`) and then this session's bound workspaces that are not live, each with its
@@ -590,7 +604,7 @@ or `workspace.list` (the spaces list) on `origin_socket`.
 - **Native `linear.issue`.** One GraphQL request. Every Linear failure, no such issue included, is
   a document with `status: "unavailable"`, `message` and `issue: null`.
 
-- `linear.snapshot {workspace_id, origin_socket?, plugin_root?}` → the work plugin's space snapshot document
+- `linear.snapshot {workspace_id, origin_socket?, plugin_root?, force?}` → the work plugin's space snapshot document
   (`plugins/work/docs/snapshot.md` in the plugin repo; board types `LinearSnapshot` in
   `board-core::protocol`) plus a daemon-attached `pane_status: {pane_id: status}` for every pane id
   the document names in `issues[].bindings[].panes` and `unmapped[].panes`. The daemon resolves the
@@ -697,13 +711,16 @@ names a space by the work plugin's *space name*, which is the herdr workspace la
 `linear.grouping.*`'s `space` is a label. A *card* is a Linear issue identifier,
 accepted only as a Linear key (`WEB-123`) or a hyphenated issue UUID; any other shape is error 1.
 
-Every write returns what it changed, and every successful write emits exactly one
-`local_state_changed` event (see Events) — a `linear.activity.record` for a space a reader has
-read emits it when its refetch lands; a refused write and a preview emit none. Two result
-shapes carry the change:
+Every write returns what it changed, and a write that changed something emits one
+`local_state_changed` event (see Events) for each space it touched — a `linear.activity.record`
+for a space a reader has read emits it when its refetch lands; a refused write, a preview, and an
+`unmark` or `mark.clear {ids}` that removed nothing emit none. A sweep every 10 s closes overdue
+show-requests as `expired` and emits one event for each space it changed. Three result shapes
+carry the change:
 
 - `{before, after}` — the row before and after; `null` means it did not exist then.
 - `{before: [rows it removed], after: row}` — for `mark.set` and `note.set`, which replace.
+- `{removed: [rows]}` — for `mark.unmark` and `mark.clear {ids}`; empty when nothing was removed.
 
 Free text is cleaned before it is stored: control and format characters (the `ESC` of an escape
 sequence, bidi overrides, zero-width marks) are removed from single-line fields (mark
@@ -717,18 +734,40 @@ not cleaned, when they carry control characters.
 verified. The session a claim names is the herdr session of `herdr_socket`
 (`…/sessions/<name>/herdr.sock`, else `default`).
 
+An *owner* (`owner`) is the agent that wrote a mark, note or show-request:
+`{herdr_socket?, herdr_pane_id?, claude_session_id?}`, read by `board mcp` from
+`HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `CLAUDE_CODE_SESSION_ID`. Like claims, it is attribution,
+not access control: the daemon stores what the caller sends. A blank field is no field, and an
+owner with no field is anonymous. Mark, note and show-request rows carry it as
+`owner_herdr_socket`, `owner_herdr_pane_id` and `owner_claude_session_id`. Writes that act on "the
+caller's own" rows (`mark.set`'s replace, `unmark`, `show.request`'s refresh, `show.withdraw`)
+match all three fields exactly. `unmark` and `show.withdraw` refuse an anonymous owner with error
+1, so a row written without an owner can only be cleared by id, which is what the board does.
+
+A mark has a `kind`: `attention` (the board and `board mcp` call it *needs you*, glyph `!`),
+`question` (`?`), `done` (`✓`) or `suggestion` (`◇`). Agents set the first three; only
+`linear.activity.record` creates a `suggestion`. A show-request row also carries `expires_at` and
+`outcome` (`null` while pending, then `accepted`, `rejected`, `withdrawn` or `expired`); a closed
+request also has `acknowledged_at` set, so a reader that predates `outcome` still sees it closed.
+A request is pending while it has no outcome and its `expires_at` has not passed.
+
 A card is *known* in a space when a worktree binding holds it, activity was recorded for it in
 that space, or the space's shared Linear read (see `linear.snapshot`) lists it. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
 
 - `linear.state.get {space}` → `{space, space_bindings, worktree_bindings, grouping, marks, notes,
-  show_requests}`: the space's bindings, every worktree binding (they are not keyed by space), the
-  grouping mapping in force for the space (`{space: null|string, mapping}` or `null`), its marks and
-  notes, and its show-requests not yet answered.
-- `linear.bind {cwd, issue, space?, branch?, tab?, display_name?, claims?}` → `{before, after}`:
-  binds the git worktree containing `cwd` (canonicalised, then the nearest ancestor with a `.git`
+  show_requests, resolved_show_requests?}`: the space's bindings, every worktree binding (they are
+  not keyed by space), the grouping mapping in force for the space (`{space: null|string, mapping}`
+  or `null`), its marks and notes, and its pending show-requests. `resolved_show_requests`
+  lists the space's 20 most recently closed requests (accepted, rejected, withdrawn or expired),
+  newest first, each with its `outcome`; it is omitted when there are none, and an older daemon
+  never sends it.
+- `linear.bind {cwd, issue, space?, branch?, tab?, display_name?, claims?}` →
+  `{before, after, cleared_suggestions?}`: binds the git worktree containing `cwd` (canonicalised, then the nearest ancestor with a `.git`
   entry) to `issue`. Rebinding a worktree replaces its binding; `before` is the replaced one, so
-  binding `before` again undoes it. Error 1 when `cwd` is relative, missing, or not inside a git
-  worktree; error 3 when another worktree holds the issue — the message names that worktree.
+  binding `before` again undoes it. When a `suggestion` mark on the issue names this worktree in
+  its `detail.worktree_path`, the bind clears every `suggestion` on the issue, in every space, and
+  lists them in `cleared_suggestions` (omitted when empty); each space they sat in gets its own
+  event. Error 1 when `cwd` is relative, missing, or not inside a git worktree; error 3 when another worktree holds the issue — the message names that worktree.
 - `linear.unbind {cwd, space?, claims?}` → `{before, after: null}`. A worktree that no longer
   exists is found by `cwd` exactly as given. Error 2 when the worktree has no binding.
 - `linear.grouping.get {space?}` → `{config, resolved}`: the whole config
@@ -742,27 +781,55 @@ that space, or the space's shared Linear read (see `linear.snapshot`) lists it. 
   config the grouping rules refuse is error 1 with the reason named, and nothing is written.
 - `linear.grouping.preview` — the same params and result as `grouping.set`, without the write and
   without an event.
-- `linear.mark.set {space, issue, kind?: "attention"|"suggestion", text?, created_by?}` →
-  `{before: [...], after}`: replaces the card's mark of that kind (default `attention`).
-- `linear.mark.clear {id}` / `linear.note.clear {id}` → `{before, after: null}`; error 2 for an
-  unknown id.
-- `linear.note.set {space, issue, body, author}` → `{before: [...], after}`: replaces that
-  author's note on the card.
-- `linear.show.request {space, issue, reason?, requested_by?}` → `{before: null, after}`: asks the
-  person to look at a card; the view moves only when they press the key.
-- `linear.show.accept {id}` / `linear.show.dismiss {id}` → `{before, after}`: both answer the
-  request (`after.acknowledged_at` set) and drain it from `state.get`; `accept` returns the card to
-  show. Error 2 for an unknown id; error 3 for a request already answered either way.
+- `linear.mark.set {space, issue, kind?: "attention"|"question"|"done", text?, created_by?, owner?}`
+  → `{before: [...], after}`: replaces this owner's mark of that kind on the card (default
+  `attention`); other owners' marks stay. `kind: "suggestion"` is error 1.
+- `linear.mark.unmark {space, issue, kind?, owner}` → `{removed}`: removes this owner's marks on
+  the card, of `kind` or of every kind. Other owners' marks stay.
+- `linear.mark.clear {id}` → `{before, after: null}`, error 2 for an unknown id.
+  `linear.mark.clear {ids: [...]}` → `{removed}`: clears every listed mark that still exists and
+  skips the rest, so a retry is not an error; the board sends it for the marks a card's detail
+  showed. Both `id` and `ids`, or neither, is error 1. Neither form checks the owner.
+- `linear.note.clear {id}` → `{before, after: null}`; error 2 for an unknown id.
+- `linear.note.set {space, issue, body, author, owner?}` → `{before: [...], after}`: replaces that
+  author's note on the card and records `owner`.
+- `linear.show.request {space, issue, reason?, requested_by?, owner?}` → `{before, after}`: asks
+  the person to look at a card; the view moves only when they accept. The request expires
+  `[linear] show_request_ttl_secs` after it was made (see
+  [`configuration.md`](configuration.md)); a caller cannot set its own expiry. When this owner
+  already has a pending request for the issue, that request is refreshed instead of a new one
+  added: it keeps its `id` and `created_at`, takes the new `reason` and `requested_by`, and gets a
+  new `expires_at`, and `before` is the row as it was. Otherwise `before` is `null`.
+- `linear.show.accept {id}` / `linear.show.dismiss {id}` → `{before, after}`: close the request
+  with `outcome` `accepted` or `rejected` and drain it from `show_requests`; `accept` returns the
+  card to show. Error 2 for an unknown id; error 3 for a request that is no longer pending, with a
+  message that names how it closed (an overdue request the sweep has not reached reads as
+  `expired`).
+- `linear.show.withdraw {space, issue, owner}` → `{before, after}`: closes this owner's pending
+  request for the issue with `outcome` `withdrawn`. The view does not move. Error 2 when this
+  owner has no pending request for the issue.
+- `linear.session.get {space, herdr_socket?, herdr_pane_id?, claude_session_id?, cwd?}` →
+  `{space, space_bound, binding, column, marks, pending_requests}`: what the status line and the
+  session side pane show for one agent session. It reads SQLite and the snapshot this session
+  already has cached for the space, never Linear or herdr. `space_bound` is false without
+  `herdr_socket` or when that socket's session has no space binding for `space`, and every other
+  field is then empty. `binding` is `{worktree_path, issue, bound_at}` for the git worktree
+  containing `cwd`, or `null`; `bound_at` is when that binding last changed, so a rebind restarts it. `column` is the label of the column
+  that holds the issue in the cached read, or `null` when nothing is cached. `marks` are the
+  bound issue's marks in the space. `pending_requests` counts the space's pending show-requests.
+  An unknown socket, an unbound space or a `cwd` outside any worktree is an answer, not an error.
 - `linear.activity.record {tool_name, issue?, space?, cwd?, claims?}` →
-  `{activity, outcome: "linked"|"suggested"|"recorded", binding, mark}`: records one Linear MCP
-  write (tool name, validated identifier, claims, time — never the payload); the space is `space`,
+  `{activity, outcome: "linked"|"suggested"|"recorded", binding, mark, cleared_suggestions?}`:
+  records one Linear MCP write (tool name, validated identifier, claims, time — never the payload); the space is `space`,
   else `claims.herdr_workspace_id`. Only a tool named `save_issue` (or ending in `__save_issue`)
   with an issue and a space can link: it binds the worktree containing `cwd` (`binding` is
   `{before, after}`) when the claims carry a socket and a pane, the claimed session has a space
   binding for the space, that worktree is unbound, and no other worktree holds the issue.
   Otherwise it replaces the card's `suggestion` mark (`mark` is `{before, after}`) whose `detail`
   holds `worktree_path`, `cwd` and the claims, so the person or agent can accept it with
-  `linear.bind`. Every other write records activity only. The newest 500 rows are kept per space.
+  `linear.bind`. A `linked` outcome clears suggestions as `linear.bind` does and lists them in
+  `cleared_suggestions`. Every other write records activity only. The newest 500 rows are kept per
+  space.
 - `linear.activity.list {space?, limit?}` → `{activity}`: newest first, default 50, at most 500;
   no `space` lists activity recorded without one.
 - `linear.import {dry_run?}` → `{store_dir, present, dry_run, imported, skipped, ignored}`: copies
@@ -857,12 +924,15 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
 
 - `{"event":"board_changed","reason":"card_moved|card_created|card_updated|card_deleted|card_archived|column_changed|comment_added|run_started|run_ended|run_blocked","board_id"?:N,"card_id"?:N,"column_id"?:N}` — `board_id` scopes the change to a specific board; a same-board move reports the destination `column_id`, while a cross-board transfer emits a source-board event with the source column and a destination-board event with the destination column. Omitted `board_id` means a coarse, board-agnostic refresh.
 - `{"event":"run_ended","card_id":N,"run_id":N,"outcome":"ok|fail|cancelled|lost"}` (also emitted as board_changed; `lost` is legacy — no longer produced, see Card statuses)
-- `{"event":"local_state_changed","space"?:"<space>"}` — one per successful Linear local-state
-  write (see Methods → linear local state). `space` is always a herdr workspace id; an omitted
+- `{"event":"local_state_changed","space"?:"<space>","snapshot"?:true}` — one per space a Linear
+  local-state write changed (see Methods → linear local state). `space` is always a herdr workspace id; an omitted
   `space` means any space: every grouping change (a grouping space is a workspace *label*, which
   any workspace may carry), or a binding change with no space claimed. A `linear.activity.record`
   for a space a reader has read is announced by its debounced refetch instead (see
-  `linear.snapshot`): one event when the refetch lands, however many reports it folded. It is a
+  `linear.snapshot`): one event when the refetch lands, however many reports it folded, with
+  `snapshot: true`. That flag means the daemon's cached read is already fresh, so a reader answers
+  it with one plain `linear.snapshot`, never a forced one; without the flag a reader re-reads
+  `linear.state.get`. The flag is omitted when false, and an older client ignores it. It is a
   new event rather than a `board_changed` reason because a client skips an event line it cannot
   parse, while an unknown reason would make it drop the whole `board_changed` line. Unlike
   `board_changed`, the server does not coalesce these: a burst of other writes is a burst of

@@ -415,9 +415,12 @@ fn a_reported_save_issue_causes_one_refetch_then_one_local_state_changed() {
     let events = board.wait_for_event(Duration::from_secs(5));
 
     assert_eq!(board.count("issues("), 2, "one refetch");
-    assert!(
-        matches!(events.as_slice(), [Event::LocalStateChanged { space: Some(s) }] if s == SPACE),
-        "{events:?}"
+    assert_eq!(
+        events,
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: true,
+        }]
     );
     std::thread::sleep(Duration::from_millis(200));
     assert!(board.events().is_empty(), "a second announcement");
@@ -632,7 +635,7 @@ fn old_snapshot_fixtures_still_parse_against_the_new_dtos() {
         assert!(doc.linear.message.is_none());
         parsed += 1;
     }
-    assert_eq!(parsed, 8);
+    assert_eq!(parsed, 9);
 
     let null_message: LinearSource =
         serde_json::from_value(json!({"status": "ok", "message": null})).unwrap();
@@ -642,4 +645,168 @@ fn old_snapshot_fixtures_still_parse_against_the_new_dtos() {
         unset.get("message").is_none(),
         "an old reader sees no new key"
     );
+}
+
+impl Board {
+    fn forced_snapshot(&self) -> LinearSnapshot {
+        let value = handle_request(
+            &self.d,
+            "linear.snapshot",
+            json!({"workspace_id": SPACE, "origin_socket": SOCKET, "force": true}),
+        )
+        .unwrap();
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn session(&self, cwd: &Path) -> LinearSessionGetResult {
+        let value = handle_request(
+            &self.d,
+            "linear.session.get",
+            json!({
+                "space": SPACE,
+                "herdr_socket": SOCKET,
+                "herdr_pane_id": "wS:p1",
+                "cwd": cwd.to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// A git worktree bound to `issue`.
+    fn bound_worktree(&self, dir: &tempfile::TempDir, issue: &str) -> PathBuf {
+        let wt = std::fs::canonicalize(dir.path()).unwrap().join("wt");
+        std::fs::create_dir_all(wt.join(".git")).unwrap();
+        std::fs::create_dir_all(wt.join("src")).unwrap();
+        handle_request(
+            &self.d,
+            "linear.bind",
+            json!({"cwd": wt.to_str().unwrap(), "issue": issue}),
+        )
+        .unwrap();
+        wt
+    }
+}
+
+#[test]
+fn a_forced_snapshot_skips_the_read_cache_and_a_plain_one_does_not() {
+    let board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
+    board.snapshot();
+    assert_eq!(board.count("issues("), 1);
+
+    board.snapshot();
+    assert_eq!(board.count("issues("), 1, "a plain read inside the window");
+
+    let doc = board.forced_snapshot();
+    assert_eq!(board.count("issues("), 2, "a forced read inside the window");
+    assert_eq!(doc.linear.status, "ok");
+}
+
+#[test]
+fn a_forced_read_that_fails_returns_the_last_good_read_marked_stale() {
+    let down = Arc::new(AtomicBool::new(false));
+    let flag = down.clone();
+    let board = Board::new(move |r, _| {
+        if flag.load(Ordering::SeqCst) {
+            Reply::status(503, json!({"error": "down"}))
+        } else {
+            board_linear(r)
+        }
+    });
+    board.bind(SPACE, None);
+    assert_eq!(board.snapshot().linear.status, "ok");
+
+    down.store(true, Ordering::SeqCst);
+    let doc = board.forced_snapshot();
+
+    assert_eq!(doc.linear.status, "unavailable");
+    assert!(doc.linear.cache_age_seconds.is_some());
+    assert_eq!(doc.issues.len(), 2);
+    assert!(doc.issues.values().all(|issue| issue.stale));
+}
+
+#[test]
+fn a_mark_write_announces_without_the_snapshot_flag() {
+    let mut board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
+    board.snapshot();
+    board.events();
+
+    handle_request(
+        &board.d,
+        "linear.mark.set",
+        json!({"space": SPACE, "issue": "WEB-2"}),
+    )
+    .unwrap();
+
+    assert_eq!(
+        board.events(),
+        vec![Event::LocalStateChanged {
+            space: Some(SPACE.into()),
+            snapshot: false,
+        }]
+    );
+    assert_eq!(board.count("issues("), 1, "a mark write refetched Linear");
+}
+
+#[test]
+fn a_session_read_on_a_cold_cache_calls_nothing_and_has_no_column() {
+    let mut board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
+    let dir = tempfile::tempdir().unwrap();
+    let wt = board.bound_worktree(&dir, "WEB-1");
+    board.events();
+
+    let session = board.session(&wt.join("src"));
+
+    assert!(session.space_bound);
+    assert_eq!(session.binding.as_ref().unwrap().issue, "WEB-1");
+    assert!(session.binding.as_ref().unwrap().bound_at.is_some());
+    assert_eq!(session.column, None);
+    assert!(
+        board.fake.requests().is_empty(),
+        "a session read called Linear"
+    );
+    assert!(board.events().is_empty());
+}
+
+#[test]
+fn a_session_read_on_a_warm_cache_returns_the_cached_column() {
+    let board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
+    let dir = tempfile::tempdir().unwrap();
+    let wt = board.bound_worktree(&dir, "WEB-1");
+    board.snapshot();
+    let calls = board.fake.requests().len();
+
+    let session = board.session(&wt);
+
+    assert_eq!(session.column.as_deref(), Some("Todo"));
+    assert_eq!(
+        board.fake.requests().len(),
+        calls,
+        "a session read called Linear"
+    );
+}
+
+#[test]
+fn a_session_read_after_a_failed_read_has_no_column() {
+    let down = Arc::new(AtomicBool::new(false));
+    let flag = down.clone();
+    let board = Board::new(move |r, _| {
+        if flag.load(Ordering::SeqCst) {
+            Reply::status(503, json!({"error": "down"}))
+        } else {
+            board_linear(r)
+        }
+    });
+    board.bind(SPACE, None);
+    let dir = tempfile::tempdir().unwrap();
+    let wt = board.bound_worktree(&dir, "WEB-1");
+    board.snapshot();
+    down.store(true, Ordering::SeqCst);
+    board.forced_snapshot();
+
+    assert_eq!(board.session(&wt).column, None);
 }

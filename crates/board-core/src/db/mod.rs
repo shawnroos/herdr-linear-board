@@ -13,15 +13,16 @@ mod rows;
 mod runs;
 
 pub use linear_state::{
-    is_issue_identifier, is_scope_key, Activity, ActivityClaims, BoardPane, BoardPanePlacement,
-    GroupingConfig, GroupingMapping, Mark, MarkKind, NewActivity, NewBoardPane, NewMark, Note,
-    ResolvedGrouping, SessionScope, ShowRequest, SpaceBinding, SpaceGrouping, WorktreeBinding,
-    WorktreeBindingState, GROUPING_FIELD_KINDS, GROUPING_FILTER_KEYS, GROUPING_LEVELS,
-    LINEAR_ACTIVITY_KEEP_PER_SPACE, LINEAR_STATE_TYPES,
+    is_issue_identifier, is_scope_key, is_space_id, Activity, ActivityClaims, BoardPane,
+    BoardPanePlacement, GroupingConfig, GroupingMapping, LinearOwner, Mark, MarkKind, NewActivity,
+    NewBoardPane, NewMark, NewShowRequest, Note, ResolvedGrouping, SessionScope, ShowOutcome,
+    ShowRequest, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
+    GROUPING_FIELD_KINDS, GROUPING_FILTER_KEYS, GROUPING_LEVELS, LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    LINEAR_STATE_TYPES, RECENT_RESOLVED_SHOW_REQUESTS,
 };
 pub use linear_writes::{
-    claimed_space, clean_claims, parse_json_refusing_duplicate_keys, resolve_worktree,
-    LocalStateError, LocalStateRejection,
+    claimed_space, clean_claims, clean_owner, parse_json_refusing_duplicate_keys, resolve_worktree,
+    LocalStateError, LocalStateRejection, SHOW_REQUEST_TTL_DEFAULT_SECS,
 };
 
 use std::path::Path;

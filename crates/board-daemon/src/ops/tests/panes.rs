@@ -582,6 +582,133 @@ fn board_pane_close_clears_a_dead_recorded_pane_without_a_close() {
     assert!(d.store.lock().list_board_panes(&socket).unwrap().is_empty());
 }
 
+fn open_session(d: &Arc<Daemon>, herdr: &FakeHerdr, origin_pane: &str) -> Result<Value> {
+    handle_request(
+        d,
+        "board.pane.open",
+        json!({
+            "context": {"session": true},
+            "placement": "split",
+            "origin_socket": herdr.socket,
+            "origin_pane": origin_pane,
+            "session_cwd": "/work/tree/src",
+            "claude_session_id": "claude-1",
+        }),
+    )
+}
+
+#[test]
+fn a_session_pane_opens_the_session_entrypoint_with_the_agents_identity_in_its_env() {
+    let (herdr, _) = board_pane_herdr(&["wA:p1"]);
+    let d = test_daemon(Config::default());
+
+    let v = open_session(&d, &herdr, "wA:p1").unwrap();
+
+    assert_eq!(v["pane_id"], "wA:p10");
+    let sent = herdr.requests_for("plugin.pane.open");
+    assert_eq!(sent.len(), 1);
+    let params = &sent[0]["params"];
+    assert_eq!(params["entrypoint"], "session");
+    assert_eq!(params["placement"], "split");
+    assert_eq!(params["focus"], json!(false));
+    assert_eq!(params["target_pane_id"], "wA:p1");
+    // The socket goes as the agent's herdr exported it: the daemon keys its
+    // snapshot cache and the session lookup on that raw string.
+    assert_eq!(
+        params["env"],
+        json!({
+            "BOARD_SOCKET": "/tmp/board-test.sock",
+            "BOARD_DB": "/tmp/board-test.db",
+            "BOARD_SESSION_SOCKET": herdr.socket.to_string_lossy(),
+            "BOARD_SESSION_PANE": "wA:p1",
+            "BOARD_SESSION_WORKSPACE": "wA",
+            "BOARD_SESSION_CWD": "/work/tree/src",
+            "BOARD_SESSION_CLAUDE": "claude-1",
+        })
+    );
+    let row = d
+        .store
+        .lock()
+        .board_pane_for_context(&canonical(&herdr), "session;pane=wA:p1")
+        .unwrap()
+        .expect("recorded pane");
+    assert_eq!(row.pane_id, "wA:p10");
+}
+
+#[test]
+fn each_agent_gets_its_own_session_pane_and_closes_only_its_own() {
+    let (herdr, _) = board_pane_herdr(&["wA:p1", "wA:p2"]);
+    let d = test_daemon(Config::default());
+
+    let first = open_session(&d, &herdr, "wA:p1").unwrap();
+    let second = open_session(&d, &herdr, "wA:p2").unwrap();
+    assert_ne!(first["pane_id"], second["pane_id"]);
+    assert_eq!(second["reused"], json!(false));
+
+    let err = handle_request(
+        &d,
+        "board.pane.close",
+        json!({"context": {"session": true}, "origin_socket": herdr.socket}),
+    )
+    .unwrap_err();
+    assert_eq!(err.code(), 1, "{err}");
+
+    let v = handle_request(
+        &d,
+        "board.pane.close",
+        json!({"context": {"session": true}, "origin_socket": herdr.socket,
+               "origin_pane": "wA:p2"}),
+    )
+    .unwrap();
+    assert_eq!(v["pane_id"], second["pane_id"]);
+    assert_eq!(
+        d.store
+            .lock()
+            .list_board_panes(&canonical(&herdr))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_session_context_refuses_a_target_or_a_malformed_identity_before_any_herdr_call() {
+    let (herdr, _) = board_pane_herdr(&["wA:p1"]);
+    let d = test_daemon(Config::default());
+    for (context, cwd, claude) in [
+        (
+            json!({"session": true, "issue": "ENG-123"}),
+            json!("/w"),
+            json!("c"),
+        ),
+        (json!({"session": true, "card": 7}), json!("/w"), json!("c")),
+        (json!({"session": true}), json!("relative/dir"), json!("c")),
+        (
+            json!({"session": true}),
+            json!("/w\nBOARD_DB=/x"),
+            json!("c"),
+        ),
+        (json!({"session": true}), json!("/w"), json!("c d\u{1b}")),
+    ] {
+        let err = handle_request(
+            &d,
+            "board.pane.open",
+            json!({
+                "context": context,
+                "placement": "split",
+                "origin_socket": herdr.socket,
+                "origin_pane": "wA:p1",
+                "session_cwd": cwd,
+                "claude_session_id": claude,
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), 1, "{context} {cwd} {claude}");
+        assert!(err.to_string().contains("session"), "{err}");
+    }
+    assert!(herdr.methods().is_empty(), "herdr was contacted");
+}
+
 #[test]
 fn board_notify_sends_one_cleaned_notification() {
     let (herdr, _) = board_pane_herdr(&[]);

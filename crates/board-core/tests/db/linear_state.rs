@@ -1,8 +1,9 @@
 use super::mem;
 use board_core::db::{
-    is_issue_identifier, ActivityClaims, BoardPanePlacement, GroupingConfig, GroupingMapping,
-    MarkKind, NewActivity, NewBoardPane, NewMark, SessionScope, SpaceBinding, SpaceGrouping,
-    WorktreeBinding, WorktreeBindingState, LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    is_issue_identifier, is_space_id, ActivityClaims, BoardPanePlacement, GroupingConfig,
+    GroupingMapping, LinearOwner, MarkKind, NewActivity, NewBoardPane, NewMark, NewShowRequest,
+    SessionScope, ShowOutcome, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
+    LINEAR_ACTIVITY_KEEP_PER_SPACE,
 };
 use board_core::Error;
 use serde_json::{json, Value};
@@ -258,6 +259,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
             text: Some("link this session?"),
             detail: Some(json!({"pane": "p-3"})),
             created_by: Some("agent"),
+            owner: &LinearOwner::default(),
         })
         .unwrap();
     db.add_mark(&NewMark {
@@ -267,6 +269,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
         text: None,
         detail: None,
         created_by: None,
+        owner: &LinearOwner::default(),
     })
     .unwrap();
     let marks = db.list_marks("ws-1").unwrap();
@@ -285,9 +288,16 @@ fn notes_round_trip_with_their_card_and_space_keys() {
     let db = mem();
     let uuid = "0b9f5a52-1c3e-4a7b-9d0e-2f6c8a1b3d4e";
     let note = db
-        .add_note("ws-1", uuid, "remember the flag", "user")
+        .add_note(
+            "ws-1",
+            uuid,
+            "remember the flag",
+            "user",
+            &LinearOwner::default(),
+        )
         .unwrap();
-    db.add_note("ws-1", "WEB-9", "other", "user").unwrap();
+    db.add_note("ws-1", "WEB-9", "other", "user", &LinearOwner::default())
+        .unwrap();
     assert_eq!(note.space, "ws-1");
     assert_eq!(note.issue, uuid);
     assert_eq!(
@@ -300,22 +310,37 @@ fn notes_round_trip_with_their_card_and_space_keys() {
 }
 
 #[test]
-fn show_requests_round_trip_and_drain_on_acknowledge() {
+fn show_requests_round_trip_and_drain_on_close() {
     let db = mem();
+    let now = 1_790_000_000;
     let request = db
-        .add_show_request("ws-1", "WEB-7", Some("review ready"), Some("agent"))
+        .add_show_request(&NewShowRequest {
+            space: "ws-1",
+            issue: "WEB-7",
+            reason: Some("review ready"),
+            requested_by: Some("agent"),
+            owner: &LinearOwner::default(),
+            expires_at: now + 60,
+        })
         .unwrap();
     assert_eq!(request.space, "ws-1");
     assert_eq!(request.issue, "WEB-7");
     assert_eq!(request.acknowledged_at, None);
     assert_eq!(
-        db.pending_show_requests("ws-1").unwrap(),
+        db.pending_show_requests("ws-1", now).unwrap(),
         vec![request.clone()]
     );
-    assert!(db.pending_show_requests("ws-2").unwrap().is_empty());
-    assert!(db.acknowledge_show_request(request.id).unwrap());
-    assert!(!db.acknowledge_show_request(request.id).unwrap());
-    assert!(db.pending_show_requests("ws-1").unwrap().is_empty());
+    assert!(db.pending_show_requests("ws-2", now).unwrap().is_empty());
+    assert!(db
+        .close_show_request(request.id, ShowOutcome::Accepted)
+        .unwrap());
+    assert!(!db
+        .close_show_request(request.id, ShowOutcome::Rejected)
+        .unwrap());
+    let closed = db.show_request(request.id).unwrap().unwrap();
+    assert_eq!(closed.outcome, Some(ShowOutcome::Accepted));
+    assert!(closed.acknowledged_at.is_some());
+    assert!(db.pending_show_requests("ws-1", now).unwrap().is_empty());
 }
 
 #[test]
@@ -335,7 +360,7 @@ fn issue_keys_are_refused_unless_linear_shaped() {
         assert!(!is_issue_identifier(bad), "{bad:?}");
         assert!(
             matches!(
-                db.add_note("ws", bad, "x", "user"),
+                db.add_note("ws", bad, "x", "user", &LinearOwner::default()),
                 Err(Error::BadRequest(_))
             ),
             "{bad:?}"
@@ -343,6 +368,16 @@ fn issue_keys_are_refused_unless_linear_shaped() {
     }
     for good in ["WEB-1", "A1-99", "0b9f5a52-1c3e-4a7b-9d0e-2f6c8a1b3d4e"] {
         assert!(is_issue_identifier(good), "{good}");
+    }
+}
+
+#[test]
+fn space_id_shape() {
+    for good in ["w", "ws_1", "a-b.c:d", &"x".repeat(64)] {
+        assert!(is_space_id(good), "{good}");
+    }
+    for bad in ["", &"x".repeat(65), "ws 1", "ws/1", "wé"] {
+        assert!(!is_space_id(bad), "{bad:?}");
     }
 }
 

@@ -10,6 +10,10 @@ use serde_json::{json, Value};
 
 use crate::state::Daemon;
 
+pub(crate) fn now_secs(d: &Arc<Daemon>) -> i64 {
+    d.wall_now_ms() / 1000
+}
+
 mod bind_handoff;
 mod boards;
 mod cards;
@@ -136,11 +140,14 @@ routes!(d, params, {
     "linear.grouping.preview" => linear_state::grouping_preview(d, from(params)?),
     "linear.mark.set" => linear_state::mark_set(d, from(params)?),
     "linear.mark.clear" => linear_state::mark_clear(d, from(params)?),
+    "linear.mark.unmark" => linear_state::mark_unmark(d, from(params)?),
     "linear.note.set" => linear_state::note_set(d, from(params)?),
     "linear.note.clear" => linear_state::note_clear(d, from(params)?),
     "linear.show.request" => linear_state::show_request(d, from(params)?),
-    "linear.show.accept" => linear_state::show_answer(d, from(params)?),
-    "linear.show.dismiss" => linear_state::show_answer(d, from(params)?),
+    "linear.show.accept" => linear_state::show_accept(d, from(params)?),
+    "linear.show.dismiss" => linear_state::show_dismiss(d, from(params)?),
+    "linear.show.withdraw" => linear_state::show_withdraw(d, from(params)?),
+    "linear.session.get" => linear_state::session_get(d, from(params)?),
     "linear.activity.record" => linear_state::activity_record(d, from(params)?),
     "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
     "linear.import" => linear_import(d, from_or_default(params)?),
@@ -157,7 +164,10 @@ pub(crate) fn linear_import_at(
 ) -> Result<Value> {
     let outcome = crate::import::import_work_store(&d.store.lock(), store_dir, dry_run)?;
     for space in outcome.changed_spaces {
-        d.emit(Event::LocalStateChanged { space });
+        d.emit(Event::LocalStateChanged {
+            space,
+            snapshot: false,
+        });
     }
     Ok(json!(outcome.result))
 }

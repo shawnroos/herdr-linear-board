@@ -37,3 +37,99 @@ impl OriginContext {
         }
     }
 }
+
+/// What an agent-opened board was asked to show: the daemon's
+/// `BOARD_SHOW_SPACE`, `BOARD_SHOW_ISSUE` and `BOARD_SHOW_CARD`. Each value is
+/// held to the shape `board.pane.open` checked before setting it, so a value
+/// that fails is dropped rather than trusted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShowContext {
+    pub space: Option<String>,
+    pub issue: Option<String>,
+    pub card: Option<i64>,
+}
+
+/// One place a board can land, in the order [`ShowContext::targets`] tries them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Landing {
+    Card(i64),
+    Issue(String),
+}
+
+impl ShowContext {
+    pub fn from_environment() -> ShowContext {
+        let var = |name: &str| std::env::var(name).ok();
+        ShowContext::parse(
+            var("BOARD_SHOW_SPACE").as_deref(),
+            var("BOARD_SHOW_ISSUE").as_deref(),
+            var("BOARD_SHOW_CARD").as_deref(),
+        )
+    }
+
+    pub fn parse(space: Option<&str>, issue: Option<&str>, card: Option<&str>) -> ShowContext {
+        ShowContext {
+            space: space
+                .filter(|s| board_core::db::is_space_id(s))
+                .map(str::to_string),
+            issue: issue
+                .filter(|i| board_core::db::is_issue_identifier(i))
+                .map(str::to_string),
+            card: card.and_then(|c| c.parse::<i64>().ok()).filter(|&c| c > 0),
+        }
+    }
+
+    /// The space this board shows: a valid `BOARD_SHOW_SPACE`, else herdr's.
+    pub fn workspace(&self, herdr_workspace_id: Option<&str>) -> Option<String> {
+        self.space
+            .as_deref()
+            .or(herdr_workspace_id)
+            .map(str::to_string)
+    }
+
+    /// A card before an issue.
+    pub fn targets(&self) -> Vec<Landing> {
+        self.card
+            .map(Landing::Card)
+            .into_iter()
+            .chain(self.issue.clone().map(Landing::Issue))
+            .collect()
+    }
+}
+
+/// The agent a session pane is beside, as the daemon passed it in
+/// `BOARD_SESSION_*`. The pane's own `HERDR_PANE_ID` names the split, not the
+/// agent, so none of this is read from herdr's variables except the space.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub space: String,
+    pub herdr_socket: Option<String>,
+    pub herdr_pane_id: Option<String>,
+    pub claude_session_id: Option<String>,
+    pub cwd: Option<String>,
+}
+
+impl SessionIdentity {
+    /// `None` without a space to read; the split shares its agent's space, so
+    /// herdr's own workspace id stands in for a missing one.
+    pub fn from_environment() -> Option<SessionIdentity> {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let space = var("BOARD_SESSION_WORKSPACE").or_else(|| var("HERDR_WORKSPACE_ID"))?;
+        Some(SessionIdentity {
+            space,
+            herdr_socket: var("BOARD_SESSION_SOCKET"),
+            herdr_pane_id: var("BOARD_SESSION_PANE"),
+            claude_session_id: var("BOARD_SESSION_CLAUDE"),
+            cwd: var("BOARD_SESSION_CWD"),
+        })
+    }
+
+    pub fn params(&self) -> board_core::protocol::LinearSessionGetParams {
+        board_core::protocol::LinearSessionGetParams {
+            space: self.space.clone(),
+            herdr_socket: self.herdr_socket.clone(),
+            herdr_pane_id: self.herdr_pane_id.clone(),
+            claude_session_id: self.claude_session_id.clone(),
+            cwd: self.cwd.clone(),
+        }
+    }
+}
