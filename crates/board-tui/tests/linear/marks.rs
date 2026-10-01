@@ -250,6 +250,17 @@ fn the_board_reads_local_state_after_its_first_snapshot_and_after_a_reconnect() 
 }
 
 #[test]
+fn a_suggestion_announced_only_by_a_refetch_renders() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let (mut d, _) = board(&shared);
+    assert!(!render_at(&mut d, 140, 40).contains('◇'));
+    shared.suggest("WEB-101", None);
+    d.on_local_state_changed(local(&[(Some("wA"), true)]));
+    let frame = render_at(&mut d, 140, 40);
+    assert!(frame.contains("│◇ WEB-101"), "{frame}");
+}
+
+#[test]
 fn ae1_a_on_a_selected_suggestion_binds_it_and_the_pinned_request_stays() {
     let shared = SharedFake::quiet(tabs_lanes());
     let worktree = Worktree::new("ae1");

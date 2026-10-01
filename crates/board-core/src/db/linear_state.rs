@@ -104,6 +104,13 @@ fn require_absolute_path(value: &str, what: &str) -> Result<()> {
     }
 }
 
+pub fn is_space_id(space: &str) -> bool {
+    (1..=64).contains(&space.len())
+        && space
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
+}
+
 /// A Linear issue key (`WEB-123`) or an issue UUID in its hyphenated form.
 pub fn is_issue_identifier(value: &str) -> bool {
     if value.len() == 36 {

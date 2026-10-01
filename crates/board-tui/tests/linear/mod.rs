@@ -804,7 +804,7 @@ fn a_local_state_change_for_this_space_reads_state_once_and_no_snapshot() {
 }
 
 #[test]
-fn a_local_state_change_with_the_snapshot_flag_reads_one_cached_snapshot_and_moves_the_card() {
+fn a_snapshot_flag_reads_one_cached_snapshot_and_the_state_and_moves_the_card() {
     let shared = SharedFake::new(bound_with_view());
     let (client, log) = RecordingClient::new(shared.clone());
     let (mut d, _, _) = linear_driver(client, linear_start());
@@ -815,8 +815,8 @@ fn a_local_state_change_with_the_snapshot_flag_reads_one_cached_snapshot_and_mov
     assert_eq!(count(&log, "linear.snapshot"), 1);
     assert_eq!(
         count(&log, "linear.state.get"),
-        0,
-        "the snapshot replaces the state read"
+        1,
+        "a refetch can carry a new mark the snapshot does not"
     );
     let sent = log.lock().unwrap();
     let (_, params) = sent.iter().find(|(m, _)| m == "linear.snapshot").unwrap();

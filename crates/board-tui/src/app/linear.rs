@@ -1014,9 +1014,14 @@ fn local_state_changed(app: &mut App, signals: &LocalStateSignals) -> Vec<Effect
     };
     match signals.for_space(&state.workspace_id) {
         None => vec![],
-        // The daemon already refetched Linear; its cached snapshot is the
-        // news, so this is a plain read and never a forced one.
-        Some(true) => request_or_queue(app),
+        // The daemon already refetched Linear, so the snapshot read is never
+        // forced. The state is read too: the daemon sends no separate signal
+        // for a mark written alongside a refetch.
+        Some(true) => {
+            let mut effects = request_or_queue(app);
+            effects.extend(request_local_state(app));
+            effects
+        }
         Some(false) => request_local_state(app),
     }
 }

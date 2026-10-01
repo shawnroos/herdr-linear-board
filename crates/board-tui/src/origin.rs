@@ -68,7 +68,9 @@ impl ShowContext {
 
     pub fn parse(space: Option<&str>, issue: Option<&str>, card: Option<&str>) -> ShowContext {
         ShowContext {
-            space: space.filter(|s| is_space_id(s)).map(str::to_string),
+            space: space
+                .filter(|s| board_core::db::is_space_id(s))
+                .map(str::to_string),
             issue: issue
                 .filter(|i| board_core::db::is_issue_identifier(i))
                 .map(str::to_string),
@@ -92,15 +94,6 @@ impl ShowContext {
             .chain(self.issue.clone().map(Landing::Issue))
             .collect()
     }
-}
-
-/// `board.pane.open`'s rule for a herdr workspace id (`checked_context` in
-/// the daemon's `ops/panes.rs`); the two must agree.
-fn is_space_id(space: &str) -> bool {
-    (1..=64).contains(&space.len())
-        && space
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
 /// The agent a session pane is beside, as the daemon passed it in

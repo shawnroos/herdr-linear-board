@@ -87,7 +87,6 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
 const BOARD_PLUGIN_ID: &str = "herdr-board";
 const BOARD_ENTRYPOINT: &str = "board";
 const SESSION_ENTRYPOINT: &str = "session";
-const MAX_SPACE_ID: usize = 64;
 const MAX_CWD: usize = 4096;
 const MAX_CLAUDE_SESSION_ID: usize = 128;
 
@@ -104,11 +103,7 @@ fn checked_context(context: &BoardPaneContext) -> Result<(String, ShowEnv)> {
     let mut parts = Vec::new();
     let mut env = Vec::new();
     if let Some(space) = &context.space {
-        let ok = (1..=MAX_SPACE_ID).contains(&space.len())
-            && space
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'));
-        if !ok {
+        if !board_core::db::is_space_id(space) {
             return Err(Error::BadRequest(format!(
                 "board context space {space:?} is not a herdr workspace id"
             )));

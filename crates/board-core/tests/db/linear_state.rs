@@ -1,8 +1,8 @@
 use super::mem;
 use board_core::db::{
-    is_issue_identifier, ActivityClaims, BoardPanePlacement, GroupingConfig, GroupingMapping,
-    LinearOwner, MarkKind, NewActivity, NewBoardPane, NewMark, NewShowRequest, SessionScope,
-    ShowOutcome, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
+    is_issue_identifier, is_space_id, ActivityClaims, BoardPanePlacement, GroupingConfig,
+    GroupingMapping, LinearOwner, MarkKind, NewActivity, NewBoardPane, NewMark, NewShowRequest,
+    SessionScope, ShowOutcome, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
     LINEAR_ACTIVITY_KEEP_PER_SPACE,
 };
 use board_core::Error;
@@ -368,6 +368,16 @@ fn issue_keys_are_refused_unless_linear_shaped() {
     }
     for good in ["WEB-1", "A1-99", "0b9f5a52-1c3e-4a7b-9d0e-2f6c8a1b3d4e"] {
         assert!(is_issue_identifier(good), "{good}");
+    }
+}
+
+#[test]
+fn space_id_shape() {
+    for good in ["w", "ws_1", "a-b.c:d", &"x".repeat(64)] {
+        assert!(is_space_id(good), "{good}");
+    }
+    for bad in ["", &"x".repeat(65), "ws 1", "ws/1", "wé"] {
+        assert!(!is_space_id(bad), "{bad:?}");
     }
 }
 
