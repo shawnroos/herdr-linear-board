@@ -85,7 +85,7 @@ import json,sys
 state=json.load(open(sys.argv[1]))
 raise SystemExit(0 if any(b["worktree_path"]==sys.argv[2] and b["issue"]=="TEAM-123" for b in state["worktree_bindings"]) else 1)
 PY
-brpc linear.activity.list "{\"space\":\"$WS_ID\"}" >"$E2E_TMP/activity.json"
+brpc linear.activity.list "{\"space\":\"$WS_ID\",\"herdr_socket\":\"$HERDR_SOCKET_PATH\"}" >"$E2E_TMP/activity.json"
 python3 - "$E2E_TMP/activity.json" "$AGENT_PANE" "$HERDR_SOCKET_PATH" <<'PY' || fail "the activity row does not name the save and the agent pane"
 import json,sys
 rows=json.load(open(sys.argv[1]))["activity"]; pane,socket=sys.argv[2:]

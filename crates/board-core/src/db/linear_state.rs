@@ -1523,13 +1523,18 @@ impl Db {
     }
 
     /// Newest first. `space` `None` lists unattributed activity.
-    pub fn list_activity(&self, space: Option<&str>, limit: usize) -> Result<Vec<Activity>> {
+    pub fn list_activity(
+        &self,
+        session: &str,
+        space: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Activity>> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut statement = self.conn.prepare(&format!(
-            "{ACTIVITY_SELECT} WHERE space IS ?1 ORDER BY id DESC LIMIT ?2"
+            "{ACTIVITY_SELECT} WHERE herdr_session = ?1 AND space IS ?2 ORDER BY id DESC LIMIT ?3"
         ))?;
         let rows = statement
-            .query_map(params![space, limit], row_to_activity)?
+            .query_map(params![session, space, limit], row_to_activity)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }

@@ -182,7 +182,10 @@ fn activity_in(client: &mut UnixClient) -> Vec<board_core::db::Activity> {
         .into_iter()
         .flat_map(|space| {
             client
-                .linear_activity_list(&LinearActivityListParams { space, limit: None })
+                .linear_activity_list(&LinearActivityListParams {
+                    space,
+                    ..LinearActivityListParams::default()
+                })
                 .unwrap()
                 .activity
         })

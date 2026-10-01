@@ -1788,6 +1788,10 @@ pub struct LinearActivityListParams {
     pub space: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+    /// As in [`LinearStateGetParams`]: a read without one sees the
+    /// `default` session's activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

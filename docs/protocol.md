@@ -782,8 +782,9 @@ the key the board shows local state by; `mark.unmark`, `show.withdraw` and
   `linear.bind`. A `linked` outcome clears suggestions as `linear.bind` does and lists them in
   `cleared_suggestions`. Every other write records activity only. The newest 500 rows are kept per
   space.
-- `linear.activity.list {space?, limit?}` → `{activity}`: newest first, default 50, at most 500;
-  no `space` lists activity recorded without one.
+- `linear.activity.list {space?, limit?, herdr_socket?}` → `{activity}`: the activity of
+  `herdr_socket`'s session (`default` without one) for the space, newest first, default 50, at
+  most 500; no `space` lists activity recorded without one. `board mcp` sends the caller's socket.
 - `linear.import {dry_run?}` → `{store_dir, present, dry_run, imported, skipped, ignored}`: copies
   the work plugin's store into local state (`board import work-store [--dry-run]` sends it). boardd
   reads the store from its own environment — `HERDR_LINEAR_STORE_DIR`, else `$HOME/.claude/work`;

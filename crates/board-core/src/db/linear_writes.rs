@@ -945,7 +945,11 @@ impl Db {
             .unwrap_or(ACTIVITY_LIST_DEFAULT)
             .min(LINEAR_ACTIVITY_KEEP_PER_SPACE);
         Ok(LinearActivityListResult {
-            activity: self.list_activity(p.space.as_deref(), limit)?,
+            activity: self.list_activity(
+                &herdr_session(p.herdr_socket.as_deref()),
+                p.space.as_deref(),
+                limit,
+            )?,
         })
     }
 }

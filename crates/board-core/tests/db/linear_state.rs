@@ -442,7 +442,7 @@ fn activity_keeps_only_the_newest_rows_per_space() {
         .unwrap();
     }
     let rows = db
-        .list_activity(Some("ws-1"), LINEAR_ACTIVITY_KEEP_PER_SPACE + 10)
+        .list_activity("default", Some("ws-1"), LINEAR_ACTIVITY_KEEP_PER_SPACE + 10)
         .unwrap();
     assert_eq!(rows.len(), LINEAR_ACTIVITY_KEEP_PER_SPACE);
     assert!(
@@ -454,10 +454,43 @@ fn activity_keeps_only_the_newest_rows_per_space() {
         Some(format!("WEB-{}", LINEAR_ACTIVITY_KEEP_PER_SPACE + 1).as_str())
     );
     assert_eq!(
-        db.list_activity(Some("other"), 10).unwrap().len(),
+        db.list_activity("default", Some("other"), 10)
+            .unwrap()
+            .len(),
         1,
         "another space is untouched"
     );
+}
+
+#[test]
+fn activity_is_listed_per_herdr_session_for_a_shared_space() {
+    let db = mem();
+    let claims = ActivityClaims::default();
+    let record = |session: &str, issue: &str| {
+        db.record_activity(&NewActivity {
+            session,
+            space: Some("ws-1"),
+            tool_name: "mcp__linear__save_comment",
+            issue: Some(issue),
+            claims: &claims,
+        })
+        .unwrap()
+    };
+    let alpha = record("alpha", "WEB-1");
+    let beta = record("beta", "WEB-2");
+
+    assert_eq!(
+        db.list_activity("alpha", Some("ws-1"), 10).unwrap(),
+        vec![alpha]
+    );
+    assert_eq!(
+        db.list_activity("beta", Some("ws-1"), 10).unwrap(),
+        vec![beta]
+    );
+    assert!(db
+        .list_activity("default", Some("ws-1"), 10)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -489,7 +522,10 @@ fn activity_refuses_a_bad_identifier_or_tool_name() {
             claims: &claims,
         })
         .unwrap();
-    assert_eq!(db.list_activity(None, 5).unwrap(), vec![unattributed]);
+    assert_eq!(
+        db.list_activity("default", None, 5).unwrap(),
+        vec![unattributed]
+    );
 }
 
 #[test]

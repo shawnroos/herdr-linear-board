@@ -530,10 +530,50 @@ fn a_save_issue_report_links_a_known_unbound_session() {
     assert_eq!(result["activity"]["claims"]["herdr_pane_id"], "w1:p1");
     assert_eq!(fx.events(), vec![changed(Some(SPACE))]);
 
-    let listed = fx.ok("linear.activity.list", json!({"space": SPACE}));
+    let listed = fx.ok(
+        "linear.activity.list",
+        json!({"space": SPACE, "herdr_socket": SESSION_SOCKET}),
+    );
     assert_eq!(
         listed["activity"][0]["tool_name"],
         "mcp__linear__save_issue"
+    );
+}
+
+#[test]
+fn activity_is_listed_per_herdr_session_for_a_shared_workspace_id() {
+    let fx = Fixture::new();
+    let beta = "/tmp/hb-ls/sessions/beta/herdr.sock";
+    for (socket, issue) in [(SESSION_SOCKET, "WEB-1"), (beta, "WEB-2")] {
+        fx.ok(
+            "linear.activity.record",
+            json!({
+                "tool_name": "mcp__linear__save_comment",
+                "issue": issue,
+                "claims": {"herdr_socket": socket, "herdr_pane_id": "w1:p1", "herdr_workspace_id": SPACE},
+            }),
+        );
+    }
+    let issues = |params: Value| -> Vec<String> {
+        fx.ok("linear.activity.list", params)["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["issue"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    assert_eq!(
+        issues(json!({"space": SPACE, "herdr_socket": SESSION_SOCKET})),
+        vec!["WEB-1"]
+    );
+    assert_eq!(
+        issues(json!({"space": SPACE, "herdr_socket": beta})),
+        vec!["WEB-2"]
+    );
+    assert!(
+        issues(json!({"space": SPACE})).is_empty(),
+        "a read without a socket sees only the default session"
     );
 }
 

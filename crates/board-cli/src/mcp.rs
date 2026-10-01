@@ -318,9 +318,11 @@ impl BoardMcp {
         annotations(read_only_hint = true)
     )]
     async fn panes_for_issue(&self, Parameters(args): Parameters<IssueArgs>) -> CallToolResult {
+        let caller = Caller::from_environment();
         let params = LinearActivityListParams {
-            space: Some(Caller::from_environment().space(args.space)),
+            space: Some(caller.space(args.space)),
             limit: Some(ACTIVITY_LIMIT),
+            herdr_socket: caller.owner.herdr_socket,
         };
         let issue = args.issue;
         forward(move |c| {

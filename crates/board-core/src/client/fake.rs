@@ -1262,7 +1262,7 @@ mod tests {
         let listed = client
             .linear_activity_list(&LinearActivityListParams {
                 space: Some("space-1".into()),
-                limit: None,
+                ..LinearActivityListParams::default()
             })
             .unwrap();
         assert_eq!(listed.activity.len(), 1);
