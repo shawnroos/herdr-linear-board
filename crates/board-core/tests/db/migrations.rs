@@ -798,6 +798,52 @@ fn failed_pre_owner_rebuild_rolls_back_whole() {
     }
 }
 
+const SESSION_TABLES: [&str; 4] = [
+    "linear_marks",
+    "linear_notes",
+    "linear_show_requests",
+    "linear_activity",
+];
+
+#[test]
+fn a_v16_database_without_herdr_session_gains_it_and_old_rows_read_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let path = dir.path().join("sessionless.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&path).unwrap());
+    {
+        let conn = Connection::open(&path).unwrap();
+        for table in SESSION_TABLES {
+            conn.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN herdr_session"))
+                .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'done');
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'n', 'agent');
+             INSERT INTO linear_show_requests (space, issue_identifier) VALUES ('ws-1', 'WEB-1');
+             INSERT INTO linear_activity (space, tool_name) VALUES ('ws-1', 'save_issue');",
+        )
+        .unwrap();
+    }
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    let conn = Connection::open(&path).unwrap();
+    for table in SESSION_TABLES {
+        assert_eq!(
+            selected(&conn, table, "herdr_session"),
+            vec![vec![Value::Text("default".into())]],
+            "{table}"
+        );
+    }
+    assert_eq!(
+        schema_shape(&Connection::open(&fresh).unwrap()),
+        schema_shape(&conn)
+    );
+}
+
 #[test]
 fn migration_seeds_board_and_todo_column() {
     let db = mem();

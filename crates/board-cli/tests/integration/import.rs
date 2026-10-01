@@ -30,7 +30,10 @@ fn store(dir: &Path, project: &str) {
 
 fn space_projects(td: &TestDaemon) -> Vec<(String, String)> {
     td.client()
-        .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+        .linear_state_get(&LinearStateGetParams {
+            space: "wA".into(),
+            herdr_socket: None,
+        })
         .unwrap()
         .space_bindings
         .into_iter()

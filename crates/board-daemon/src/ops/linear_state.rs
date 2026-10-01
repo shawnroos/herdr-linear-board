@@ -7,7 +7,10 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use board_core::db::{claimed_space, clean_claims, ActivityClaims, LocalStateError, Mark};
+use board_core::db::{
+    claimed_space, clean_claims, clean_owner, herdr_session, ActivityClaims, LinearOwner,
+    LocalStateError, Mark,
+};
 
 use super::errors::local_state_error;
 
@@ -42,9 +45,21 @@ fn announce_cleared(d: &Arc<Daemon>, primary: Option<&str>, cleared: &[Mark]) {
     }
 }
 
-/// A card listed in a reader's cached read of the space is known (KTD11).
-fn snapshot_lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> bool {
-    super::linear::native::lists_issue(d, space, issue)
+/// A card listed in the caller's session's cached read of the space is known
+/// (KTD11). A UUID it lists is rewritten to the issue's identifier, the key
+/// the board renders local state by; one it does not list is left as given.
+fn resolve_known(d: &Arc<Daemon>, socket: Option<&str>, space: &str, issue: &mut String) -> bool {
+    match super::linear::native::resolve_issue(d, socket, space, issue) {
+        Some(identifier) => {
+            *issue = identifier;
+            true
+        }
+        None => false,
+    }
+}
+
+fn owner_socket(owner: &LinearOwner) -> Option<String> {
+    clean_owner(owner).herdr_socket
 }
 
 /// A reported Linear write makes the space's cached read out of date.
@@ -52,13 +67,17 @@ fn activity_recorded(d: &Arc<Daemon>, claims: &ActivityClaims, space: Option<&st
     let Some(space) = space else {
         return;
     };
-    let session = board_core::paths::session_name_from_socket(claims.herdr_socket.as_deref())
-        .unwrap_or_else(|| "default".into());
+    let session = herdr_session(claims.herdr_socket.as_deref());
     super::linear::native::schedule_refetch(d, session, space.to_string());
 }
 
 pub(super) fn state_get(d: &Arc<Daemon>, p: LinearStateGetParams) -> Result<Value> {
-    Ok(json!(d.store.lock().linear_state(&p.space, now_secs(d))?))
+    let session = herdr_session(p.herdr_socket.as_deref());
+    Ok(json!(d.store.lock().linear_state(
+        &session,
+        &p.space,
+        now_secs(d)
+    )?))
 }
 
 pub(super) fn bind(d: &Arc<Daemon>, p: LinearBindParams) -> Result<Value> {
@@ -106,8 +125,9 @@ pub(super) fn grouping_preview(d: &Arc<Daemon>, p: LinearGroupingSetParams) -> R
         .map_err(ls)?))
 }
 
-pub(super) fn mark_set(d: &Arc<Daemon>, p: LinearMarkSetParams) -> Result<Value> {
-    let known = snapshot_lists_issue(d, &p.space, &p.issue);
+pub(super) fn mark_set(d: &Arc<Daemon>, mut p: LinearMarkSetParams) -> Result<Value> {
+    let socket = owner_socket(&p.owner);
+    let known = resolve_known(d, socket.as_deref(), &p.space, &mut p.issue);
     let change = d.store.lock().linear_mark_set(&p, known).map_err(ls)?;
     announce(d, Some(change.after.space.clone()));
     Ok(json!(change))
@@ -130,14 +150,17 @@ pub(super) fn mark_clear(d: &Arc<Daemon>, p: LinearMarkClearParams) -> Result<Va
     }
 }
 
-pub(super) fn mark_unmark(d: &Arc<Daemon>, p: LinearMarkUnmarkParams) -> Result<Value> {
+pub(super) fn mark_unmark(d: &Arc<Daemon>, mut p: LinearMarkUnmarkParams) -> Result<Value> {
+    let socket = owner_socket(&p.owner);
+    resolve_known(d, socket.as_deref(), &p.space, &mut p.issue);
     let removed = d.store.lock().linear_mark_unmark(&p).map_err(ls)?;
     announce_spaces(d, mark_spaces(&removed.removed));
     Ok(json!(removed))
 }
 
-pub(super) fn note_set(d: &Arc<Daemon>, p: LinearNoteSetParams) -> Result<Value> {
-    let known = snapshot_lists_issue(d, &p.space, &p.issue);
+pub(super) fn note_set(d: &Arc<Daemon>, mut p: LinearNoteSetParams) -> Result<Value> {
+    let socket = owner_socket(&p.owner);
+    let known = resolve_known(d, socket.as_deref(), &p.space, &mut p.issue);
     let change = d.store.lock().linear_note_set(&p, known).map_err(ls)?;
     announce(d, Some(change.after.space.clone()));
     Ok(json!(change))
@@ -149,8 +172,9 @@ pub(super) fn note_clear(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> {
     Ok(json!(change))
 }
 
-pub(super) fn show_request(d: &Arc<Daemon>, p: LinearShowRequestParams) -> Result<Value> {
-    let known = snapshot_lists_issue(d, &p.space, &p.issue);
+pub(super) fn show_request(d: &Arc<Daemon>, mut p: LinearShowRequestParams) -> Result<Value> {
+    let socket = owner_socket(&p.owner);
+    let known = resolve_known(d, socket.as_deref(), &p.space, &mut p.issue);
     let change = d
         .store
         .lock()
@@ -180,7 +204,9 @@ pub(super) fn show_dismiss(d: &Arc<Daemon>, p: LinearIdParams) -> Result<Value> 
     Ok(json!(change))
 }
 
-pub(super) fn show_withdraw(d: &Arc<Daemon>, p: LinearShowWithdrawParams) -> Result<Value> {
+pub(super) fn show_withdraw(d: &Arc<Daemon>, mut p: LinearShowWithdrawParams) -> Result<Value> {
+    let socket = owner_socket(&p.owner);
+    resolve_known(d, socket.as_deref(), &p.space, &mut p.issue);
     let change = d
         .store
         .lock()
@@ -205,12 +231,16 @@ pub(super) fn session_get(d: &Arc<Daemon>, p: LinearSessionGetParams) -> Result<
     Ok(json!(result))
 }
 
-pub(super) fn activity_record(d: &Arc<Daemon>, p: LinearActivityRecordParams) -> Result<Value> {
+pub(super) fn activity_record(d: &Arc<Daemon>, mut p: LinearActivityRecordParams) -> Result<Value> {
+    let claims = clean_claims(&p.claims);
+    if let (Some(space), Some(issue)) = (claimed_space(p.space.as_deref(), &claims), &mut p.issue) {
+        resolve_known(d, claims.herdr_socket.as_deref(), &space, issue);
+    }
     let result = d.store.lock().linear_activity_record(&p).map_err(ls)?;
     let space = result.activity.space.clone();
     // The local write is announced now; the refetch announces again with the
     // snapshot flag once Linear answers, which can take seconds.
-    activity_recorded(d, &clean_claims(&p.claims), space.as_deref());
+    activity_recorded(d, &claims, space.as_deref());
     announce(d, space.clone());
     announce_cleared(d, space.as_deref(), &result.cleared_suggestions);
     Ok(json!(result))

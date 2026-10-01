@@ -596,9 +596,9 @@ daemon start).
     `linear.status: "unavailable"`, `linear.message` (why), `cache_age_seconds`, and every issue
     `stale: true`; with no earlier read the board is empty, never an error.
   - A `linear.activity.record` for a space that has a cached read marks it out of date and
-    schedules one refetch 500 ms later; reports that land meanwhile fold into it. When it lands,
-    boardd emits one `local_state_changed {space, snapshot: true}`, and a `linear.snapshot` inside
-    the TTL returns the refetched read without another Linear call.
+    schedules one refetch 500 ms later; reports that land meanwhile fold into it. When it lands
+    (or fails), boardd emits one `local_state_changed {space, snapshot: true}`, and a
+    `linear.snapshot` inside the TTL returns the refetched read without another Linear call.
   - `force: true` drops the space's cached read first, so this request reads Linear again. The
     board's `R` key sends it. A daemon that predates `force` ignores it.
   - Additive: `linear.message` (string, omitted when there is nothing to say), `linear.status`
@@ -645,9 +645,10 @@ names a space by the work plugin's *space name*, which is the herdr workspace la
 accepted only as a Linear key (`WEB-123`) or a hyphenated issue UUID; any other shape is error 1.
 
 Every write returns what it changed, and a write that changed something emits one
-`local_state_changed` event (see Events) for each space it touched — a `linear.activity.record`
-for a space a reader has read emits it when its refetch lands; a refused write, a preview, and an
-`unmark` or `mark.clear {ids}` that removed nothing emit none. A sweep every 10 s closes overdue
+`local_state_changed` event (see Events) for each space it touched at once — a
+`linear.activity.record` for a space a reader has read also emits a second one, with
+`snapshot: true`, when its refetch lands; a refused write, a preview, and an `unmark` or
+`mark.clear {ids}` that removed nothing emit none. A sweep every 10 s closes overdue
 show-requests as `expired` and emits one event for each space it changed. Three result shapes
 carry the change:
 
@@ -667,6 +668,12 @@ not cleaned, when they carry control characters.
 verified. The session a claim names is the herdr session of `herdr_socket`
 (`…/sessions/<name>/herdr.sock`, else `default`).
 
+Workspace ids repeat across herdr sessions, so marks, notes, show-requests and activity are kept
+per *(session, space)*, like space bindings. A mark, note or show-request belongs to the session
+of its owner's `herdr_socket`, activity and suggestions to the session of the claims'
+`herdr_socket`; a write without one goes to the `default` session. A row written before the
+session existed reads as `default`.
+
 An *owner* (`owner`) is the agent that wrote a mark, note or show-request:
 `{herdr_socket?, herdr_pane_id?, claude_session_id?}`, read by `board mcp` from
 `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `CLAUDE_CODE_SESSION_ID`. Like claims, it is attribution,
@@ -685,10 +692,15 @@ request also has `acknowledged_at` set, so a reader that predates `outcome` stil
 A request is pending while it has no outcome and its `expires_at` has not passed.
 
 A card is *known* in a space when a worktree binding holds it, activity was recorded for it in
-that space, or the space's shared Linear read (see `linear.snapshot`) lists it. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
+that session's space, or that session's shared Linear read of the space (see `linear.snapshot`)
+lists it. `mark.set`, `note.set` and `show.request` on a card that is not known are error 2.
+When that read lists an issue UUID, the write is stored under the issue's identifier (`WEB-123`),
+the key the board shows local state by; `mark.unmark`, `show.withdraw` and
+`linear.activity.record` resolve a UUID the same way. A UUID no read lists is stored as given.
 
-- `linear.state.get {space}` → `{space, space_bindings, worktree_bindings, grouping, marks, notes,
-  show_requests, resolved_show_requests?}`: the space's bindings, every worktree binding (they are
+- `linear.state.get {space, herdr_socket?}` → `{space, space_bindings, worktree_bindings, grouping,
+  marks, notes, show_requests, resolved_show_requests?}`: the local state of `herdr_socket`'s
+  session (`default` without one) for the space: its space binding, every worktree binding (they are
   not keyed by space), the grouping mapping in force for the space (`{space: null|string, mapping}`
   or `null`), its marks and notes, and its pending show-requests. `resolved_show_requests`
   lists the space's 20 most recently closed requests (accepted, rejected, withdrawn or expired),
@@ -867,10 +879,11 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
 - `{"event":"local_state_changed","space"?:"<space>","snapshot"?:true}` — one per space a Linear
   local-state write changed (see Methods → linear local state). `space` is always a herdr workspace id; an omitted
   `space` means any space: every grouping change (a grouping space is a workspace *label*, which
-  any workspace may carry), or a binding change with no space claimed. A `linear.activity.record`
-  for a space a reader has read is announced by its debounced refetch instead (see
-  `linear.snapshot`): one event when the refetch lands, however many reports it folded, with
-  `snapshot: true`. That flag means the daemon's cached read is already fresh, so a reader answers
+  any workspace may carry), or a binding change with no space claimed. The event names no herdr
+  session, so a reader of the same workspace id in another session re-reads its own state for
+  nothing. A `linear.activity.record` for a space a reader has read is announced at once and again
+  by its debounced refetch (see `linear.snapshot`): one more event when the refetch lands or
+  fails, however many reports it folded, with `snapshot: true`. That flag means the daemon's cached read is already fresh, so a reader answers
   it with one plain `linear.snapshot`, never a forced one; without the flag a reader re-reads
   `linear.state.get`. The flag is omitted when false, and an older client ignores it. It is a
   new event rather than a `board_changed` reason because a client skips an event line it cannot

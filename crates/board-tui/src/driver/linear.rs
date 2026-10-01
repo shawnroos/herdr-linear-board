@@ -406,7 +406,10 @@ impl Driver {
 
     fn state_params(&self) -> Option<LinearStateGetParams> {
         let space = self.app.linear.as_ref()?.workspace_id.clone();
-        Some(LinearStateGetParams { space })
+        Some(LinearStateGetParams {
+            space,
+            herdr_socket: self.origin.origin_socket.clone(),
+        })
     }
 
     fn list_params(&self, kind: LinearListKind, id: Option<String>) -> LinearListParams {

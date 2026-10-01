@@ -251,7 +251,8 @@ CREATE TABLE linear_marks (
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   owner_herdr_socket      TEXT,
   owner_herdr_pane_id     TEXT,
-  owner_claude_session_id TEXT
+  owner_claude_session_id TEXT,
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE linear_notes (
@@ -263,7 +264,8 @@ CREATE TABLE linear_notes (
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   owner_herdr_socket      TEXT,
   owner_herdr_pane_id     TEXT,
-  owner_claude_session_id TEXT
+  owner_claude_session_id TEXT,
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE linear_show_requests (
@@ -278,7 +280,8 @@ CREATE TABLE linear_show_requests (
   owner_herdr_pane_id     TEXT,
   owner_claude_session_id TEXT,
   expires_at              TEXT,
-  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired')),
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 -- Never the raw hook payload: the tool, the issue and who claimed the call.
@@ -292,7 +295,8 @@ CREATE TABLE linear_activity (
   herdr_workspace_id TEXT,
   card_id            INTEGER,
   run_id             INTEGER,
-  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE linear_board_panes (

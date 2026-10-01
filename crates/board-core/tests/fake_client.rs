@@ -643,6 +643,7 @@ mod linear_local_state {
         let state = client
             .linear_state_get(&LinearStateGetParams {
                 space: SPACE.into(),
+                herdr_socket: Some(SOCKET.into()),
             })
             .unwrap();
         assert_eq!(state.marks.len(), 1);
@@ -692,6 +693,7 @@ mod linear_local_state {
         assert_eq!(ask(&mut client, &a), first);
         let get = LinearStateGetParams {
             space: SPACE.into(),
+            herdr_socket: Some(SOCKET.into()),
         };
         assert_eq!(
             client.linear_state_get(&get).unwrap().show_requests.len(),

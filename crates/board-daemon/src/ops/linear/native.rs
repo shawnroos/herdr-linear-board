@@ -18,7 +18,7 @@ use crate::linear::{fetch, names_project, CacheRead, FetchPlan, SpaceKey, SpaceR
 use super::*;
 
 fn session_of(socket: Option<&str>) -> String {
-    board_core::paths::session_name_from_socket(socket).unwrap_or_else(|| "default".into())
+    board_core::db::herdr_session(socket)
 }
 
 fn text(value: &Value) -> Option<String> {
@@ -432,13 +432,27 @@ fn pane_status(herdr: Option<SessionSnapshot>, ids: &[String]) -> BTreeMap<Strin
         .collect()
 }
 
-/// Whether a reader's cached read of `space` lists `issue`, which makes the
-/// card known for a mark, note or show-request.
-pub(in crate::ops) fn lists_issue(d: &Arc<Daemon>, space: &str, issue: &str) -> bool {
-    d.linear.cache.any_good(space, |read| {
-        read.issues.iter().any(|node| {
-            node["identifier"].as_str() == Some(issue) || node["id"].as_str() == Some(issue)
-        })
+/// The identifier of `issue`, a key or a UUID, when the session's cached read
+/// of `space` lists it, which makes the card known for a mark, note or
+/// show-request. The board matches local state by identifier only.
+pub(in crate::ops) fn resolve_issue(
+    d: &Arc<Daemon>,
+    socket: Option<&str>,
+    space: &str,
+    issue: &str,
+) -> Option<String> {
+    let key = SpaceKey {
+        session: session_of(socket),
+        space: space.to_string(),
+    };
+    d.linear.cache.find_good(&key, |read| {
+        read.issues
+            .iter()
+            .find(|node| {
+                node["identifier"].as_str() == Some(issue) || node["id"].as_str() == Some(issue)
+            })
+            .and_then(|node| node["identifier"].as_str())
+            .map(str::to_string)
     })
 }
 

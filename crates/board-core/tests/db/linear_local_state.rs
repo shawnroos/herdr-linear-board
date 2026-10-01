@@ -5,14 +5,15 @@ use board_core::db::{
 };
 use board_core::protocol::{
     parse_timestamp, LinearActivityOutcome, LinearActivityRecordParams, LinearBindParams,
-    LinearMarkSetParams, LinearMarkUnmarkParams, LinearSessionGetParams, LinearShowRequestParams,
-    LinearShowWithdrawParams,
+    LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams, LinearSessionGetParams,
+    LinearShowRequestParams, LinearShowWithdrawParams,
 };
 use serde_json::json;
 
 const SPACE: &str = "ws-1";
 const TTL: i64 = 30 * 60;
 const SOCKET: &str = "/tmp/hb/sessions/main/herdr.sock";
+const MAIN: &str = "main";
 
 fn now() -> i64 {
     parse_timestamp("2026-09-30 12:00:00").unwrap()
@@ -83,7 +84,7 @@ fn ae9_two_owners_hold_their_own_needs_you_and_unmark_removes_only_the_callers()
     let (a, b) = (owner("p-a"), owner("p-b"));
     mark(&db, &a, "ENG-148", MarkKind::Attention, "from a");
     let b_mark = mark(&db, &b, "ENG-148", MarkKind::Attention, "from b");
-    assert_eq!(db.list_marks(SPACE).unwrap().len(), 2);
+    assert_eq!(db.list_marks(MAIN, SPACE).unwrap().len(), 2);
 
     let removed = db
         .linear_mark_unmark(&unmark(&a, "ENG-148", None))
@@ -91,7 +92,7 @@ fn ae9_two_owners_hold_their_own_needs_you_and_unmark_removes_only_the_callers()
         .removed;
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].owner(), a);
-    let left = db.list_marks(SPACE).unwrap();
+    let left = db.list_marks(MAIN, SPACE).unwrap();
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].id, b_mark);
     assert_eq!(left[0].owner_herdr_pane_id.as_deref(), Some("p-b"));
@@ -103,7 +104,7 @@ fn one_owner_setting_a_kind_twice_keeps_one_mark_with_the_new_text() {
     let a = owner("p-a");
     mark(&db, &a, "ENG-148", MarkKind::Attention, "first");
     mark(&db, &a, "ENG-148", MarkKind::Attention, "second");
-    let marks = db.list_marks(SPACE).unwrap();
+    let marks = db.list_marks(MAIN, SPACE).unwrap();
     assert_eq!(marks.len(), 1);
     assert_eq!(marks[0].text.as_deref(), Some("second"));
 }
@@ -118,7 +119,7 @@ fn owners_differing_only_in_claude_session_are_different_owners() {
     };
     mark(&db, &a, "ENG-148", MarkKind::Question, "a");
     mark(&db, &nested, "ENG-148", MarkKind::Question, "nested");
-    assert_eq!(db.list_marks(SPACE).unwrap().len(), 2);
+    assert_eq!(db.list_marks(MAIN, SPACE).unwrap().len(), 2);
 }
 
 #[test]
@@ -135,7 +136,7 @@ fn unmark_with_a_kind_leaves_the_callers_other_kinds() {
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].kind, MarkKind::Question);
     let kinds: Vec<(String, MarkKind)> = db
-        .list_marks(SPACE)
+        .list_marks(MAIN, SPACE)
         .unwrap()
         .into_iter()
         .map(|m| (m.issue, m.kind))
@@ -178,7 +179,7 @@ fn an_anonymous_caller_cannot_unmark_or_withdraw() {
         );
         assert!(matches!(refused, LocalStateRejection::Refused(_)));
     }
-    assert_eq!(db.list_marks(SPACE).unwrap().len(), 1);
+    assert_eq!(db.list_marks("default", SPACE).unwrap().len(), 1);
 }
 
 #[test]
@@ -202,7 +203,7 @@ fn the_generic_mark_path_refuses_a_suggestion() {
         matches!(&refused, LocalStateRejection::Refused(m) if m.contains("suggestion")),
         "{refused:?}"
     );
-    assert!(db.list_marks(SPACE).unwrap().is_empty());
+    assert!(db.list_marks(MAIN, SPACE).unwrap().is_empty());
 }
 
 #[test]
@@ -227,7 +228,9 @@ fn ae11_a_re_ask_refreshes_the_pending_request_and_withdraw_closes_it() {
     assert_eq!(expiry(&first), Some(now() + TTL));
     assert_eq!(expiry(&refreshed), Some(now() + 600 + TTL));
     assert_eq!(
-        db.pending_show_requests(SPACE, now() + 600).unwrap().len(),
+        db.pending_show_requests(MAIN, SPACE, now() + 600)
+            .unwrap()
+            .len(),
         1
     );
 
@@ -239,7 +242,7 @@ fn ae11_a_re_ask_refreshes_the_pending_request_and_withdraw_closes_it() {
     assert_eq!(withdrawn.outcome, Some(ShowOutcome::Withdrawn));
     assert!(withdrawn.acknowledged_at.is_some());
     assert!(db
-        .pending_show_requests(SPACE, now() + 600)
+        .pending_show_requests(MAIN, SPACE, now() + 600)
         .unwrap()
         .is_empty());
 }
@@ -251,7 +254,10 @@ fn another_owner_asking_for_the_same_issue_adds_its_own_request() {
         .unwrap();
     db.linear_show_request(&ask(&owner("p-b"), "ENG-160", "b"), true, now(), TTL)
         .unwrap();
-    assert_eq!(db.pending_show_requests(SPACE, now()).unwrap().len(), 2);
+    assert_eq!(
+        db.pending_show_requests(MAIN, SPACE, now()).unwrap().len(),
+        2
+    );
 }
 
 #[test]
@@ -320,7 +326,7 @@ fn owner_b_cannot_withdraw_owner_as_request() {
         "{refused:?}"
     );
     assert_eq!(
-        db.pending_show_requests(SPACE, now()).unwrap(),
+        db.pending_show_requests(MAIN, SPACE, now()).unwrap(),
         vec![request]
     );
 }
@@ -337,7 +343,7 @@ fn ae5_an_overdue_request_is_not_pending_and_the_sweep_marks_it_expired() {
         .unwrap();
     let later = now() + TTL;
     let pending: Vec<String> = db
-        .pending_show_requests(SPACE, later)
+        .pending_show_requests(MAIN, SPACE, later)
         .unwrap()
         .into_iter()
         .map(|r| r.issue)
@@ -352,7 +358,10 @@ fn ae5_an_overdue_request_is_not_pending_and_the_sweep_marks_it_expired() {
     assert_eq!(expired.outcome, Some(ShowOutcome::Expired));
     assert!(expired.acknowledged_at.is_some());
     assert!(db.expire_overdue(later).unwrap().is_empty());
-    assert_eq!(db.pending_show_requests(SPACE, later).unwrap().len(), 1);
+    assert_eq!(
+        db.pending_show_requests(MAIN, SPACE, later).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -368,7 +377,12 @@ fn bulk_clear_removes_only_the_given_ids_and_skips_ids_already_gone() {
         .unwrap()
         .removed;
     assert_eq!(removed.iter().map(|m| m.id).collect::<Vec<_>>(), vec![one]);
-    let left: Vec<i64> = db.list_marks(SPACE).unwrap().iter().map(|m| m.id).collect();
+    let left: Vec<i64> = db
+        .list_marks(MAIN, SPACE)
+        .unwrap()
+        .iter()
+        .map(|m| m.id)
+        .collect();
     assert_eq!(left, vec![keep]);
 }
 
@@ -381,6 +395,7 @@ fn worktree(dir: &tempfile::TempDir, name: &str) -> String {
 
 fn suggest(db: &Db, space: &str, issue: &str, worktree: &str) {
     db.add_mark(&NewMark {
+        session: MAIN,
         space,
         issue,
         kind: MarkKind::Suggestion,
@@ -408,7 +423,7 @@ fn binding_another_worktree_leaves_the_suggestion() {
     suggest(&db, SPACE, "ENG-153", &named);
     let bound = db.linear_bind(&bind(&other, "ENG-153")).unwrap();
     assert!(bound.cleared_suggestions.is_empty());
-    assert_eq!(db.list_marks(SPACE).unwrap().len(), 1);
+    assert_eq!(db.list_marks(MAIN, SPACE).unwrap().len(), 1);
 }
 
 #[test]
@@ -431,7 +446,7 @@ fn binding_the_suggested_worktree_clears_every_suggestion_on_the_issue() {
     cleared.sort();
     assert_eq!(cleared, vec!["ws-1".to_string(), "ws-2".to_string()]);
     let left: Vec<(String, MarkKind)> = db
-        .list_marks(SPACE)
+        .list_marks(MAIN, SPACE)
         .unwrap()
         .into_iter()
         .map(|m| (m.issue, m.kind))
@@ -443,7 +458,7 @@ fn binding_the_suggested_worktree_clears_every_suggestion_on_the_issue() {
             ("ENG-153".into(), MarkKind::Attention)
         ]
     );
-    assert!(db.list_marks("ws-2").unwrap().is_empty());
+    assert!(db.list_marks(MAIN, "ws-2").unwrap().is_empty());
 }
 
 fn bind_space(db: &Db) {
@@ -580,7 +595,7 @@ fn state_lists_the_space_resolved_requests_newest_first_up_to_the_cap() {
         .id;
     db.linear_show_dismiss(other_space, now()).unwrap();
 
-    let state = db.linear_state(SPACE, now()).unwrap();
+    let state = db.linear_state(MAIN, SPACE, now()).unwrap();
     let listed: Vec<i64> = state.resolved_show_requests.iter().map(|r| r.id).collect();
     let newest: Vec<i64> = ids
         .iter()
@@ -624,5 +639,104 @@ fn a_save_issue_from_a_worktree_bound_to_that_issue_records_activity_only() {
 
     assert_eq!(result.outcome, LinearActivityOutcome::Recorded);
     assert!(result.mark.is_none());
-    assert!(db.list_marks(SPACE).unwrap().is_empty());
+    assert!(db.list_marks(MAIN, SPACE).unwrap().is_empty());
+}
+
+const OTHER_SOCKET: &str = "/tmp/hb/sessions/other/herdr.sock";
+
+fn owner_in(socket: &str, pane: &str) -> LinearOwner {
+    LinearOwner {
+        herdr_socket: Some(socket.into()),
+        ..owner(pane)
+    }
+}
+
+fn note_by(db: &Db, who: &LinearOwner, issue: &str, body: &str) {
+    db.linear_note_set(
+        &LinearNoteSetParams {
+            space: SPACE.into(),
+            issue: issue.into(),
+            body: body.into(),
+            author: "agent in pane w1:p2".into(),
+            owner: who.clone(),
+        },
+        true,
+    )
+    .unwrap();
+}
+
+#[test]
+fn two_herdr_sessions_sharing_a_workspace_id_keep_their_own_local_state() {
+    let db = mem();
+    bind_space(&db);
+    let (main, other) = (owner("w1:p2"), owner_in(OTHER_SOCKET, "w1:p2"));
+    mark(&db, &main, "ENG-1", MarkKind::Attention, "from main");
+    mark(&db, &other, "ENG-2", MarkKind::Attention, "from other");
+    note_by(&db, &main, "ENG-1", "main's note");
+    note_by(&db, &other, "ENG-1", "other's note");
+    db.linear_show_request(&ask(&main, "ENG-1", "main"), true, now(), TTL)
+        .unwrap();
+    db.linear_show_request(&ask(&other, "ENG-1", "other"), true, now(), TTL)
+        .unwrap();
+
+    let read = |session: &str| db.linear_state(session, SPACE, now()).unwrap();
+    let (main_state, other_state) = (read("main"), read("other"));
+    let issues = |marks: &[board_core::db::Mark]| -> Vec<String> {
+        marks.iter().map(|m| m.issue.clone()).collect()
+    };
+    assert_eq!(issues(&main_state.marks), vec!["ENG-1".to_string()]);
+    assert_eq!(issues(&other_state.marks), vec!["ENG-2".to_string()]);
+    let bodies = |notes: &[board_core::protocol::Note]| -> Vec<String> {
+        notes.iter().map(|n| n.body.clone()).collect()
+    };
+    assert_eq!(bodies(&main_state.notes), vec!["main's note".to_string()]);
+    assert_eq!(bodies(&other_state.notes), vec!["other's note".to_string()]);
+    let reasons = |requests: &[board_core::db::ShowRequest]| -> Vec<Option<String>> {
+        requests.iter().map(|r| r.reason.clone()).collect()
+    };
+    assert_eq!(
+        reasons(&main_state.show_requests),
+        vec![Some("main".into())]
+    );
+    assert_eq!(
+        reasons(&other_state.show_requests),
+        vec![Some("other".into())]
+    );
+    assert_eq!(main_state.space_bindings.len(), 1);
+    assert!(other_state.space_bindings.is_empty());
+}
+
+#[test]
+fn activity_in_another_session_does_not_make_an_issue_known() {
+    let db = mem();
+    db.linear_activity_record(&LinearActivityRecordParams {
+        tool_name: "mcp__linear__get_issue".into(),
+        issue: Some("ENG-9".into()),
+        space: Some(SPACE.into()),
+        cwd: None,
+        claims: ActivityClaims {
+            herdr_socket: Some(OTHER_SOCKET.into()),
+            ..ActivityClaims::default()
+        },
+    })
+    .unwrap();
+    let set = |who: &LinearOwner| {
+        db.linear_mark_set(
+            &LinearMarkSetParams {
+                space: SPACE.into(),
+                issue: "ENG-9".into(),
+                kind: MarkKind::Attention,
+                text: None,
+                created_by: None,
+                owner: who.clone(),
+            },
+            false,
+        )
+    };
+
+    assert!(matches!(
+        rejection(set(&owner("p-a")).unwrap_err()),
+        LocalStateRejection::UnknownIssue { .. }
+    ));
+    set(&owner_in(OTHER_SOCKET, "p-a")).unwrap();
 }

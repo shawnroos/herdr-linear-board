@@ -457,9 +457,13 @@ fn a_burst_of_reports_is_folded_into_one_refetch_and_one_announcement() {
     let later = board.events();
 
     assert_eq!(local.len(), 3, "each report is announced: {local:?}");
-    assert!(local
-        .iter()
-        .all(|e| matches!(e, Event::LocalStateChanged { snapshot: false, .. })));
+    assert!(local.iter().all(|e| matches!(
+        e,
+        Event::LocalStateChanged {
+            snapshot: false,
+            ..
+        }
+    )));
     let refetched: Vec<&Event> = events.iter().chain(&later).collect();
     assert_eq!(
         refetched,
@@ -522,7 +526,7 @@ fn a_report_is_announced_at_once_while_a_slow_failing_refetch_runs() {
 fn a_card_the_cached_read_lists_is_known_for_a_mark() {
     let board = Board::new(|r, _| board_linear(r));
     board.bind(SPACE, None);
-    let mark = json!({"space": SPACE, "issue": "WEB-2"});
+    let mark = json!({"space": SPACE, "issue": "WEB-2", "owner": {"herdr_socket": SOCKET}});
     assert_eq!(
         handle_request(&board.d, "linear.mark.set", mark.clone())
             .unwrap_err()
@@ -533,6 +537,107 @@ fn a_card_the_cached_read_lists_is_known_for_a_mark() {
     board.snapshot();
 
     handle_request(&board.d, "linear.mark.set", mark).unwrap();
+}
+
+const OTHER_SOCKET: &str = "/tmp/hb-u7-none/sessions/beta/herdr.sock";
+const ISSUE_UUID: &str = "0b9f5a52-1c3e-4a7b-9d0e-2f6c8a1b3d4e";
+
+fn state_of(board: &Board, socket: &str) -> Value {
+    handle_request(
+        &board.d,
+        "linear.state.get",
+        json!({"space": SPACE, "herdr_socket": socket}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn local_state_is_kept_per_herdr_session_for_a_shared_workspace_id() {
+    let board = Board::new(|r, _| board_linear(r));
+    board.bind(SPACE, None);
+    board.snapshot();
+    let mark = |socket: &str| {
+        handle_request(
+            &board.d,
+            "linear.mark.set",
+            json!({"space": SPACE, "issue": "WEB-2", "owner": {"herdr_socket": socket}}),
+        )
+    };
+
+    assert_eq!(
+        mark(OTHER_SOCKET).unwrap_err().code(),
+        2,
+        "another session's cached read does not make the card known"
+    );
+    mark(SOCKET).unwrap();
+
+    assert_eq!(
+        state_of(&board, SOCKET)["marks"].as_array().unwrap().len(),
+        1
+    );
+    assert!(state_of(&board, OTHER_SOCKET)["marks"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(state_of(&board, OTHER_SOCKET)["space_bindings"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn writes_naming_an_issue_uuid_are_stored_under_its_identifier() {
+    let board = Board::new(|r, _| {
+        if query(r).contains("issues(") {
+            let mut uuid_node = node("WEB-1", ("s-todo", "Todo", "unstarted"), None);
+            uuid_node["id"] = json!(ISSUE_UUID);
+            return Reply::ok(json!({"data": {"issues": {
+                "nodes": [uuid_node],
+                "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }}}));
+        }
+        board_linear(r)
+    });
+    board.bind(SPACE, None);
+    board.snapshot();
+    let owner = json!({"herdr_socket": SOCKET, "herdr_pane_id": "wS:p1"});
+    for (method, params) in [
+        (
+            "linear.mark.set",
+            json!({"space": SPACE, "issue": ISSUE_UUID, "kind": "question", "owner": owner}),
+        ),
+        (
+            "linear.note.set",
+            json!({"space": SPACE, "issue": ISSUE_UUID, "body": "b", "author": "a", "owner": owner}),
+        ),
+        (
+            "linear.show.request",
+            json!({"space": SPACE, "issue": ISSUE_UUID, "owner": owner}),
+        ),
+        (
+            "linear.activity.record",
+            json!({
+                "tool_name": "mcp__linear__save_issue",
+                "issue": ISSUE_UUID,
+                "claims": {"herdr_socket": SOCKET, "herdr_pane_id": "wS:p1", "herdr_workspace_id": SPACE},
+            }),
+        ),
+    ] {
+        handle_request(&board.d, method, params).unwrap_or_else(|e| panic!("{method}: {e}"));
+    }
+
+    let state = state_of(&board, SOCKET);
+    let issues = |key: &str| -> Vec<String> {
+        state[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["issue"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(issues("marks"), vec!["WEB-1", "WEB-1"]);
+    assert_eq!(issues("notes"), vec!["WEB-1"]);
+    assert_eq!(issues("show_requests"), vec!["WEB-1"]);
 }
 
 fn issue_detail_reply() -> Reply {
@@ -908,7 +1013,7 @@ fn a_mark_write_announces_without_the_snapshot_flag() {
     handle_request(
         &board.d,
         "linear.mark.set",
-        json!({"space": SPACE, "issue": "WEB-2"}),
+        json!({"space": SPACE, "issue": "WEB-2", "owner": {"herdr_socket": SOCKET}}),
     )
     .unwrap();
 

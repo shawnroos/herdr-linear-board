@@ -511,6 +511,7 @@ impl LinearOwner {
 
 #[derive(Debug, Clone)]
 pub struct NewMark<'a> {
+    pub session: &'a str,
     pub space: &'a str,
     pub issue: &'a str,
     pub kind: MarkKind,
@@ -522,6 +523,7 @@ pub struct NewMark<'a> {
 
 #[derive(Debug, Clone)]
 pub struct NewShowRequest<'a> {
+    pub session: &'a str,
     pub space: &'a str,
     pub issue: &'a str,
     pub reason: Option<&'a str>,
@@ -621,6 +623,7 @@ pub struct ActivityClaims {
 
 #[derive(Debug, Clone)]
 pub struct NewActivity<'a> {
+    pub session: &'a str,
     pub space: Option<&'a str>,
     pub tool_name: &'a str,
     pub issue: Option<&'a str>,
@@ -1187,10 +1190,11 @@ impl Db {
         require_text(mark.space, "space")?;
         require_issue(mark.issue)?;
         require_optional_text(mark.created_by, "mark author")?;
+        require_text(mark.session, "herdr session")?;
         self.conn.execute(
             "INSERT INTO linear_marks (space, issue_identifier, kind, text, detail_json, created_by,
-               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, herdr_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 mark.space,
                 mark.issue,
@@ -1200,7 +1204,8 @@ impl Db {
                 mark.created_by,
                 mark.owner.herdr_socket,
                 mark.owner.herdr_pane_id,
-                mark.owner.claude_session_id
+                mark.owner.claude_session_id,
+                mark.session
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -1211,22 +1216,23 @@ impl Db {
         )?)
     }
 
-    pub fn list_marks(&self, space: &str) -> Result<Vec<Mark>> {
-        let mut statement = self
-            .conn
-            .prepare(&format!("{MARK_SELECT} WHERE space = ?1 ORDER BY id"))?;
+    pub fn list_marks(&self, session: &str, space: &str) -> Result<Vec<Mark>> {
+        let mut statement = self.conn.prepare(&format!(
+            "{MARK_SELECT} WHERE herdr_session = ?1 AND space = ?2 ORDER BY id"
+        ))?;
         let rows = statement
-            .query_map(params![space], row_to_mark)?
+            .query_map(params![session, space], row_to_mark)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
-    pub fn space_issue_marks(&self, space: &str, issue: &str) -> Result<Vec<Mark>> {
+    pub fn space_issue_marks(&self, session: &str, space: &str, issue: &str) -> Result<Vec<Mark>> {
         let mut statement = self.conn.prepare(&format!(
-            "{MARK_SELECT} WHERE space = ?1 AND issue_identifier = ?2 ORDER BY id"
+            "{MARK_SELECT} WHERE herdr_session = ?1 AND space = ?2 AND issue_identifier = ?3
+             ORDER BY id"
         ))?;
         let rows = statement
-            .query_map(params![space, issue], row_to_mark)?
+            .query_map(params![session, space, issue], row_to_mark)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1283,6 +1289,7 @@ impl Db {
 
     pub fn add_note(
         &self,
+        session: &str,
         space: &str,
         issue: &str,
         body: &str,
@@ -1292,13 +1299,14 @@ impl Db {
         require_text(space, "space")?;
         require_issue(issue)?;
         require_text(author, "note author")?;
+        require_text(session, "herdr session")?;
         if body.is_empty() {
             return Err(refuse("a note body must not be empty".into()));
         }
         self.conn.execute(
             "INSERT INTO linear_notes (space, issue_identifier, body, author,
-               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, herdr_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 space,
                 issue,
@@ -1306,7 +1314,8 @@ impl Db {
                 author,
                 owner.herdr_socket,
                 owner.herdr_pane_id,
-                owner.claude_session_id
+                owner.claude_session_id,
+                session
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -1317,12 +1326,13 @@ impl Db {
         )?)
     }
 
-    pub fn list_notes(&self, space: &str, issue: Option<&str>) -> Result<Vec<Note>> {
+    pub fn list_notes(&self, session: &str, space: &str, issue: Option<&str>) -> Result<Vec<Note>> {
         let mut statement = self.conn.prepare(&format!(
-            "{NOTE_SELECT} WHERE space = ?1 AND (?2 IS NULL OR issue_identifier = ?2) ORDER BY id"
+            "{NOTE_SELECT} WHERE herdr_session = ?1 AND space = ?2
+               AND (?3 IS NULL OR issue_identifier = ?3) ORDER BY id"
         ))?;
         let rows = statement
-            .query_map(params![space, issue], row_to_note)?
+            .query_map(params![session, space, issue], row_to_note)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1338,10 +1348,12 @@ impl Db {
         require_text(request.space, "space")?;
         require_issue(request.issue)?;
         require_optional_text(request.requested_by, "requester")?;
+        require_text(request.session, "herdr session")?;
         self.conn.execute(
             "INSERT INTO linear_show_requests (space, issue_identifier, reason, requested_by,
-               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime(?8, 'unixepoch'))",
+               owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at,
+               herdr_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime(?8, 'unixepoch'), ?9)",
             params![
                 request.space,
                 request.issue,
@@ -1350,7 +1362,8 @@ impl Db {
                 request.owner.herdr_socket,
                 request.owner.herdr_pane_id,
                 request.owner.claude_session_id,
-                request.expires_at
+                request.expires_at,
+                request.session
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -1381,31 +1394,41 @@ impl Db {
 
     /// Requests with no outcome yet, including overdue ones the sweep has
     /// not reached.
-    fn open_show_requests(&self, space: Option<&str>) -> Result<Vec<ShowRequest>> {
+    fn open_show_requests(&self, scope: Option<(&str, &str)>) -> Result<Vec<ShowRequest>> {
+        let (session, space) = scope.unzip();
         let mut statement = self.conn.prepare(&format!(
-            "{SHOW_SELECT} WHERE (?1 IS NULL OR space = ?1)
+            "{SHOW_SELECT} WHERE (?1 IS NULL OR (herdr_session = ?1 AND space = ?2))
                AND outcome IS NULL AND acknowledged_at IS NULL ORDER BY id"
         ))?;
         let rows = statement
-            .query_map(params![space], row_to_show)?
+            .query_map(params![session, space], row_to_show)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
-    pub fn pending_show_requests(&self, space: &str, now: i64) -> Result<Vec<ShowRequest>> {
-        let mut rows = self.open_show_requests(Some(space))?;
+    pub fn pending_show_requests(
+        &self,
+        session: &str,
+        space: &str,
+        now: i64,
+    ) -> Result<Vec<ShowRequest>> {
+        let mut rows = self.open_show_requests(Some((session, space)))?;
         rows.retain(|r| r.is_pending(now));
         Ok(rows)
     }
 
-    pub fn recent_resolved_show_requests(&self, space: &str) -> Result<Vec<ShowRequest>> {
+    pub fn recent_resolved_show_requests(
+        &self,
+        session: &str,
+        space: &str,
+    ) -> Result<Vec<ShowRequest>> {
         let mut statement = self.conn.prepare(&format!(
-            "{SHOW_SELECT} WHERE space = ?1 AND outcome IS NOT NULL
-             ORDER BY acknowledged_at DESC, id DESC LIMIT ?2"
+            "{SHOW_SELECT} WHERE herdr_session = ?1 AND space = ?2 AND outcome IS NOT NULL
+             ORDER BY acknowledged_at DESC, id DESC LIMIT ?3"
         ))?;
         let rows = statement
             .query_map(
-                params![space, RECENT_RESOLVED_SHOW_REQUESTS as i64],
+                params![session, space, RECENT_RESOLVED_SHOW_REQUESTS as i64],
                 row_to_show,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1442,10 +1465,11 @@ impl Db {
 
     // -- activity ---------------------------------------------------------------
 
-    /// Records one Linear write and prunes the space to the newest
+    /// Records one Linear write and prunes the session's space to the newest
     /// [`LINEAR_ACTIVITY_KEEP_PER_SPACE`] rows in the same transaction.
     pub fn record_activity(&self, activity: &NewActivity<'_>) -> Result<Activity> {
         require_optional_text(activity.space, "space")?;
+        require_text(activity.session, "herdr session")?;
         if !is_tool_name(activity.tool_name) {
             return Err(refuse(format!(
                 "tool name {} is refused; a tool name is 1 to {MAX_TOOL_NAME} ASCII letters, digits, `_`, `-`, `.` or `:`",
@@ -1468,8 +1492,8 @@ impl Db {
         tx.execute(
             "INSERT INTO linear_activity
                (space, tool_name, issue_identifier, herdr_socket, herdr_pane_id,
-                herdr_workspace_id, card_id, run_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                herdr_workspace_id, card_id, run_id, herdr_session)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 activity.space,
                 activity.tool_name,
@@ -1478,14 +1502,16 @@ impl Db {
                 claims.herdr_pane_id,
                 claims.herdr_workspace_id,
                 claims.card_id,
-                claims.run_id
+                claims.run_id,
+                activity.session
             ],
         )?;
         let id = tx.last_insert_rowid();
         tx.execute(
-            "DELETE FROM linear_activity WHERE space IS ?1 AND id NOT IN (
-               SELECT id FROM linear_activity WHERE space IS ?1 ORDER BY id DESC LIMIT ?2)",
-            params![activity.space, keep],
+            "DELETE FROM linear_activity WHERE herdr_session = ?1 AND space IS ?2 AND id NOT IN (
+               SELECT id FROM linear_activity WHERE herdr_session = ?1 AND space IS ?2
+               ORDER BY id DESC LIMIT ?3)",
+            params![activity.session, activity.space, keep],
         )?;
         let row = tx.query_row(
             &format!("{ACTIVITY_SELECT} WHERE id = ?1"),

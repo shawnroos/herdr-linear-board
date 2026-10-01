@@ -1480,6 +1480,10 @@ pub struct LinearReplace<T> {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearStateGetParams {
     pub space: String,
+    /// The reader's herdr socket: local state is kept per herdr session,
+    /// and a read without one sees the `default` session's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
 }
 
 /// One space's local state. Worktree bindings are not keyed by space, so

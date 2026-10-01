@@ -307,6 +307,7 @@ impl BoardMcp {
         let caller = Caller::from_environment();
         let params = LinearStateGetParams {
             space: caller.space(args.space),
+            herdr_socket: caller.owner.herdr_socket.clone(),
         };
         let owner = caller.owner;
         forward(move |c| state_for(&owner, c.linear_state_get(&params)?)).await

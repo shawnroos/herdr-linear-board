@@ -686,17 +686,20 @@ fn state_get_lists_the_space_marks_notes_and_pending_show_requests() {
     );
     fx.ok(
         "linear.mark.set",
-        json!({"space": SPACE, "issue": "WEB-1", "text": "needs you"}),
+        json!({"space": SPACE, "issue": "WEB-1", "text": "needs you", "owner": owner("w1:p1")}),
     );
     fx.ok(
         "linear.note.set",
-        json!({"space": SPACE, "issue": "WEB-1", "body": "b", "author": "a"}),
+        json!({"space": SPACE, "issue": "WEB-1", "body": "b", "author": "a", "owner": owner("w1:p1")}),
     );
     fx.ok(
         "linear.show.request",
-        json!({"space": SPACE, "issue": "WEB-1"}),
+        json!({"space": SPACE, "issue": "WEB-1", "owner": owner("w1:p1")}),
     );
-    let state = fx.ok("linear.state.get", json!({"space": SPACE}));
+    let state = fx.ok(
+        "linear.state.get",
+        json!({"space": SPACE, "herdr_socket": SESSION_SOCKET}),
+    );
     assert_eq!(state["space"], SPACE);
     assert_eq!(state["space_bindings"][0]["herdr_session"], "alpha");
     assert_eq!(state["marks"][0]["text"], "needs you");

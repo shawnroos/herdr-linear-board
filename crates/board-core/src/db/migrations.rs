@@ -370,7 +370,8 @@ CREATE TABLE IF NOT EXISTS linear_marks (
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   owner_herdr_socket      TEXT,
   owner_herdr_pane_id     TEXT,
-  owner_claude_session_id TEXT
+  owner_claude_session_id TEXT,
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS linear_notes (
@@ -382,7 +383,8 @@ CREATE TABLE IF NOT EXISTS linear_notes (
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   owner_herdr_socket      TEXT,
   owner_herdr_pane_id     TEXT,
-  owner_claude_session_id TEXT
+  owner_claude_session_id TEXT,
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS linear_show_requests (
@@ -397,7 +399,8 @@ CREATE TABLE IF NOT EXISTS linear_show_requests (
   owner_herdr_pane_id     TEXT,
   owner_claude_session_id TEXT,
   expires_at              TEXT,
-  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired')),
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS linear_activity (
@@ -410,7 +413,8 @@ CREATE TABLE IF NOT EXISTS linear_activity (
   herdr_workspace_id TEXT,
   card_id            INTEGER,
   run_id             INTEGER,
-  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS linear_board_panes (
@@ -432,6 +436,13 @@ CREATE INDEX IF NOT EXISTS idx_linear_activity_space ON linear_activity(space, i
 CREATE INDEX IF NOT EXISTS idx_linear_board_panes_context ON linear_board_panes(herdr_socket, context_key);
 ";
 
+const V16_SESSION_TABLES: [&str; 4] = [
+    "linear_marks",
+    "linear_notes",
+    "linear_show_requests",
+    "linear_activity",
+];
+
 const V16_OWNER_COLUMNS: [&str; 3] = [
     "owner_herdr_socket",
     "owner_herdr_pane_id",
@@ -452,7 +463,8 @@ CREATE TABLE linear_marks_amended (
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   owner_herdr_socket      TEXT,
   owner_herdr_pane_id     TEXT,
-  owner_claude_session_id TEXT
+  owner_claude_session_id TEXT,
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 INSERT INTO linear_marks_amended
   (id, space, issue_identifier, kind, text, detail_json, created_by, created_at)
@@ -480,7 +492,8 @@ CREATE TABLE linear_show_requests_amended (
   owner_herdr_pane_id     TEXT,
   owner_claude_session_id TEXT,
   expires_at              TEXT,
-  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired'))
+  outcome                 TEXT CHECK (outcome IN ('accepted','rejected','withdrawn','expired')),
+  herdr_session    TEXT NOT NULL DEFAULT 'default'
 );
 INSERT INTO linear_show_requests_amended
   (id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at)
@@ -780,6 +793,14 @@ impl Db {
         }
         if !has_column("linear_show_requests", "outcome")? {
             tx.execute_batch(V16_SHOW_REQUESTS_AMEND_SQL)?;
+        }
+        // After the rebuilds, which already create the column.
+        for table in V16_SESSION_TABLES {
+            if !has_column(table, "herdr_session")? {
+                tx.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN herdr_session TEXT NOT NULL DEFAULT 'default'"
+                ))?;
+            }
         }
         // After the rebuild, which drops the table's indexes, and also for a
         // database amended before this index existed.

@@ -109,6 +109,10 @@ impl Agent {
                 tool_name: "mcp__linear__save_comment".into(),
                 issue: Some(issue.into()),
                 space: Some("wA".into()),
+                claims: board_core::db::ActivityClaims {
+                    herdr_socket: Some(SOCKET.into()),
+                    ..Default::default()
+                },
                 ..LinearActivityRecordParams::default()
             })
             .unwrap();
@@ -119,7 +123,10 @@ impl Agent {
                 kind: MarkKind::Attention,
                 text: Some("look here".into()),
                 created_by: Some("agent-a".into()),
-                owner: Default::default(),
+                owner: board_core::db::LinearOwner {
+                    herdr_socket: Some(SOCKET.into()),
+                    ..Default::default()
+                },
             })
             .unwrap();
     }
@@ -129,7 +136,10 @@ impl Agent {
             .inner
             .lock()
             .unwrap()
-            .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+            .linear_state_get(&LinearStateGetParams {
+                space: "wA".into(),
+                herdr_socket: Some(SOCKET.into()),
+            })
             .unwrap()
             .marks
             .iter()

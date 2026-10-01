@@ -209,7 +209,10 @@ fn a_save_issue_from_a_known_unbound_pane_links_that_session() {
 
     let state = td
         .client()
-        .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+        .linear_state_get(&LinearStateGetParams {
+            space: "wA".into(),
+            herdr_socket: None,
+        })
         .unwrap();
     assert!(
         state
@@ -252,7 +255,10 @@ fn the_same_save_issue_from_a_bound_session_becomes_a_suggestion() {
 
     let state = td
         .client()
-        .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+        .linear_state_get(&LinearStateGetParams {
+            space: "wA".into(),
+            herdr_socket: None,
+        })
         .unwrap();
     assert!(
         state
@@ -310,7 +316,10 @@ fn a_save_comment_records_activity_and_links_nothing() {
     assert_eq!(recorded[0].issue, None);
     let state = td
         .client()
-        .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+        .linear_state_get(&LinearStateGetParams {
+            space: "wA".into(),
+            herdr_socket: None,
+        })
         .unwrap();
     assert!(state.worktree_bindings.is_empty());
     assert!(state.marks.is_empty());

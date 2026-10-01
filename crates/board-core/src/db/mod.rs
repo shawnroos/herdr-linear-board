@@ -21,8 +21,8 @@ pub use linear_state::{
     LINEAR_STATE_TYPES, RECENT_RESOLVED_SHOW_REQUESTS,
 };
 pub use linear_writes::{
-    claimed_space, clean_claims, clean_owner, parse_json_refusing_duplicate_keys, resolve_worktree,
-    LocalStateError, LocalStateRejection, SHOW_REQUEST_TTL_DEFAULT_SECS,
+    claimed_space, clean_claims, clean_owner, herdr_session, parse_json_refusing_duplicate_keys,
+    resolve_worktree, LocalStateError, LocalStateRejection, SHOW_REQUEST_TTL_DEFAULT_SECS,
 };
 
 use std::path::Path;

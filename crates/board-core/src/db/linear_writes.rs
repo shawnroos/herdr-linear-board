@@ -159,10 +159,17 @@ fn require_owner(owner: &LinearOwner, what: &str) -> LsResult<LinearOwner> {
     }
 }
 
+/// The herdr session a caller's socket names; `default` without one. Local
+/// state is keyed by it, because workspace ids repeat across sessions.
+pub fn herdr_session(socket: Option<&str>) -> String {
+    crate::paths::session_name_from_socket(socket).unwrap_or_else(|| "default".into())
+}
+
 fn claimed_session(claims: &ActivityClaims) -> Option<String> {
-    claims.herdr_socket.as_deref().map(|socket| {
-        crate::paths::session_name_from_socket(Some(socket)).unwrap_or_else(|| "default".into())
-    })
+    claims
+        .herdr_socket
+        .as_deref()
+        .map(|socket| herdr_session(Some(socket)))
 }
 
 /// The root of the git worktree containing `cwd`, canonicalised.
@@ -319,39 +326,46 @@ impl From<StrictConfig> for GroupingConfig {
 }
 
 impl Db {
-    pub fn linear_state(&self, space: &str, now: i64) -> crate::Result<LinearState> {
+    pub fn linear_state(&self, session: &str, space: &str, now: i64) -> crate::Result<LinearState> {
         Ok(LinearState {
             space: space.to_owned(),
-            space_bindings: self
-                .list_space_bindings()?
-                .into_iter()
-                .filter(|b| b.space == space)
-                .collect(),
+            space_bindings: self.space_binding(session, space)?.into_iter().collect(),
             worktree_bindings: self.list_worktree_bindings()?,
             grouping: self.grouping_for_space(space)?,
-            marks: self.list_marks(space)?,
-            notes: self.list_notes(space, None)?,
-            show_requests: self.pending_show_requests(space, now)?,
-            resolved_show_requests: self.recent_resolved_show_requests(space)?,
+            marks: self.list_marks(session, space)?,
+            notes: self.list_notes(session, space, None)?,
+            show_requests: self.pending_show_requests(session, space, now)?,
+            resolved_show_requests: self.recent_resolved_show_requests(session, space)?,
         })
     }
 
     /// Whether local state already names `issue`: a worktree binding, or
-    /// activity recorded in `space`.
-    pub fn issue_has_local_state(&self, space: &str, issue: &str) -> crate::Result<bool> {
+    /// activity recorded in the session's `space`.
+    pub fn issue_has_local_state(
+        &self,
+        session: &str,
+        space: &str,
+        issue: &str,
+    ) -> crate::Result<bool> {
         Ok(self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM linear_worktree_bindings WHERE issue_identifier = ?2)
+            "SELECT EXISTS(SELECT 1 FROM linear_worktree_bindings WHERE issue_identifier = ?3)
                  OR EXISTS(SELECT 1 FROM linear_activity
-                           WHERE space = ?1 AND issue_identifier = ?2)",
-            params![space, issue],
+                           WHERE herdr_session = ?1 AND space = ?2 AND issue_identifier = ?3)",
+            params![session, space, issue],
             |r| r.get(0),
         )?)
     }
 
-    fn require_known(&self, space: &str, issue: &str, known_elsewhere: bool) -> LsResult<()> {
+    fn require_known(
+        &self,
+        session: &str,
+        space: &str,
+        issue: &str,
+        known_elsewhere: bool,
+    ) -> LsResult<()> {
         check_space(space)?;
         check_issue(issue)?;
-        if known_elsewhere || self.issue_has_local_state(space, issue)? {
+        if known_elsewhere || self.issue_has_local_state(session, space, issue)? {
             Ok(())
         } else {
             Err(LocalStateRejection::UnknownIssue {
@@ -560,7 +574,7 @@ impl Db {
     fn replace_mark(&self, mark: &NewMark<'_>) -> LsResult<LinearReplace<Mark>> {
         let tx = self.conn.unchecked_transaction()?;
         let before: Vec<Mark> = self
-            .space_issue_marks(mark.space, mark.issue)?
+            .space_issue_marks(mark.session, mark.space, mark.issue)?
             .into_iter()
             .filter(|m| m.kind == mark.kind && m.owner() == *mark.owner)
             .collect();
@@ -585,11 +599,13 @@ impl Db {
                 "mark kind suggestion is set only by the board, from a reported Linear write; a mark is attention, question or done".into(),
             ));
         }
-        self.require_known(&p.space, &p.issue, known_elsewhere)?;
+        let owner = clean_owner(&p.owner);
+        let session = herdr_session(owner.herdr_socket.as_deref());
+        self.require_known(&session, &p.space, &p.issue, known_elsewhere)?;
         let text = p.text.as_deref().map(strip_control_keep_lines);
         let created_by = opt_line(p.created_by.as_deref());
-        let owner = clean_owner(&p.owner);
         self.replace_mark(&NewMark {
+            session: &session,
             space: &p.space,
             issue: &p.issue,
             kind: p.kind,
@@ -604,9 +620,10 @@ impl Db {
         check_space(&p.space)?;
         check_issue(&p.issue)?;
         let owner = require_owner(&p.owner, "unmark")?;
+        let session = herdr_session(owner.herdr_socket.as_deref());
         let tx = self.conn.unchecked_transaction()?;
         let removed: Vec<Mark> = self
-            .space_issue_marks(&p.space, &p.issue)?
+            .space_issue_marks(&session, &p.space, &p.issue)?
             .into_iter()
             .filter(|m| p.kind.is_none_or(|k| k == m.kind) && m.owner() == owner)
             .collect();
@@ -649,19 +666,21 @@ impl Db {
         p: &LinearNoteSetParams,
         known_elsewhere: bool,
     ) -> LsResult<LinearReplace<Note>> {
-        self.require_known(&p.space, &p.issue, known_elsewhere)?;
+        let owner = clean_owner(&p.owner);
+        let session = herdr_session(owner.herdr_socket.as_deref());
+        self.require_known(&session, &p.space, &p.issue, known_elsewhere)?;
         let body = strip_control_keep_lines(&p.body);
         let author = line(&p.author);
         let tx = self.conn.unchecked_transaction()?;
         let before: Vec<Note> = self
-            .list_notes(&p.space, Some(&p.issue))?
+            .list_notes(&session, &p.space, Some(&p.issue))?
             .into_iter()
             .filter(|n| n.author == author)
             .collect();
         for old in &before {
             self.remove_note(old.id)?;
         }
-        let after = self.add_note(&p.space, &p.issue, &body, &author, &clean_owner(&p.owner))?;
+        let after = self.add_note(&session, &p.space, &p.issue, &body, &author, &owner)?;
         tx.commit()?;
         Ok(LinearReplace { before, after })
     }
@@ -686,14 +705,15 @@ impl Db {
         now: i64,
         ttl_secs: i64,
     ) -> LsResult<LinearChange<ShowRequest>> {
-        self.require_known(&p.space, &p.issue, known_elsewhere)?;
+        let owner = clean_owner(&p.owner);
+        let session = herdr_session(owner.herdr_socket.as_deref());
+        self.require_known(&session, &p.space, &p.issue, known_elsewhere)?;
         let reason = opt_line(p.reason.as_deref());
         let requested_by = opt_line(p.requested_by.as_deref());
-        let owner = clean_owner(&p.owner);
         let expires_at = now.saturating_add(ttl_secs);
         let tx = self.conn.unchecked_transaction()?;
         let existing = self
-            .pending_show_requests(&p.space, now)?
+            .pending_show_requests(&session, &p.space, now)?
             .into_iter()
             .find(|r| r.issue == p.issue && r.owner() == owner);
         let change = match existing {
@@ -713,6 +733,7 @@ impl Db {
             None => LinearChange {
                 before: None,
                 after: Some(self.add_show_request(&NewShowRequest {
+                    session: &session,
                     space: &p.space,
                     issue: &p.issue,
                     reason: reason.as_deref(),
@@ -742,8 +763,9 @@ impl Db {
         check_space(&p.space)?;
         check_issue(&p.issue)?;
         let owner = require_owner(&p.owner, "withdraw")?;
+        let session = herdr_session(owner.herdr_socket.as_deref());
         let request = self
-            .pending_show_requests(&p.space, now)?
+            .pending_show_requests(&session, &p.space, now)?
             .into_iter()
             .find(|r| r.issue == p.issue && r.owner() == owner)
             .ok_or_else(|| {
@@ -804,14 +826,15 @@ impl Db {
         }
         result.space_bound = true;
         result.pending_requests =
-            u32::try_from(self.pending_show_requests(&p.space, now)?.len()).unwrap_or(u32::MAX);
+            u32::try_from(self.pending_show_requests(&session, &p.space, now)?.len())
+                .unwrap_or(u32::MAX);
         let Some(worktree) = p.cwd.as_deref().and_then(|cwd| resolve_worktree(cwd).ok()) else {
             return Ok(result);
         };
         let Some(binding) = self.worktree_binding(&worktree)? else {
             return Ok(result);
         };
-        result.marks = self.space_issue_marks(&p.space, &binding.issue)?;
+        result.marks = self.space_issue_marks(&session, &p.space, &binding.issue)?;
         result.binding = Some(LinearSessionBinding {
             bound_at: self.worktree_binding_since(&worktree)?,
             worktree_path: binding.worktree_path,
@@ -833,7 +856,9 @@ impl Db {
         }
         let claims = clean_claims(&p.claims);
         let space = claimed_space(p.space.as_deref(), &claims);
+        let session = herdr_session(claims.herdr_socket.as_deref());
         let activity = self.record_activity(&NewActivity {
+            session: &session,
             space: space.as_deref(),
             tool_name: &p.tool_name,
             issue: p.issue.as_deref(),
@@ -893,6 +918,7 @@ impl Db {
             "run_id": claims.run_id,
         }));
         let mark = self.replace_mark(&NewMark {
+            session: &session,
             space,
             issue,
             kind: MarkKind::Suggestion,

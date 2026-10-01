@@ -184,13 +184,12 @@ impl<P: Clone + PartialEq, T> SnapshotCache<P, T> {
         Some((value.clone(), entry.plan.clone()))
     }
 
-    /// Whether any session's last good read of `space` satisfies `test`.
-    pub fn any_good(&self, space: &str, test: impl Fn(&T) -> bool) -> bool {
-        locked(&self.entries)
-            .iter()
-            .filter(|(key, _)| key.space == space)
-            .filter_map(|(_, entry)| entry.good.as_ref())
-            .any(|(value, _)| test(value))
+    /// What `find` takes from the key's last good read, even when a later
+    /// attempt failed.
+    pub fn find_good<R>(&self, key: &SpaceKey, find: impl FnOnce(&T) -> Option<R>) -> Option<R> {
+        let entries = locked(&self.entries);
+        let (value, _) = entries.get(key)?.good.as_ref()?;
+        find(value)
     }
 }
 

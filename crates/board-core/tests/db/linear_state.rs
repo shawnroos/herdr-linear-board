@@ -253,6 +253,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
     let db = mem();
     let mark = db
         .add_mark(&NewMark {
+            session: "default",
             space: "ws-1",
             issue: "WEB-42",
             kind: MarkKind::Suggestion,
@@ -263,6 +264,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
         })
         .unwrap();
     db.add_mark(&NewMark {
+        session: "default",
         space: "ws-2",
         issue: "WEB-43",
         kind: MarkKind::Attention,
@@ -272,7 +274,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
         owner: &LinearOwner::default(),
     })
     .unwrap();
-    let marks = db.list_marks("ws-1").unwrap();
+    let marks = db.list_marks("default", "ws-1").unwrap();
     assert_eq!(marks, vec![mark.clone()]);
     assert_eq!(mark.space, "ws-1");
     assert_eq!(mark.issue, "WEB-42");
@@ -280,7 +282,7 @@ fn marks_round_trip_with_their_card_and_space_keys() {
     assert_eq!(mark.detail, Some(json!({"pane": "p-3"})));
     assert!(db.remove_mark(mark.id).unwrap());
     assert!(!db.remove_mark(mark.id).unwrap());
-    assert!(db.list_marks("ws-1").unwrap().is_empty());
+    assert!(db.list_marks("default", "ws-1").unwrap().is_empty());
 }
 
 #[test]
@@ -289,6 +291,7 @@ fn notes_round_trip_with_their_card_and_space_keys() {
     let uuid = "0b9f5a52-1c3e-4a7b-9d0e-2f6c8a1b3d4e";
     let note = db
         .add_note(
+            "default",
             "ws-1",
             uuid,
             "remember the flag",
@@ -296,17 +299,24 @@ fn notes_round_trip_with_their_card_and_space_keys() {
             &LinearOwner::default(),
         )
         .unwrap();
-    db.add_note("ws-1", "WEB-9", "other", "user", &LinearOwner::default())
-        .unwrap();
+    db.add_note(
+        "default",
+        "ws-1",
+        "WEB-9",
+        "other",
+        "user",
+        &LinearOwner::default(),
+    )
+    .unwrap();
     assert_eq!(note.space, "ws-1");
     assert_eq!(note.issue, uuid);
     assert_eq!(
-        db.list_notes("ws-1", Some(uuid)).unwrap(),
+        db.list_notes("default", "ws-1", Some(uuid)).unwrap(),
         vec![note.clone()]
     );
-    assert_eq!(db.list_notes("ws-1", None).unwrap().len(), 2);
+    assert_eq!(db.list_notes("default", "ws-1", None).unwrap().len(), 2);
     assert!(db.remove_note(note.id).unwrap());
-    assert_eq!(db.list_notes("ws-1", None).unwrap().len(), 1);
+    assert_eq!(db.list_notes("default", "ws-1", None).unwrap().len(), 1);
 }
 
 #[test]
@@ -315,6 +325,7 @@ fn show_requests_round_trip_and_drain_on_close() {
     let now = 1_790_000_000;
     let request = db
         .add_show_request(&NewShowRequest {
+            session: "default",
             space: "ws-1",
             issue: "WEB-7",
             reason: Some("review ready"),
@@ -327,10 +338,13 @@ fn show_requests_round_trip_and_drain_on_close() {
     assert_eq!(request.issue, "WEB-7");
     assert_eq!(request.acknowledged_at, None);
     assert_eq!(
-        db.pending_show_requests("ws-1", now).unwrap(),
+        db.pending_show_requests("default", "ws-1", now).unwrap(),
         vec![request.clone()]
     );
-    assert!(db.pending_show_requests("ws-2", now).unwrap().is_empty());
+    assert!(db
+        .pending_show_requests("default", "ws-2", now)
+        .unwrap()
+        .is_empty());
     assert!(db
         .close_show_request(request.id, ShowOutcome::Accepted)
         .unwrap());
@@ -340,7 +354,10 @@ fn show_requests_round_trip_and_drain_on_close() {
     let closed = db.show_request(request.id).unwrap().unwrap();
     assert_eq!(closed.outcome, Some(ShowOutcome::Accepted));
     assert!(closed.acknowledged_at.is_some());
-    assert!(db.pending_show_requests("ws-1", now).unwrap().is_empty());
+    assert!(db
+        .pending_show_requests("default", "ws-1", now)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -360,7 +377,7 @@ fn issue_keys_are_refused_unless_linear_shaped() {
         assert!(!is_issue_identifier(bad), "{bad:?}");
         assert!(
             matches!(
-                db.add_note("ws", bad, "x", "user", &LinearOwner::default()),
+                db.add_note("default", "ws", bad, "x", "user", &LinearOwner::default()),
                 Err(Error::BadRequest(_))
             ),
             "{bad:?}"
@@ -396,6 +413,7 @@ fn activity_keeps_only_the_newest_rows_per_space() {
     let db = mem();
     let claims = claims();
     db.record_activity(&NewActivity {
+        session: "default",
         space: Some("other"),
         tool_name: "mcp__linear__save_issue",
         issue: Some("WEB-1"),
@@ -404,6 +422,7 @@ fn activity_keeps_only_the_newest_rows_per_space() {
     .unwrap();
     let first = db
         .record_activity(&NewActivity {
+            session: "default",
             space: Some("ws-1"),
             tool_name: "mcp__linear__save_issue",
             issue: Some("WEB-1"),
@@ -414,6 +433,7 @@ fn activity_keeps_only_the_newest_rows_per_space() {
     assert_eq!(first.claims, claims);
     for n in 0..LINEAR_ACTIVITY_KEEP_PER_SPACE {
         db.record_activity(&NewActivity {
+            session: "default",
             space: Some("ws-1"),
             tool_name: "mcp__claude_ai_Linear__save_comment",
             issue: Some(&format!("WEB-{}", n + 2)),
@@ -445,6 +465,7 @@ fn activity_refuses_a_bad_identifier_or_tool_name() {
     let db = mem();
     let claims = ActivityClaims::default();
     let bad_issue = db.record_activity(&NewActivity {
+        session: "default",
         space: None,
         tool_name: "mcp__linear__save_issue",
         issue: Some("not an issue"),
@@ -452,6 +473,7 @@ fn activity_refuses_a_bad_identifier_or_tool_name() {
     });
     assert!(matches!(bad_issue, Err(Error::BadRequest(_))));
     let bad_tool = db.record_activity(&NewActivity {
+        session: "default",
         space: None,
         tool_name: "save issue; rm",
         issue: None,
@@ -460,6 +482,7 @@ fn activity_refuses_a_bad_identifier_or_tool_name() {
     assert!(matches!(bad_tool, Err(Error::BadRequest(_))));
     let unattributed = db
         .record_activity(&NewActivity {
+            session: "default",
             space: None,
             tool_name: "mcp__linear__create_comment",
             issue: None,

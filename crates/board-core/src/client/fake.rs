@@ -882,7 +882,11 @@ fake_methods!(db, config, linear, now, params, {
     },
     "linear.state.get" => {
         let p: crate::protocol::LinearStateGetParams = serde_json::from_value(params)?;
-        serde_json::to_value(db.linear_state(&p.space, now)?)?
+        serde_json::to_value(db.linear_state(
+            &crate::db::herdr_session(p.herdr_socket.as_deref()),
+            &p.space,
+            now,
+        )?)?
     },
     "linear.bind" => serde_json::to_value(db.linear_bind(&serde_json::from_value(params)?)?)?,
     "linear.space.bind" => {
@@ -1170,7 +1174,10 @@ mod tests {
         );
 
         let state = client
-            .linear_state_get(&LinearStateGetParams { space: "wA".into() })
+            .linear_state_get(&LinearStateGetParams {
+                space: "wA".into(),
+                herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+            })
             .unwrap();
         assert_eq!(state.space_bindings.len(), 1);
         assert_eq!(state.space_bindings[0].project_id, "p2");
@@ -1198,6 +1205,7 @@ mod tests {
         let mut client = FakeBoardClient::new().unwrap();
         let get = LinearStateGetParams {
             space: "space-1".into(),
+            herdr_socket: None,
         };
         let initial = client.linear_state_get(&get).unwrap();
 
