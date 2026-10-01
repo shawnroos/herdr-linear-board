@@ -503,6 +503,32 @@ fn open_board_with_an_overlay_placement_returns_a_tool_error() {
     mcp.finish();
 }
 
+#[test]
+fn open_board_with_session_reaches_the_daemon_as_a_session_context() {
+    let td = TestDaemon::start(&[]);
+    let cwd = tempfile::tempdir().unwrap();
+    let claims = [
+        ("HERDR_SOCKET_PATH", "/tmp/herdr-test.sock"),
+        ("HERDR_PANE_ID", "w1:p2"),
+        ("HERDR_WORKSPACE_ID", "w1"),
+    ];
+    let mut mcp = Mcp::spawn(for_daemon(&td, cwd.path(), &claims));
+    mcp.initialize();
+
+    // A session pane takes no other target: the daemon's refusal names it,
+    // which only a context carrying `session` can reach.
+    let result = mcp.call("open_board", json!({"session": true, "issue": "ENG-1"}));
+    let text = error_text(&result);
+    assert!(text.contains("session pane"), "{text}");
+    // Past the context check (a bare context is refused there) to the
+    // caller's herdr socket, which this test does not run.
+    let result = mcp.call("close_board", json!({"session": true}));
+    let text = error_text(&result);
+    assert!(text.contains("Herdr socket"), "{text}");
+
+    mcp.finish();
+}
+
 /// Two agents that share a herdr pane (a nested or background session
 /// inherits `HERDR_PANE_ID`) and differ only in their Claude session (KTD2).
 fn agent(session: &str) -> [(&'static str, String); 4] {

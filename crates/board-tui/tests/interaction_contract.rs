@@ -161,14 +161,19 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
     (Screen::LinearPicker, "Esc", "clear filter, then close"),
     (Screen::LinearPicker, "click", "choose that row"),
+    (Screen::SessionPane, "--", "-- session pane --"),
+    (Screen::SessionPane, "Tab", "issue / lane list"),
+    (Screen::SessionPane, "↑/↓ k/j", "move / scroll"),
+    (Screen::SessionPane, "?", "this help"),
+    (Screen::SessionPane, "q / Esc", "close the pane"),
 ];
 
 #[test]
 fn contract_freezes_the_exact_72_row_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        134,
-        "the interaction contract must stay at exactly 134 bindings (87 upstream + 47 Linear mode)"
+        139,
+        "the interaction contract must stay at exactly 139 bindings (87 upstream + 47 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

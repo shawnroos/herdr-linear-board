@@ -354,6 +354,11 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
     (Screen::LinearPicker, "Esc", "clear filter, then close"),
     (Screen::LinearPicker, "click", "choose that row"),
+    (Screen::SessionPane, "--", "-- session pane --"),
+    (Screen::SessionPane, "Tab", "issue / lane list"),
+    (Screen::SessionPane, "↑/↓ k/j", "move / scroll"),
+    (Screen::SessionPane, "?", "this help"),
+    (Screen::SessionPane, "q / Esc", "close the pane"),
 ];
 
 /// The upstream `?` sheet renders only the rows before this sentinel, so its
@@ -374,13 +379,26 @@ pub fn upstream_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
     &HELP_KEYS[..upstream_help_rows()]
 }
 
+/// Where the session pane's rows start: its own section marker.
+fn session_help_start() -> usize {
+    HELP_KEYS
+        .iter()
+        .position(|(screen, key, _)| *key == "--" && *screen == Screen::SessionPane)
+        .unwrap_or(HELP_KEYS.len())
+}
+
 pub fn linear_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
-    &HELP_KEYS[upstream_help_rows()..]
+    &HELP_KEYS[upstream_help_rows()..session_help_start()]
+}
+
+pub fn session_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
+    &HELP_KEYS[session_help_start()..]
 }
 
 mod layout;
 mod linear;
 mod linear_issue;
+mod session;
 
 pub use linear_issue::{Row as IssueRow, RowKind as IssueRowKind};
 
@@ -405,6 +423,15 @@ pub use detail::{
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
 pub use linear::{linear_columns_per_page, linear_help_max_scroll, linear_pane_title};
+pub use session::session_help_max_scroll;
+
+/// How far the issue page can scroll at the last drawn size: the session
+/// pane's `j`/`k` stop here.
+pub fn issue_page_max_scroll(app: &crate::app::App) -> usize {
+    app.linear.as_ref().map_or(0, |state| {
+        linear_issue::max_scroll(app, state, app.last_area)
+    })
+}
 pub use overlays::{
     comment_history_rect, comment_history_wrapped_rows, help_content_width, help_list_rect,
     help_regular_max_scroll, help_wrapped_rows,
@@ -442,9 +469,10 @@ fn status_label(card: &Card) -> String {
 // -- entry point -------------------------------------------------------------
 
 pub fn view(app: &App, f: &mut Frame) {
-    if app.mode == Mode::Linear {
-        linear::draw(app, f);
-        return;
+    match app.mode {
+        Mode::Linear => return linear::draw(app, f),
+        Mode::Session => return session::draw(app, f),
+        Mode::Upstream => {}
     }
     app.hit_map.borrow_mut().clear();
     let area = f.area();
@@ -472,7 +500,8 @@ pub fn view(app: &App, f: &mut Frame) {
         | Screen::LinearNotBound
         | Screen::LinearError
         | Screen::LinearStaleDaemon
-        | Screen::LinearPicker => {}
+        | Screen::LinearPicker
+        | Screen::SessionPane => {}
     }
 
     overlays::draw_footer(app, f, area);

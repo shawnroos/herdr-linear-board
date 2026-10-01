@@ -101,7 +101,26 @@ fn dispatch(cli: Cli) -> Result<()> {
             None if stop => stop_daemon(cli.json),
             None => run_daemon(foreground),
         },
-        Cmd::Tui => {
+        Cmd::Tui { session: true } => {
+            let identity = board_tui::SessionIdentity::from_environment().ok_or_else(|| {
+                anyhow!("board tui --session needs BOARD_SESSION_WORKSPACE or HERDR_WORKSPACE_ID")
+            })?;
+            let mut client = ctx.into_client()?;
+            let daemon_version = client.daemon_status().ok().map(|status| status.version);
+            board_tui::run_session(
+                Box::new(client),
+                board_tui::LinearStart {
+                    workspace_id: identity.space.clone(),
+                    origin: board_tui::OriginContext::from_environment(),
+                    board_version: env!("CARGO_PKG_VERSION").to_string(),
+                    daemon_version,
+                    herdr_keys: Vec::new(),
+                    show: board_tui::ShowContext::default(),
+                },
+                identity,
+            )
+        }
+        Cmd::Tui { session: false } => {
             let show = board_tui::ShowContext::from_environment();
             let herdr_workspace_id =
                 show.workspace(std::env::var("HERDR_WORKSPACE_ID").ok().as_deref());

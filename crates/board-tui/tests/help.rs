@@ -71,6 +71,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         "move_column.rs" => vec!["MoveColumn"],
         "reorder_card.rs" => vec!["ReorderCard"],
         "comment_history.rs" => vec!["CommentHistory"],
+        "session.rs" => vec!["SessionPane"],
         "linear.rs" => vec![
             "LinearBoard",
             "LinearDetail",
@@ -99,6 +100,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
             "LinearError",
             "LinearStaleDaemon",
             "LinearPicker",
+            "SessionPane",
         ],
         // `mouse.rs` *synthesizes* key events to reuse a screen's handler (for
         // example, the Card Detail comment `[ Edit ]` action replays `e`); it

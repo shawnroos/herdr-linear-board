@@ -117,6 +117,21 @@ Linear mode is the board for a herdr space the work plugin has bound to a Linear
 | Linear picker | Clear the filter, then close | `Esc`, `Esc` | **❌ no mouse parity**; a click outside a row is swallowed | Same | `escape_clears_the_filter_and_a_second_escape_closes_the_picker`, `a_click_inside_an_open_picker_does_not_reach_the_board_behind_it` |
 | Linear picker | Read the list state: loading, rows, empty, unavailable, or read failed | none | none | Same | `a_picker_opened_before_its_list_arrives_shows_the_loading_line_then_the_rows`, `an_empty_list_an_unavailable_list_and_a_failed_read_render_differently` |
 
+## Session side pane
+
+`board tui --session` is the pane `board mcp`'s `open_board` with `session: true` opens as an unfocused split beside the calling agent. The daemon passes the agent's identity in the pane's environment (`BOARD_SESSION_SOCKET`, `BOARD_SESSION_PANE`, `BOARD_SESSION_WORKSPACE`, `BOARD_SESSION_CWD`, `BOARD_SESSION_CLAUDE`), because the split's own `HERDR_PANE_ID` names the split. The pane reads `linear.session.get` for that identity, the space's snapshot and local state, and the bound issue's document; it re-reads on each local-state change for its space and after a reconnect. It writes nothing: every effect passes `driver/linear.rs::session_allows`, which admits those four reads and quitting only, so no key clears a mark, answers a request, binds or renames the pane. A failed read keeps the last one on screen with `last read kept: <reason>` on the bottom row. Tests are in `tests/session/mod.rs` unless named otherwise.
+
+| Screen/context | Capability | Keyboard | Mouse | Narrow behavior | Backing effect / test evidence |
+|---|---|---|---|---|---|
+| Session pane, bound | Opens on the bound issue's page, the board's own renderer, with the marks the session read returned; the cursor marker is not drawn | none | none | The page's one-column layout | `app/session.rs::follow_issue`; `ae7_a_bound_session_on_a_board_without_lanes_flips_to_the_whole_tab_by_column`, `an_attention_mark_shows_in_the_pane_and_stays_on_the_board` |
+| Session pane, bound | Flip between the issue page and the lane list: the bound issue's lane in the tab that holds it, by column, or the whole tab by column when the board has no lane grouping | `Tab` | **❌ no mouse parity** | Same | `app/session.rs::flip`, `session_lane`; `ae7_a_bound_session_on_a_board_without_lanes_flips_to_the_whole_tab_by_column`, `a_session_bound_inside_a_lane_lists_that_lane_by_column` |
+| Session pane, bound | Scroll the issue page; move the lane list's cursor | `↑`/`↓`, `k`/`j` | **❌ no mouse parity** | Same | `app/session.rs::step` |
+| Session pane, unbound | `not bound — /work:bind`, with whether the space or only this worktree is unbound; a binding made while the pane is open replaces it on the next event | none | none | Same | `ae7_an_unbound_session_shows_the_bind_hint`, `a_binding_made_while_open_switches_the_hint_to_the_issue_on_the_next_event` |
+| Session pane | Before the first read, the board's loading line; with `linear.status: not_imported`, the daemon's message | none | none | Wrapped to the split | `view/session.rs`; `not_imported_renders_the_daemons_message_in_the_split` |
+| Session pane | Help lists the session keys only; any other key closes it | `?` | **❌ no mouse parity** | Same | `help_lists_only_the_session_keys_and_closes_back_to_the_pane` |
+| Session pane | Close the pane | `q` / `Esc` | **❌ no mouse parity** | Same | `Effect::Quit` |
+| Session pane | Refuse every other effect with a toast, before a request is built | none | none | Same | `driver/linear.rs::the_session_pane_allows_reads_and_quit_and_names_every_other_effect`, `every_write_the_session_pane_refuses_toasts_and_builds_no_request` |
+
 ## Effects and user-visible result paths
 
 | Screen/context | Capability | Keyboard | Mouse | Compact behavior | Backing effect / test evidence |

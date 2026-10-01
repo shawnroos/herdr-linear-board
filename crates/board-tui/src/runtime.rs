@@ -96,6 +96,17 @@ pub fn run_linear(client: Box<dyn BoardClient>, start: LinearStart) -> Result<()
     run_driver(&mut driver)
 }
 
+/// The session side pane beside one agent (KTD10): reads only, never a
+/// write, not even its own pane title.
+pub fn run_session(
+    client: Box<dyn BoardClient>,
+    start: LinearStart,
+    identity: crate::SessionIdentity,
+) -> Result<()> {
+    let mut driver = Driver::session(client, Box::new(crate::RealPlatform), start, identity);
+    run_driver(&mut driver)
+}
+
 fn run_driver(driver: &mut Driver) -> Result<()> {
     // Live updates use a dedicated socket. A Unix client also supplies the
     // exact path needed to recover after boardd replacement; embedded/fake

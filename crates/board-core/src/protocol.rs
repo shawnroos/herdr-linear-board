@@ -1055,7 +1055,8 @@ pub struct PaneFocusResult {
 }
 
 /// What an agent-opened board shows: a space, an issue, a card, or a mix.
-/// The daemon shape-checks every field and requires at least one.
+/// The daemon shape-checks every field and requires at least one. `session`
+/// asks for the session side pane of the calling agent instead (KTD10).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardPaneContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1064,6 +1065,8 @@ pub struct BoardPaneContext {
     pub issue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session: bool,
 }
 
 /// `board.pane.open` params. `placement` is text so the daemon can name its
@@ -1074,6 +1077,12 @@ pub struct BoardPaneOpenParams {
     pub placement: String,
     pub origin_socket: String,
     pub origin_pane: String,
+    /// The agent's working directory and Claude session id, which a session
+    /// pane reads `linear.session.get` with; the pane itself runs elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1089,6 +1098,9 @@ pub struct BoardPaneOpenResult {
 pub struct BoardPaneCloseParams {
     pub context: BoardPaneContext,
     pub origin_socket: String,
+    /// Required with a session context: each agent's session pane is its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_pane: Option<String>,
 }
 
 /// `board.pane.close` result. `gone` means the recorded pane had already

@@ -35,6 +35,17 @@ title = "Board"
 placement = "overlay"
 command = ["./target/release/board", "tui"]
 
+# The session side pane: what one agent is working on, opened by the daemon as
+# a split beside that agent with its identity in the env (`board mcp`
+# open_board with session). The request-time placement overrides this one.
+# The title must not match `scripts/open-board.sh`, or the toggle action
+# would focus or close it.
+[[panes]]
+id = "session"
+title = "Session"
+placement = "overlay"
+command = ["./target/release/board", "tui", "--session"]
+
 # Summon the board — bind this to a key via a [[keys.command]] in
 # ~/.config/herdr/config.toml (see README). The launcher is idempotent
 # (open-or-focus, toggle-off on repeat), mirroring herdr-file-viewer's launcher.

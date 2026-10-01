@@ -364,6 +364,18 @@ fn linear_session_and_status_line_parse() {
 }
 
 #[test]
+fn tui_takes_an_optional_session_flag() {
+    assert!(matches!(
+        parse(&["board", "tui"]).cmd,
+        Cmd::Tui { session: false }
+    ));
+    assert!(matches!(
+        parse(&["board", "tui", "--session"]).cmd,
+        Cmd::Tui { session: true }
+    ));
+}
+
+#[test]
 fn linear_list_arguments_are_checked_at_parse_time() {
     assert_eq!(
         reject(&["board", "linear", "view", "list"]).kind(),

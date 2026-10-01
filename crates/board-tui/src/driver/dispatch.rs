@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 
-use super::linear::linear_allows;
+use super::linear::{linear_allows, session_allows};
 use crate::app::{CardFilter, CommentHistoryView, Effect, Mode, Msg, Screen};
 use crate::view::pane_title;
 use crate::Driver;
@@ -64,6 +64,11 @@ impl Driver {
         // request.
         if self.app.mode == Mode::Linear && !linear_allows(&eff) {
             self.app.set_toast("not available in Linear mode", true);
+            return;
+        }
+        if self.app.mode == Mode::Session && !session_allows(&eff) {
+            self.app
+                .set_toast("not available in the session pane", true);
             return;
         }
         match eff {
@@ -275,6 +280,7 @@ impl Driver {
             Effect::Quit => self.app.should_quit = true,
             Effect::LinearSnapshot { force } => self.fetch_linear_snapshot(force),
             Effect::LinearStateGet => self.fetch_linear_state(),
+            Effect::LinearSessionGet => self.fetch_session(),
             Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
             Effect::LinearIssue { issue, generation } => self.fetch_linear_issue(issue, generation),
             Effect::BindHandoff {

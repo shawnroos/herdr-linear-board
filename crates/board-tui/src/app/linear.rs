@@ -64,6 +64,7 @@ pub enum LinearArrival {
     },
     Handoff(Result<LinearBindHandoffResult, LinearFailure>),
     State(Box<Result<LocalState, LinearFailure>>),
+    Session(Box<Result<board_core::protocol::LinearSessionGetResult, LinearFailure>>),
     Wrote {
         write: LinearWrite,
         result: Result<(), WriteFailure>,
@@ -254,6 +255,9 @@ pub struct LinearState {
     /// The marks the open card showed when it was opened (R32), by issue, so
     /// the list outlives their clearing and a linked issue does not show it.
     pub detail_marks: Option<(String, Vec<Mark>)>,
+    /// The issue page's scroll floor. Only the session pane sets it; the
+    /// board scrolls by its selected row alone.
+    pub detail_scroll: usize,
     /// Where an agent-opened board lands, taken by the first good snapshot.
     pub landing: Option<crate::ShowContext>,
 }
@@ -326,6 +330,7 @@ impl LinearState {
             local_in_flight: false,
             local_queued: false,
             detail_marks: None,
+            detail_scroll: 0,
             landing: None,
         }
     }
@@ -711,7 +716,7 @@ fn state_kind_rank(kind: Option<&str>) -> u8 {
 
 /// A document from before `tabs` becomes one unlabelled tab of its `groups`,
 /// and `groups` stays equal to the first tab, as the daemon sends it.
-fn order_tabs(snapshot: &mut LinearSnapshot) {
+pub(super) fn order_tabs(snapshot: &mut LinearSnapshot) {
     if snapshot.tabs.is_empty() && !snapshot.groups.is_empty() {
         snapshot.tabs = vec![LinearTab {
             groups: std::mem::take(&mut snapshot.groups),
@@ -752,6 +757,7 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
             LinearArrival::Handoff(result) => super::linear_picker::handoff_arrived(app, result),
             LinearArrival::State(result) => local_state_arrived(app, *result),
             LinearArrival::Wrote { write, result } => write_arrived(app, write, result),
+            LinearArrival::Session(_) => vec![],
         },
         Msg::Key(k) => linear_key(app, k),
         Msg::LocalStateChanged(signals) => local_state_changed(app, &signals),
@@ -790,7 +796,7 @@ pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
 /// R18 -- a read that lands after the reader has opened another issue is
 /// dropped. Overlapping reads are the normal case once Enter opens a linked
 /// issue in place, so this is the rule, not an edge case.
-fn issue_arrived(
+pub(super) fn issue_arrived(
     app: &mut App,
     issue: &str,
     generation: u64,
@@ -1752,7 +1758,7 @@ pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
 }
 
 /// The same walk over local state: mark text and note bodies are agent text.
-fn sanitise_local(local: LocalState) -> LocalState {
+pub(super) fn sanitise_local(local: LocalState) -> LocalState {
     let space = local.space.clone();
     serde_json::to_value(&local)
         .map(board_core::text::sanitise_json)

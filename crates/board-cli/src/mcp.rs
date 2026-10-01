@@ -3,6 +3,8 @@
 //! stdout carries only the MCP JSON-RPC stream, so nothing here may print
 //! through `render.rs`; diagnostics go to stderr.
 
+use std::path::PathBuf;
+
 use anyhow::{anyhow, Context, Result};
 use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::db::clean_owner;
@@ -279,6 +281,8 @@ struct OpenBoardArgs {
     issue: Option<String>,
     /// Board card id to show.
     card: Option<i64>,
+    /// true opens this session's side pane instead: your bound issue, your lane, or the bind hint. Takes no space, issue or card.
+    session: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -287,6 +291,8 @@ struct CloseBoardArgs {
     space: Option<String>,
     issue: Option<String>,
     card: Option<i64>,
+    /// true closes this session's side pane.
+    session: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -454,20 +460,35 @@ impl BoardMcp {
     }
 
     #[tool(
-        description = "Open a board beside this pane (split) or in a new tab, showing a space, issue or card, without taking focus. Reuses a board already open for the same context.",
+        description = "Open a board beside this pane (split) or in a new tab, showing a space, issue or card, without taking focus. With session: true it opens this session's side pane instead: your bound issue, your lane list, or the bind hint. Reuses a board already open for the same context.",
         annotations(read_only_hint = false)
     )]
     async fn open_board(&self, Parameters(args): Parameters<OpenBoardArgs>) -> CallToolResult {
         let caller = Caller::from_environment();
+        let session = args.session.unwrap_or(false);
+        // The session pane runs in the plugin root, so it reads the agent's
+        // worktree from here; canonical, as the status line sends it.
+        let session_cwd = session.then(|| {
+            let cwd = PathBuf::from(cwd_or_current(None));
+            cwd.canonicalize()
+                .unwrap_or(cwd)
+                .to_string_lossy()
+                .into_owned()
+        });
         let params = BoardPaneOpenParams {
             context: BoardPaneContext {
                 space: args.space,
                 issue: args.issue,
                 card: args.card,
+                session,
             },
             placement: args.placement.unwrap_or_else(|| "split".to_string()),
             origin_socket: caller.origin_socket(),
             origin_pane: caller.origin_pane(),
+            session_cwd,
+            claude_session_id: session
+                .then(|| caller.owner.claude_session_id.clone())
+                .flatten(),
         };
         forward(move |c| c.board_pane_open(&params)).await
     }
@@ -477,13 +498,17 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn close_board(&self, Parameters(args): Parameters<CloseBoardArgs>) -> CallToolResult {
+        let caller = Caller::from_environment();
+        let session = args.session.unwrap_or(false);
         let params = BoardPaneCloseParams {
             context: BoardPaneContext {
                 space: args.space,
                 issue: args.issue,
                 card: args.card,
+                session,
             },
-            origin_socket: Caller::from_environment().origin_socket(),
+            origin_socket: caller.origin_socket(),
+            origin_pane: session.then(|| caller.origin_pane()),
         };
         forward(move |c| c.board_pane_close(&params)).await
     }

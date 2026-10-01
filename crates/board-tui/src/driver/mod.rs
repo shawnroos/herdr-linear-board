@@ -108,6 +108,39 @@ impl Driver {
         driver
     }
 
+    /// The session side pane beside the agent `identity` names. Its first
+    /// reads leave in this constructor, like the Linear board's.
+    pub fn session(
+        client: Box<dyn BoardClient>,
+        platform: Box<dyn PlatformActions>,
+        start: LinearStart,
+        identity: crate::SessionIdentity,
+    ) -> Driver {
+        let (tx, rx) = linear::arrival_channel();
+        let state = LinearState::new(
+            start.workspace_id,
+            start.board_version,
+            start.daemon_version,
+        );
+        let mut driver = Driver {
+            app: App::session(
+                state,
+                crate::app::SessionState::new(identity),
+                start.origin.clone(),
+            ),
+            client,
+            editor: Box::new(RealEditor),
+            origin: start.origin,
+            needs_full_redraw: false,
+            platform,
+            linear_tx: Some(tx),
+            linear_rx: Some(rx),
+            deferred_linear: None,
+        };
+        driver.handle(Msg::LinearRefresh);
+        driver
+    }
+
     /// Apply one effect as if the reducer had emitted it. Exposed so tests
     /// can prove the Linear-mode allow set refuses a card-owning effect.
     pub fn apply_effect(&mut self, eff: Effect) {

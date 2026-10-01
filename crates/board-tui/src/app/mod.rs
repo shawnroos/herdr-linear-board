@@ -46,6 +46,7 @@ mod move_column;
 mod nav;
 mod picker;
 mod reorder_card;
+mod session;
 mod state;
 mod switcher;
 
@@ -57,6 +58,7 @@ pub use linear::{
 pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
 pub use linear_picker::{open_linear_picker, start_bind_handoff, BindTarget, LinearPick};
 pub use nav::clamp_selection;
+pub use session::{session_lane, SessionLane, SessionState, SessionView};
 pub use state::{
     collapse_line, CardFilter, CommentHistoryView, Confirm, ConfirmPurpose, DetailScrollTarget,
     DragKind, DragState, LinearPickerRow, ListOutcome, MoveColumnState, Picker, PickerAction,
@@ -120,6 +122,9 @@ pub enum Screen {
     LinearStaleDaemon,
     /// A type-to-filter Linear list over the board (`App::picker`).
     LinearPicker,
+    /// The session side pane's one screen (`Mode::Session`); its views are
+    /// `SessionState::view`.
+    SessionPane,
 }
 
 impl Screen {
@@ -145,6 +150,9 @@ pub enum Mode {
     #[default]
     Upstream,
     Linear,
+    /// The session side pane beside one agent: Linear-mode reads only, drawn
+    /// by `view::session`.
+    Session,
 }
 
 /// The single archive/restore gate, shared by the board `a` key and the card
@@ -184,6 +192,8 @@ pub struct App {
     pub mode: Mode,
     /// Linear-mode state; `None` in `Mode::Upstream`.
     pub linear: Option<LinearState>,
+    /// `Some` in `Mode::Session` only.
+    pub session: Option<SessionState>,
     pub board: BoardSnapshot,
     /// The project the current board belongs to. Kept in sync from
     /// `project.list` (see `Driver::refresh_projects`) and used by the
@@ -271,6 +281,7 @@ impl App {
         App {
             mode: Mode::Upstream,
             linear: None,
+            session: None,
             board,
             project,
             projects: Vec::new(),
@@ -330,6 +341,21 @@ impl App {
         app.linear = Some(state);
         app.screen = Screen::LinearBoard;
         app.help_return_to = Screen::LinearBoard;
+        app
+    }
+
+    /// The session side pane: the Linear state holds what it reads, the
+    /// session state whose pane it is and which view is up.
+    pub fn session(
+        state: LinearState,
+        session: SessionState,
+        origin_context: OriginContext,
+    ) -> App {
+        let mut app = App::linear(state, origin_context);
+        app.mode = Mode::Session;
+        app.session = Some(session);
+        app.screen = Screen::SessionPane;
+        app.help_return_to = Screen::SessionPane;
         app
     }
 
@@ -502,8 +528,10 @@ impl App {
 
 /// The pure reducer. Mutates `app` and returns effects for the driver.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
-    if app.mode == Mode::Linear {
-        return linear::update_linear(app, msg);
+    match app.mode {
+        Mode::Linear => return linear::update_linear(app, msg),
+        Mode::Session => return session::update_session(app, msg),
+        Mode::Upstream => {}
     }
     match msg {
         Msg::Refresh => vec![Effect::Refetch],
@@ -564,6 +592,7 @@ fn on_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         | Screen::LinearNotBound
         | Screen::LinearError
         | Screen::LinearStaleDaemon
-        | Screen::LinearPicker => vec![],
+        | Screen::LinearPicker
+        | Screen::SessionPane => vec![],
     }
 }

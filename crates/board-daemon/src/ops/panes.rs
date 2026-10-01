@@ -86,7 +86,10 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
 
 const BOARD_PLUGIN_ID: &str = "herdr-board";
 const BOARD_ENTRYPOINT: &str = "board";
+const SESSION_ENTRYPOINT: &str = "session";
 const MAX_SPACE_ID: usize = 64;
+const MAX_CWD: usize = 4096;
+const MAX_CLAUDE_SESSION_ID: usize = 128;
 
 // Held from the recorded-pane check through the record write, so two
 // concurrent opens for one context cannot both open a pane.
@@ -139,6 +142,62 @@ fn checked_context(context: &BoardPaneContext) -> Result<(String, ShowEnv)> {
     Ok((parts.join(";"), env))
 }
 
+/// A session pane shows its calling agent's own issue, so it takes no other
+/// target, and one agent has one: the key is the agent's pane.
+fn session_context(context: &BoardPaneContext, origin_pane: &str) -> Result<String> {
+    if context.space.is_some() || context.issue.is_some() || context.card.is_some() {
+        return Err(Error::BadRequest(
+            "a session pane shows the calling agent's own issue; it takes no space, issue or card"
+                .into(),
+        ));
+    }
+    if origin_pane.trim().is_empty() {
+        return Err(Error::BadRequest(
+            "a session pane needs the agent's origin_pane".into(),
+        ));
+    }
+    Ok(format!("session;pane={origin_pane}"))
+}
+
+fn context_key(context: &BoardPaneContext, origin_pane: Option<&str>) -> Result<(String, ShowEnv)> {
+    if context.session {
+        return Ok((
+            session_context(context, origin_pane.unwrap_or_default())?,
+            vec![],
+        ));
+    }
+    checked_context(context)
+}
+
+/// The agent identity a session pane reads `linear.session.get` with. These
+/// values reach another process's environment, so each is held to its shape.
+fn session_identity(p: &BoardPaneOpenParams) -> Result<ShowEnv> {
+    let mut env = vec![];
+    if let Some(cwd) = &p.session_cwd {
+        let ok =
+            cwd.starts_with('/') && cwd.len() <= MAX_CWD && !cwd.chars().any(|c| c.is_control());
+        if !ok {
+            return Err(Error::BadRequest(format!(
+                "session cwd {cwd:?} is not an absolute path"
+            )));
+        }
+        env.push(("BOARD_SESSION_CWD", cwd.clone()));
+    }
+    if let Some(id) = &p.claude_session_id {
+        let ok = (1..=MAX_CLAUDE_SESSION_ID).contains(&id.len())
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+        if !ok {
+            return Err(Error::BadRequest(format!(
+                "claude session id {id:?} is not a session id"
+            )));
+        }
+        env.push(("BOARD_SESSION_CLAUDE", id.clone()));
+    }
+    Ok(env)
+}
+
 fn origin_socket_key(origin_socket: &str) -> Result<(PathBuf, String)> {
     let socket = crate::herdr_conn::normalize_socket(Path::new(origin_socket), "origin")?;
     let key = socket.to_string_lossy().into_owned();
@@ -162,7 +221,10 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
             )))
         }
     };
-    let (context_key, show_env) = checked_context(&p.context)?;
+    let (context_key, mut show_env) = context_key(&p.context, Some(&p.origin_pane))?;
+    if p.context.session {
+        show_env.extend(session_identity(&p)?);
+    }
     if p.origin_pane.trim().is_empty() {
         return Err(Error::BadRequest(
             "board.pane.open requires a non-empty origin_pane".into(),
@@ -229,10 +291,31 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
         d.db_path.to_string_lossy().into_owned(),
     );
     env.extend(show_env.into_iter().map(|(k, v)| (k.to_string(), v)));
+    if p.context.session {
+        if origin.workspace_id.is_empty() {
+            return Err(Error::HerdrUnavailable(format!(
+                "pane.get {} named no workspace",
+                origin.pane_id
+            )));
+        }
+        // Raw, as the agent's herdr exported it: `linear.session.get` keys
+        // the cached snapshot on this exact string.
+        env.insert("BOARD_SESSION_SOCKET".into(), p.origin_socket.clone());
+        env.insert("BOARD_SESSION_PANE".into(), origin.pane_id.clone());
+        env.insert(
+            "BOARD_SESSION_WORKSPACE".into(),
+            origin.workspace_id.clone(),
+        );
+    }
     let opened = client
         .plugin_pane_open(&PluginPaneOpenParams {
             plugin_id: BOARD_PLUGIN_ID.into(),
-            entrypoint: BOARD_ENTRYPOINT.into(),
+            entrypoint: if p.context.session {
+                SESSION_ENTRYPOINT
+            } else {
+                BOARD_ENTRYPOINT
+            }
+            .into(),
             placement: Some(match placement {
                 BoardPanePlacement::Tab => PluginPanePlacement::Tab,
                 BoardPanePlacement::Split => PluginPanePlacement::Split,
@@ -264,7 +347,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
 /// Close the board recorded for this context. Only a recorded pane is ever
 /// closed; one that is already gone just loses its row.
 pub(super) fn board_pane_close(d: &Arc<Daemon>, p: BoardPaneCloseParams) -> Result<Value> {
-    let (context_key, _) = checked_context(&p.context)?;
+    let (context_key, _) = context_key(&p.context, p.origin_pane.as_deref())?;
     let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
     let _serial = BOARD_PANES.lock().unwrap_or_else(PoisonError::into_inner);
     let row = d

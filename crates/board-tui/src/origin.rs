@@ -102,3 +102,41 @@ fn is_space_id(space: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
+
+/// The agent a session pane is beside (KTD10), as the daemon passed it in
+/// `BOARD_SESSION_*`. The pane's own `HERDR_PANE_ID` names the split, not the
+/// agent, so none of this is read from herdr's variables except the space.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub space: String,
+    pub herdr_socket: Option<String>,
+    pub herdr_pane_id: Option<String>,
+    pub claude_session_id: Option<String>,
+    pub cwd: Option<String>,
+}
+
+impl SessionIdentity {
+    /// `None` without a space to read; the split shares its agent's space, so
+    /// herdr's own workspace id stands in for a missing one.
+    pub fn from_environment() -> Option<SessionIdentity> {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let space = var("BOARD_SESSION_WORKSPACE").or_else(|| var("HERDR_WORKSPACE_ID"))?;
+        Some(SessionIdentity {
+            space,
+            herdr_socket: var("BOARD_SESSION_SOCKET"),
+            herdr_pane_id: var("BOARD_SESSION_PANE"),
+            claude_session_id: var("BOARD_SESSION_CLAUDE"),
+            cwd: var("BOARD_SESSION_CWD"),
+        })
+    }
+
+    pub fn params(&self) -> board_core::protocol::LinearSessionGetParams {
+        board_core::protocol::LinearSessionGetParams {
+            space: self.space.clone(),
+            herdr_socket: self.herdr_socket.clone(),
+            herdr_pane_id: self.herdr_pane_id.clone(),
+            claude_session_id: self.claude_session_id.clone(),
+            cwd: self.cwd.clone(),
+        }
+    }
+}

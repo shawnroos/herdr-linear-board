@@ -112,6 +112,8 @@ pub enum Effect {
     /// Linear mode: fetch `linear.state.get` for the space. The reducer marks
     /// the read in flight before emitting it.
     LinearStateGet,
+    /// Session pane: fetch `linear.session.get` for the agent it is beside.
+    LinearSessionGet,
     /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
     /// project id). The reducer marks the read in flight before emitting it.
     LinearList {

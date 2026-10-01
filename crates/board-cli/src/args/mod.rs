@@ -50,7 +50,12 @@ pub(crate) struct Cli {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Cmd {
     /// Open the kanban TUI (auto-starts the daemon).
-    Tui,
+    Tui {
+        /// The session side pane beside one agent, whose identity the
+        /// daemon passes in BOARD_SESSION_* when it opens the pane.
+        #[arg(long)]
+        session: bool,
+    },
     /// Run or inspect the daemon.
     Daemon {
         /// Deprecated: use `board daemon start --foreground`.

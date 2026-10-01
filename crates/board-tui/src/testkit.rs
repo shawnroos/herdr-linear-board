@@ -28,7 +28,7 @@ use crate::app::{App, Msg};
 use crate::editor::FakeEditor;
 use crate::forms::{Field, FieldId, FieldKind, Form};
 use crate::view::view;
-use crate::{Driver, LinearStart, OriginContext, PlatformActions, ShowContext};
+use crate::{Driver, LinearStart, OriginContext, PlatformActions, SessionIdentity, ShowContext};
 
 // -- form introspection ------------------------------------------------------
 
@@ -716,4 +716,15 @@ pub fn methods(log: &RequestLog) -> Vec<String> {
         .iter()
         .map(|(method, _)| method.clone())
         .collect()
+}
+
+/// A session-pane driver over `client` with a fake platform, beside the
+/// agent `identity` names, in space `identity.space`.
+pub fn session_driver<C: BoardClient + 'static>(client: C, identity: SessionIdentity) -> Driver {
+    let (platform, _, _) = FakePlatform::new();
+    let start = LinearStart {
+        workspace_id: identity.space.clone(),
+        ..linear_start()
+    };
+    Driver::session(Box::new(client), Box::new(platform), start, identity)
 }

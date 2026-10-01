@@ -68,6 +68,78 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
     )
 }
 
+/// The only effects the session pane executes: reads, and closing itself
+/// (KTD10). It writes nothing, not even its own pane title.
+pub(super) fn session_allows(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    matches!(
+        eff,
+        Effect::LinearSessionGet
+            | Effect::LinearSnapshot { force: false }
+            | Effect::LinearStateGet
+            | Effect::LinearIssue { .. }
+            | Effect::Quit
+    )
+}
+
+/// The effects the session pane refuses. No catch-all, as for Linear mode.
+#[cfg(test)]
+pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    match eff {
+        Effect::LinearSessionGet
+        | Effect::LinearStateGet
+        | Effect::LinearIssue { .. }
+        | Effect::Quit => false,
+        Effect::LinearSnapshot { force } => *force,
+        Effect::Refetch
+        | Effect::LinearList { .. }
+        | Effect::FocusPane(_)
+        | Effect::OpenIssueUrl(_)
+        | Effect::CopyWorktreePath { .. }
+        | Effect::SetLinearPaneTitle(_)
+        | Effect::BindHandoff { .. }
+        | Effect::LinearMarkClear { .. }
+        | Effect::LinearShowAccept { .. }
+        | Effect::LinearShowDismiss { .. }
+        | Effect::LinearBind { .. }
+        | Effect::LoadProjects
+        | Effect::LoadProjectPicker
+        | Effect::LoadBoardPicker { .. }
+        | Effect::SelectProject { .. }
+        | Effect::SelectBoard(_)
+        | Effect::ProjectCreate(_)
+        | Effect::BoardCreate(_)
+        | Effect::LoadMoveColumns { .. }
+        | Effect::LoadDetail(_)
+        | Effect::CardCreate(_)
+        | Effect::CardUpdate(_)
+        | Effect::CardDelete(_)
+        | Effect::CardDuplicate(_)
+        | Effect::CardArchive { .. }
+        | Effect::BoardArchive { .. }
+        | Effect::ProjectArchive { .. }
+        | Effect::CardMove(_)
+        | Effect::ColumnCreate(_)
+        | Effect::ColumnUpdate(_)
+        | Effect::ColumnReorder { .. }
+        | Effect::ColumnDelete { .. }
+        | Effect::CommentAdd { .. }
+        | Effect::CommentUpdate { .. }
+        | Effect::CommentDelete { .. }
+        | Effect::LoadCommentHistory { .. }
+        | Effect::TemplateApply(_)
+        | Effect::RunCancel(_)
+        | Effect::RunRetry(_)
+        | Effect::RunDone(..)
+        | Effect::FocusRun(..)
+        | Effect::EditFocusedTextArea
+        | Effect::LoadFormOptions
+        | Effect::SetPaneTitle(_)
+        | Effect::ReloadPickers => true,
+    }
+}
+
 /// The effects Linear mode refuses, named one by one. With [`linear_allows`]
 /// this classifies every effect: the match has no catch-all, so a new variant
 /// does not build until someone places it.
@@ -90,7 +162,8 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::LinearShowDismiss { .. }
         | Effect::LinearBind { .. }
         | Effect::Quit => false,
-        Effect::LoadProjects
+        Effect::LinearSessionGet
+        | Effect::LoadProjects
         | Effect::LoadProjectPicker
         | Effect::LoadBoardPicker { .. }
         | Effect::SelectProject { .. }
@@ -270,6 +343,17 @@ impl Driver {
             LINEAR_STATE_CLIENT_TIMEOUT,
             move |client| client.linear_state_get(&params),
             |result| LinearArrival::State(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_session(&mut self) {
+        let Some(params) = self.app.session.as_ref().map(|s| s.identity.params()) else {
+            return;
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.linear_session_get(&params),
+            |result| LinearArrival::Session(Box::new(result)),
         );
     }
 
@@ -494,7 +578,7 @@ impl Driver {
     }
 
     pub fn on_daemon_signals(&mut self, changed: bool, reconnected: bool) {
-        if self.app.mode == Mode::Linear {
+        if matches!(self.app.mode, Mode::Linear | Mode::Session) {
             if reconnected {
                 if let Some(path) = self.reconnect_path() {
                     self.reconnect(&path);
@@ -688,6 +772,7 @@ mod tests {
             Effect::Quit,
             Effect::LinearSnapshot { force: false },
             Effect::LinearStateGet,
+            Effect::LinearSessionGet,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
                 id: None,
@@ -745,6 +830,53 @@ mod tests {
         // The number is pinned so widening what this mode can do is a
         // deliberate edit rather than a side effect of adding an effect.
         assert_eq!(allowed, 15, "the allow set grew or shrank");
+    }
+
+    #[test]
+    fn the_session_pane_allows_reads_and_quit_and_names_every_other_effect() {
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        for eff in &effects {
+            assert_ne!(
+                session_allows(eff),
+                session_denies(eff),
+                "{:?} must be allowed or denied, not both or neither",
+                std::mem::discriminant(eff)
+            );
+        }
+        let allowed: Vec<String> = effects
+            .iter()
+            .filter(|e| session_allows(e))
+            .map(|e| format!("{:?}", std::mem::discriminant(e)))
+            .collect();
+        // Session read, snapshot, local state, issue document and quit. A
+        // forced snapshot is refused: the pane never skips the daemon's cache.
+        assert_eq!(allowed.len(), 5, "the session allow set grew or shrank");
+        assert!(session_denies(&Effect::LinearSnapshot { force: true }));
+    }
+
+    #[cfg(feature = "fake-client")]
+    #[test]
+    fn every_write_the_session_pane_refuses_toasts_and_builds_no_request() {
+        use crate::testkit::{methods, session_driver, RecordingClient};
+        let client = board_core::client::FakeBoardClient::new().unwrap();
+        let (client, log) = RecordingClient::new(client);
+        let mut driver = session_driver(client, crate::SessionIdentity::default());
+        let before = methods(&log);
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        for eff in effects.into_iter().filter(session_denies) {
+            let name = format!("{:?}", std::mem::discriminant(&eff));
+            driver.app.toast = None;
+            driver.apply_effect(eff);
+            assert_eq!(
+                driver.app.toast.as_ref().map(|t| t.text.as_str()),
+                Some("not available in the session pane"),
+                "{name}"
+            );
+        }
+        assert_eq!(methods(&log), before, "no request left");
+        assert!(!driver.app.should_quit);
     }
 
     #[cfg(feature = "fake-client")]

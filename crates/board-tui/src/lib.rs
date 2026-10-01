@@ -36,5 +36,5 @@ pub mod view;
 pub mod widgets;
 
 pub use driver::{Driver, LinearStart, PlatformActions, RealPlatform};
-pub use origin::{Landing, OriginContext, ShowContext};
-pub use runtime::{run, run_linear, run_with_board};
+pub use origin::{Landing, OriginContext, SessionIdentity, ShowContext};
+pub use runtime::{run, run_linear, run_session, run_with_board};
