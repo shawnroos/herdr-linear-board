@@ -63,14 +63,6 @@ HRPC="$E2E_LIB_DIR/hrpc.py"
 E2E_FAKE_PI_BIN_DIR="$E2E_LIB_DIR/fake-bin"
 E2E_PROCESS_IDENTITY="$E2E_LIB_DIR/process_identity.py"
 
-# Derived, never copied: a literal here went stale the moment the floor moved to
-# 0.5.0 and left 40-linear-mode stubbing a plugin the board then refused.
-E2E_PLUGIN_VERSION_FLOOR="$(
-  sed -n 's/.*PLUGIN_VERSION_FLOOR: &str = "\([^"]*\)".*/\1/p' \
-    "$E2E_LIB_DIR/../crates/board-core/src/lib.rs"
-)"
-[ -n "$E2E_PLUGIN_VERSION_FLOOR" ] || { echo "e2e/lib.sh: could not read PLUGIN_VERSION_FLOOR" >&2; exit 1; }
-export E2E_PLUGIN_VERSION_FLOOR
 export BOARD_BIN
 
 e2e_identity_key_ensure() {
@@ -1126,6 +1118,39 @@ e2e_owned_process_stop() {
   wait "$pid" 2>/dev/null || true
   e2e_process_resource_release "$logical" || return 1
   unset 'E2E_OWNED_PROCESS_PIDS[$logical]' 'E2E_OWNED_PROCESS_IDENTITIES[$logical]'
+}
+
+# e2e_fake_linear_start <fixture.json> — an owned loopback stand-in for Linear's
+# GraphQL endpoint (fake-linear.py; the fixture format is in its docstring).
+# Request bodies land one per line in $E2E_LINEAR_REQUESTS. Call it before
+# e2e_daemon_start: it exports the BOARD_LINEAR_API_URL and placeholder
+# LINEAR_API_KEY the daemon reads at startup.
+e2e_fake_linear_start() {
+  local fixture="$1" python port_file="$E2E_TMP/fake-linear.port" i
+  E2E_LINEAR_REQUESTS="$E2E_TMP/linear-requests.jsonl"
+  : >"$E2E_LINEAR_REQUESTS"
+  python="$(type -P python3)"
+  e2e_owned_process_start helper fake-linear "$port_file" "$E2E_LINEAR_REQUESTS" \
+    "$E2E_TMP/fake-linear.log" "$python" "$E2E_LIB_DIR/fake-linear.py" \
+    --port-file "$port_file" --log "$E2E_LINEAR_REQUESTS" --fixture "$fixture"
+  for (( i=0; i<100; i++ )); do
+    [ -s "$port_file" ] && break
+    sleep 0.02
+  done
+  [ -s "$port_file" ] || fail "fake Linear did not report its port"
+  BOARD_LINEAR_API_URL="http://127.0.0.1:$(cat "$port_file")/graphql"
+  LINEAR_API_KEY=lin_api_e2e_placeholder
+  export BOARD_LINEAR_API_URL LINEAR_API_KEY E2E_LINEAR_REQUESTS
+}
+
+# linear_requests [needle] — how many requests fake Linear received, or how
+# many whose body contains <needle>.
+linear_requests() {
+  python3 - "$E2E_LINEAR_REQUESTS" "${1:-}" <<'PY'
+import json,sys
+lines=[l for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
+print(sum(1 for l in lines if sys.argv[2] in json.dumps(json.loads(l))))
+PY
 }
 
 e2e_proxy_start() {

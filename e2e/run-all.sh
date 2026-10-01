@@ -83,12 +83,12 @@ SCENARIOS=(
   30-pane-reuse.sh 31-managed-codex.sh 32-managed-opencode.sh
   33-reorder-card-tui.sh 34-duplicate.sh 35-rescue-dead-workspace.sh
   36-managed-antigravity.sh 37-multi-project.sh 38-board-project-archive.sh
-  39-managed-slow-provider.sh 40-linear-mode.sh 41-linear-bind-handoff.sh
+  39-managed-slow-provider.sh 40-linear-mode.sh 41-linear-bind-space.sh
   42-linear-issue.sh 43-open-board-pane.sh 44-linear-report-link.sh
   45-session-side-pane.sh
 )
 # Scenarios that start the person's real agent CLI; --provider-free leaves them out.
-PROVIDER_SCENARIOS=(41-linear-bind-handoff.sh)
+PROVIDER_SCENARIOS=()
 run_this() {
   if [ "$PROVIDER_FREE" -eq 1 ]; then
     local p

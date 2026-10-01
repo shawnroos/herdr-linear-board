@@ -111,7 +111,7 @@ class LiveE2ECIContractTests(unittest.TestCase):
 
     def test_ci_leaves_out_every_scenario_that_starts_a_real_agent(self) -> None:
         runner = (ROOT / "e2e" / "run-all.sh").read_text(encoding="utf-8")
-        self.assertIn("PROVIDER_SCENARIOS=(41-linear-bind-handoff.sh)", runner)
+        self.assertIn("PROVIDER_SCENARIOS=()", runner)
         self.assertIn("--provider-free", self.wrapper)
 
     def test_e2e_preflights_and_real_claude_pin_the_same_exact_contract(self) -> None:

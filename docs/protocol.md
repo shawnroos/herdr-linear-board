@@ -71,9 +71,7 @@ at each operation boundary rather than treated as a one-time startup check:
 - New pane operations are checked before `pane.get`/`pane.focus` for `run.focus` and `pane.focus`,
   `pane.get`/`plugin.pane.open`/`plugin.pane.close` for `board.pane.open` and `board.pane.close`,
   `notification.show` for `board.notify`,
-  `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, `workspace.list`/`tab.create`/`agent.start`
-  for `linear.bind_handoff` (its closing `pane.close` after a failed start uses the same checked
-  connection), and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
+  `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
   configured runner used by placement and rescue.
 
 There is one deliberate exception: cleanup and liveness for panes already owned by a daemon run.
@@ -106,8 +104,8 @@ and mutates the database.
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
 `space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
 `board.pane.open`, `board.pane.close`, `board.notify`,
-`linear.snapshot`, `linear.list`, `linear.bind_handoff`, and the Linear local-state methods
-(`linear.state.get`, `linear.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
+`linear.snapshot`, `linear.list`, and the Linear local-state methods
+(`linear.state.get`, `linear.bind`, `linear.space.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
 `linear.note.*`, `linear.show.*`, `linear.session.get`, `linear.activity.*`, `linear.import`), in addition to the
 existing board, column, card, comment, and run wrappers. `space.list(None)` deliberately serializes
 as `{}` while a named session serializes as `{ "session": "..." }`, preserving the v1 wire contract.
@@ -671,37 +669,8 @@ or `workspace.list` (the spaces list) on `origin_socket`.
   tell "this issue could not be read" from "this plugin has no such script" (error 7). Clients wait
   at most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape; otherwise the
   same 6 and 7 the ops above name.
-- `linear.bind_handoff {space, project, view?, issue?, working_directory?, origin_socket}` →
-  `{tab_id, pane_id}` — start the work plugin's interactive bind in a new tab of the **caller's
-  own** herdr session. Every id must match the `linear.list` id shape; `view` and `issue` are
-  exclusive. `working_directory`, when given, must be absolute and name an existing directory that,
-  fully resolved (symlinks included), lies inside the plugin's projects root or worktrees root:
-  `HERDR_LINEAR_PROJECTS_ROOT` (the deprecated `HERDR_LINEAR_SLATE_ROOT` second, else
-  `~/projects`) and `HERDR_LINEAR_WORKTREES_ROOT` (else `~/worktrees`), read from the daemon's
-  environment and resolved the way the plugin's `lib/contain.sh` resolves them. With no
-  `working_directory` the tab opens in the projects root, where a space or view bind runs. Every
-  check runs before any herdr call. The daemon then opens a gated connection to `origin_socket`,
-  confirms with `workspace.list` that `space` is in that session, and creates one unfocused tab
-  labelled `bind` in `space`, in the working directory, with an empty environment. In that tab's
-  root pane it calls `agent.start` with kind `claude`, a name derived from the new tab id
-  (`bind-<tab id>`, lowercased, at most 32 characters), and exactly one argument, the bind line:
-  `/work:bind --space <space> --project <project>`, followed by ` --view <view>` or
-  ` --issue <issue>` when given. A positional first argument opens a normal interactive Claude
-  conversation whose first turn is that line; `agent.prompt` is not used (see
-  [`herdr.md`](herdr.md) → Linear bind handoff). While the new pane answers `agent_pane_busy`, the
-  daemon retries `agent.start` with a doubling wait (250 ms up to 5 s a step) for at most 90 s, and
-  stops retrying when the daemon stops or the client disconnects. Any failure after the tab exists
-  closes the tab's pane, which closes the tab; a pane already gone counts as closed, and a failed
-  close is appended to the error message. The daemon writes nothing: no board row, no plugin
-  record, no Linear object. The bind skill's own confirmation, asked in the new Claude session, is
-  the only write gate, and it orders the write; it does not prove a person saw it. The result names
-  the new tab and the pane running Claude; the TUI focuses that pane with `pane.focus`. Clients
-  wait at most `LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT` (300 s). There is no CLI verb (see
-  `board skill` → Linear mode). Error 1 for an id of the wrong shape, both `view` and `issue`, or a
-  `working_directory` that is relative, missing, not a directory, or outside both roots (or no
-  `working_directory` and no projects root); error 2 for a `space` the caller's session does not
-  list; error 4 for an unusable `origin_socket`, a socket that fails the protocol gate, or a
-  refused `workspace.list`, `tab.create` or `agent.start` (including a pane still busy at 90 s).
+- `linear.bind_handoff` — retired. The daemon answers it as an unknown method (error 1); bind a
+  space with `linear.space.bind`.
 
 ### linear local state
 
@@ -768,6 +737,13 @@ that space, or the space's shared Linear read (see `linear.snapshot`) lists it. 
   its `detail.worktree_path`, the bind clears every `suggestion` on the issue, in every space, and
   lists them in `cleared_suggestions` (omitted when empty); each space they sat in gets its own
   event. Error 1 when `cwd` is relative, missing, or not inside a git worktree; error 3 when another worktree holds the issue — the message names that worktree.
+- `linear.space.bind {space, project, view?, claims?}` → `{before, after}`: binds herdr space
+  `space` to Linear project `project`, and to that project's custom view `view` when given, in the
+  herdr session `claims.herdr_socket` names (else `default`), the session the snapshot read uses.
+  Rebinding replaces the space's binding; `before` is the replaced one, and the next
+  `linear.snapshot` reads the new project or view. No Linear call is made.
+  Error 1 when `space` is empty or `project` or `view` is not 1 to 64 ASCII letters, digits, `_`
+  or `-` starting with a letter or digit.
 - `linear.unbind {cwd, space?, claims?}` → `{before, after: null}`. A worktree that no longer
   exists is found by `cwd` exactly as given. Error 2 when the worktree has no binding.
 - `linear.grouping.get {space?}` → `{config, resolved}`: the whole config
