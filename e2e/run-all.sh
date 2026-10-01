@@ -84,7 +84,7 @@ SCENARIOS=(
   33-reorder-card-tui.sh 34-duplicate.sh 35-rescue-dead-workspace.sh
   36-managed-antigravity.sh 37-multi-project.sh 38-board-project-archive.sh
   39-managed-slow-provider.sh 40-linear-mode.sh 41-linear-bind-handoff.sh
-  42-linear-issue.sh
+  42-linear-issue.sh 43-open-board-pane.sh 44-linear-report-link.sh
 )
 # Scenarios that start the person's real agent CLI; --provider-free leaves them out.
 PROVIDER_SCENARIOS=(41-linear-bind-handoff.sh)
