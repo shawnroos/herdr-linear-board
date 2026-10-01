@@ -93,7 +93,7 @@ fn assert_silent_success(out: &Output) {
     );
 }
 
-fn git_worktree(parent: &Path, name: &str) -> PathBuf {
+pub(crate) fn git_worktree(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(path.join(".git")).unwrap();
     path.canonicalize().unwrap()
@@ -101,7 +101,13 @@ fn git_worktree(parent: &Path, name: &str) -> PathBuf {
 
 /// A daemon whose session `default` has space `wA` bound to a Linear project,
 /// seeded through the work-store import.
-fn daemon_with_bound_space() -> (TestDaemon, tempfile::TempDir) {
+pub(crate) fn daemon_with_bound_space() -> (TestDaemon, tempfile::TempDir) {
+    daemon_with_bound_space_and(&[])
+}
+
+pub(crate) fn daemon_with_bound_space_and(
+    extra: &[(&str, &str)],
+) -> (TestDaemon, tempfile::TempDir) {
     let store = tempfile::tempdir().unwrap();
     let workspaces = store.path().join("workspaces");
     std::fs::create_dir_all(&workspaces).unwrap();
@@ -118,7 +124,9 @@ fn daemon_with_bound_space() -> (TestDaemon, tempfile::TempDir) {
     )
     .unwrap();
     std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let td = TestDaemon::start(&[("HERDR_LINEAR_STORE_DIR", store.path().to_str().unwrap())]);
+    let mut env = vec![("HERDR_LINEAR_STORE_DIR", store.path().to_str().unwrap())];
+    env.extend_from_slice(extra);
+    let td = TestDaemon::start(&env);
     td.client()
         .linear_import(&LinearImportParams { dry_run: false })
         .unwrap();

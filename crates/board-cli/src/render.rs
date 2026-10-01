@@ -12,8 +12,9 @@ use board_core::capability::HarnessCapabilities;
 use board_core::model::{Board, Card, Column, Comment, CommentHistory, CommentRecord};
 use board_core::protocol::{
     BoardSnapshot, CardDetail, DaemonStatus, LinearImportItem, LinearImportKind,
-    LinearImportResult, LinearListEnvelope, LinearListResult, LinearListStatus, ProjectDetail,
-    ProjectListResult, ProjectOpenResult, SessionListResult, SpaceListResult,
+    LinearImportResult, LinearListEnvelope, LinearListResult, LinearListStatus,
+    LinearSessionGetResult, ProjectDetail, ProjectListResult, ProjectOpenResult, SessionListResult,
+    SpaceListResult,
 };
 use board_core::text::strip_control_and_format;
 use serde::{Serialize, Serializer};
@@ -509,6 +510,54 @@ impl Render for SessionListResult {
                     },
                 ]
             })
+            .collect();
+        table(out, &rows)
+    }
+}
+
+impl Render for LinearSessionGetResult {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        let clean = |text: &str| strip_control_and_format(text);
+        let binding = self.binding.as_ref();
+        let marks: Vec<String> = self
+            .marks
+            .iter()
+            .map(|mark| match &mark.text {
+                Some(text) => format!("{} ({})", mark.kind.as_str(), clean(text)),
+                None => mark.kind.as_str().to_string(),
+            })
+            .collect();
+        let rows = [
+            ("space", clean(&self.space)),
+            (
+                "space bound",
+                if self.space_bound { "yes" } else { "no" }.to_string(),
+            ),
+            (
+                "issue",
+                binding.map(|b| clean(&b.issue)).unwrap_or_default(),
+            ),
+            (
+                "worktree",
+                binding.map(|b| clean(&b.worktree_path)).unwrap_or_default(),
+            ),
+            (
+                "bound at",
+                binding
+                    .and_then(|b| b.bound_at.as_deref())
+                    .map(clean)
+                    .unwrap_or_default(),
+            ),
+            (
+                "column",
+                self.column.as_deref().map(clean).unwrap_or_default(),
+            ),
+            ("marks", marks.join(", ")),
+            ("pending requests", self.pending_requests.to_string()),
+        ];
+        let rows: Vec<Vec<String>> = rows
+            .into_iter()
+            .map(|(key, value)| vec![key.to_string(), value])
             .collect();
         table(out, &rows)
     }

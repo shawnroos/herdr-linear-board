@@ -123,6 +123,11 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             super::linear_report::run();
             Ok(())
         }
+        LinearCmd::Session { workspace_id } => super::linear_session::session(workspace_id, json),
+        LinearCmd::StatusLine => {
+            super::linear_session::status_line(json);
+            Ok(())
+        }
     }
 }
 
