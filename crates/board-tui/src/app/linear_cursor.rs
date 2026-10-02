@@ -127,7 +127,6 @@ impl Focus {
     }
 }
 
-/// The columns one page shows: `visible` of `total`, from `start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Page {
     pub start: usize,
@@ -147,7 +146,6 @@ impl Page {
         }
     }
 
-    /// The shown column beside `side`'s button.
     fn edge(&self, side: Side) -> usize {
         match side {
             Side::Left => self.start,
