@@ -495,13 +495,24 @@ one headless (no client attached), one with a client attached as
   the pane fills its tab when it is the only entry in `panes`, or when `zoomed` is true and
   `focused_pane_id` is the pane. Re-read the layout on `layout_updated` and on `pane_focused`/`tab_focused`.
 
-**Known gap: managed Codex readiness on 0.9.3.** The provider-free suite passes on 0.9.3 except
-`e2e/31-managed-codex.sh`, which failed every run (6 of 6) and passes on 0.9.0 (2 of 2). The fake
-`codex` reports `pane.report_agent_session` and `pane.report_agent {state: "idle"}`, and both
-return `ok`, but `agent.get` keeps the pane at `launch_pending: true`, `agent_status: "unknown"`
-with no `interactive_ready`, so the daemon's 30 s readiness wait ends in "spawn failed". The
-0.9.1/0.9.2 release notes change Codex screen detection (#4092, #4099, #4507) and self-reported
-agents (#4687); which change causes this, and whether a real Codex is affected, is not yet known.
+**Managed Codex readiness comes from the screen.** Herdr drops `pane.report_agent` state from
+the reserved `herdr:codex` source and keeps only its session reference (both 0.9.0 and 0.9.3), so
+a managed Codex pane reaches `interactive_ready` only through screen detection. Herdr 0.9.0 marked
+any non-spinner OSC title idle. Herdr 0.9.2 removed that rule (#4507): a Codex screen that matches
+no rule is `unknown`, and a launch-pending Codex becomes interactive only when the last 12 rows
+show the empty-composer placeholder `› Ask Codex to do anything` without `model: loading` or
+`Resuming session`. The fake `codex` prints that placeholder, so mint and fork pass on 0.9.3. A
+real Codex that does not show that exact string in those rows ends in "spawn failed" on 0.9.3.
+
+**Known gap: managed Codex reuse on 0.9.3.** The 0.9.3 Codex manifest has no idle rule, so an
+idle Codex reads `agent_status: "unknown"` (`codex_state_ambiguous`). Same-pane reuse accepts
+only Idle/Working/Blocked/Done (`spawner/placement/alloc.rs` reuse eligibility, and
+`await_reuse_ready` in `spawner/herdr/managed.rs`), so a same-conversation hop silently opens a
+fresh pane and resumes the thread there. The run still ends ok, but `e2e/31-managed-codex.sh`
+fails on 0.9.3 at "the resume hop must reuse the mint pane". A real Codex is affected the same
+way. Accepting `unknown` as quiescent is not a safe fix by itself: herdr made it ambiguous because
+a working Codex can also read `unknown` (#4507). The Herdr watcher also ignores `unknown`, so
+idle-based watching never sees a quiescent Codex on 0.9.3.
 
 ## The board uses herdr's theme
 

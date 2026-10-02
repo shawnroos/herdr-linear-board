@@ -212,8 +212,12 @@ with open(path, "x", encoding="utf-8") as target:
 os.chmod(path, 0o600)
 PY
 fi
+# Herdr ignores pane.report_agent state from the reserved herdr:codex source,
+# so the screen is the only readiness signal. Herdr 0.9.0 marked any OSC title
+# idle; 0.9.3 dropped that rule and waits for real Codex's empty-composer
+# placeholder ("› Ask Codex to do anything" in the last 12 rows). Keep both.
 printf '\033]0;Codex\007'
-printf '\n──────────────────────────────────────────────────────\n❯ \n──────────────────────────────────────────────────────\n'
+printf '\n› Ask Codex to do anything\n'
 if [ "${FAKE_CODEX_NO_SESSION:-0}" = "1" ]; then
   # report ONLY the idle lifecycle (comment above explains the per-run
   # sentinel: env cannot cross into the daemon's split-pane launch env).
