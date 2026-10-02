@@ -71,6 +71,16 @@ Every card has the same height (13 rows), and selecting one never moves text.
 - **Unfocused columns:** muted tones (section 1).
 - **Marks keep their colour everywhere:** `!` red, `?` peach, `✓` green, `◇` mauve, `◉` blue.
 - **Width:** cards cap at 64 cells. A column whose inside is ≥ 81 cells shows cards 2-up (minimum 40 each, 1-cell gap). See `responsive-board.md`.
+- **Newest agent note:** when a card has one, it replaces the last description line as `› note`.
+
+## 3b. Existing pieces, placed (Shawn, 2026-10-02)
+
+| Today | In the redesign |
+|---|---|
+| Linear view tabs (`[Frontend]  Backend`, `[` `]`) | A second powerline row above the column titles, in the same style |
+| Agent show-requests (pinned `◉` line, `a` accept / `x` dismiss) | A bottom-bar alert per request. Selecting it in the bar and pressing `a` / `x` acts on it |
+| Spaces strip (`s`, unmapped tabs `t`) | Only on the "not bound" screen |
+| Newest agent note (`› note` row) | Replaces the card's last description line when present |
 
 ## 4. Focus and keys
 
@@ -82,7 +92,10 @@ Every card has the same height (13 rows), and selecting one never moves text.
 | Return | Card: open the issue. Lane: fold or unfold |
 | Esc | Clear the selection: nothing focused; all columns and cards in their default, unmuted state; all lanes active |
 | `?` | Open the bottom bar |
+| `p` | Focus the pinned issue panel (Esc or `p` returns) |
 | ctrl+q | Quit (plain `q` does nothing) |
+
+New keys win over today's bindings (Shawn, 2026-10-02): `?` opens the bar, and the old help sheet becomes a `keys` item in it. `o` means Overlay in the issue view, and focusing a pane moves to Return on its row. `q` no longer quits, and Esc deselects.
 
 When nothing is selected, an arrow key, Tab or Return selects again in the last column you used.
 
@@ -98,6 +111,7 @@ When nothing is selected, an arrow key, Tab or Return selects again in the last 
 
 Open modes are in `responsive-board.md` (modal, expand `e`, pinned overlay `o`, narrow).
 
+- **Header and bottom bar are full width; the body has a 2-cell inset on each side.** This applies in every mode, including the narrow layout and the pinned panel.
 - **Header:** powerline `ID │ status`, then the breadcrumb. In wide views, buttons are right-aligned (`󰁌 Expand e`, `Overlay o`; `Window e` when expanded; `Unpin o` when pinned).
 - **Two columns:** a scrolling main column (100-cell reading cap) and a 40-cell sidebar docked to the right edge at full height. Below 100 cells, one column.
 - **Main column:** title, description, ATTACHMENTS, PULL REQUESTS, ACTIVITY. Section lines use the lane line style.
@@ -112,3 +126,15 @@ Open modes are in `responsive-board.md` (modal, expand `e`, pinned overlay `o`, 
 - **`gh`:** everything git-related for each PR: state, mergeability and the blocker, checks (deduplicated to the latest run per check), diff stats, reviews, and the preview URL from deployments.
 
 See `issue-detail-inventory.md`.
+
+## 8. Tab and split names (Shawn, 2026-10-02)
+
+Every tab and split in the board's space always has a name, derived from its scope:
+
+| Scope | Name |
+|---|---|
+| Tab bound to an issue | `WEB-101 · <title>` |
+| Split bound to an issue | `WEB-101 · <agent>` |
+| Anything else | `<repo or folder> · <agent>`, or the folder alone with no agent |
+
+Names are capped at 40 cells. A name set by hand is never overwritten: the board replaces only names it generated, or blank ones.
