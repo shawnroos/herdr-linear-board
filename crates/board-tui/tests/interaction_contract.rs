@@ -103,12 +103,13 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::Board, "drag", "move card/reorder column"),
     (Screen::Board, "wheel", "scroll cards"),
     (Screen::LinearBoard, "--", "-- linear mode --"),
-    (Screen::LinearBoard, "←/→ h/l Tab", "focus column"),
+    (Screen::LinearBoard, "←/→ h/l Tab", "focus column / pager"),
     (Screen::LinearBoard, "↑/↓ k/j", "lane lines and cards"),
     (Screen::LinearBoard, "/", "filter; ↑ at the top too"),
     (Screen::LinearBoard, "Enter Tab ↓", "filter: to the cards"),
     (Screen::LinearBoard, "[ / ]", "previous / next tab"),
-    (Screen::LinearBoard, "< / >", "prev / next column page"),
+    (Screen::LinearBoard, "< / >", "page one column"),
+    (Screen::LinearBoard, "Enter Esc", "pager: back to the card"),
     (Screen::LinearBoard, "Enter", "detail; clears its marks"),
     (Screen::LinearBoard, "Enter", "lane line: fold / unfold"),
     (Screen::LinearBoard, "a", "accept: bind ◇ card"),
@@ -133,6 +134,7 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     ),
     (Screen::LinearBoard, "click view", "choose a view to bind"),
     (Screen::LinearBoard, "wheel", "focus card"),
+    (Screen::LinearBoard, "Shift+wheel", "page hidden columns"),
     (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
     (Screen::LinearDetail, "o", "focus selected pane"),
     (Screen::LinearDetail, "u", "open issue in Linear"),
@@ -176,8 +178,8 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        143,
-        "the interaction contract must stay at exactly 143 bindings (87 upstream + 51 Linear mode + 5 session pane)"
+        145,
+        "the interaction contract must stay at exactly 145 bindings (87 upstream + 53 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

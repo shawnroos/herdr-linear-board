@@ -14,7 +14,7 @@ expression: frame
 "               │snapshot failed                                                                        ││               "
 "               │  r / R        retry; R skips cache                                                    ││               "
 "               │  Esc          dismiss, keep last good                                                 ││               "
-"               │  Ctrl+Q       quit                                                                    █│               "
+"               │  Ctrl+Q       quit                                                                    ││               "
 "    ─ ─ ─ ─ ─ ─│daemon older than board                                                                █│               "
 "     @Example │  r / R        retry the snapshot                                                      █│               "
 "               │  Ctrl+Q/Esc   quit                                                                    █│             → "
