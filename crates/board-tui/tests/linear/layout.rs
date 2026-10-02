@@ -377,3 +377,25 @@ fn raw_control_bytes_in_state_still_never_reach_the_backend() {
     assert!(frame.contains("link"), "{frame}");
     assert!(!frame.contains(['\u{1b}', '\u{7}']), "{frame:?}");
 }
+
+#[test]
+fn a_click_on_a_card_the_board_scrolled_to_opens_that_card() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Down);
+    let buf = buffer_at(&mut d, 140, 30);
+    let (x, y) = at(&buf, "WEB-103");
+    d.handle(left_down(x, y + 3));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-103")
+    );
+}
+
+#[test]
+fn a_pane_narrower_than_a_card_draws_without_panicking() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 5, 20);
+    render_at(&mut d, 1, 20);
+}
