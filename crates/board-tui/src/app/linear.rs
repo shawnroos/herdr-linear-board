@@ -122,6 +122,18 @@ impl<'a> CardOverlay<'a> {
     /// The 2-cell gutter left of a card's identifier: its glyphs in priority
     /// order, the first plus `+` when more than two.
     pub fn gutter(&self) -> String {
+        let glyphs: Vec<char> = self.marks().into_iter().map(|(glyph, _)| glyph).collect();
+        match glyphs.as_slice() {
+            [] => "  ".to_string(),
+            [one] => format!("{one} "),
+            [one, two] => format!("{one}{two}"),
+            [first, ..] => format!("{first}+"),
+        }
+    }
+
+    /// Every mark glyph the card carries, in the gutter's priority order;
+    /// `None` is the show-request badge, which has no mark kind.
+    pub fn marks(&self) -> Vec<(char, Option<MarkKind>)> {
         let mut glyphs = vec![];
         for (present, kind) in [
             (self.attention, MarkKind::Attention),
@@ -129,21 +141,16 @@ impl<'a> CardOverlay<'a> {
             (self.suggestion, MarkKind::Suggestion),
         ] {
             if present {
-                glyphs.push(mark_glyph(kind));
+                glyphs.push((mark_glyph(kind), Some(kind)));
             }
         }
         if self.requested {
-            glyphs.push('◉');
+            glyphs.push(('◉', None));
         }
         if self.done {
-            glyphs.push(mark_glyph(MarkKind::Done));
+            glyphs.push((mark_glyph(MarkKind::Done), Some(MarkKind::Done)));
         }
-        match glyphs.as_slice() {
-            [] => "  ".to_string(),
-            [one] => format!("{one} "),
-            [one, two] => format!("{one}{two}"),
-            [first, ..] => format!("{first}+"),
-        }
+        glyphs
     }
 
     /// What the attention counts count: a needs-you, question or suggestion
@@ -257,6 +264,10 @@ pub struct LinearState {
     pub last_card: Option<CardCursor>,
     /// The cursor each tab had when it was left, by tab key.
     pub tab_cursors: std::collections::BTreeMap<String, CardCursor>,
+    /// The board's vertical offset in rows. The draw moves it by the least
+    /// that keeps the selected item in view, so it needs the last value; a
+    /// `Cell` because the view only borrows the state, as with `App::hit_map`.
+    pub board_scroll: std::cell::Cell<u16>,
     /// The identifier open on `Screen::LinearDetail`.
     pub detail: Option<String>,
     pub in_flight: bool,
@@ -378,6 +389,7 @@ impl LinearState {
             folds: Default::default(),
             last_card: None,
             tab_cursors: Default::default(),
+            board_scroll: Default::default(),
             detail: None,
             in_flight: false,
             queued: false,

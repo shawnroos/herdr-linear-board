@@ -52,6 +52,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
     if app.screen == Screen::Help {
         draw_help(app, &state.theme, f, area);
     }
+    super::linear::scrub(f);
 }
 
 /// The bottom row: a toast, else why the read on screen is an older one.

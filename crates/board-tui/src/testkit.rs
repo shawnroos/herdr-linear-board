@@ -170,6 +170,14 @@ pub fn render_at(d: &mut Driver, w: u16, h: u16) -> String {
     draw(&d.app, w, h)
 }
 
+/// [`render_at`], keeping the styled cells for colour assertions.
+pub fn buffer_at(d: &mut Driver, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    d.app.last_area = Rect::new(0, 0, w, h);
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    term.draw(|f| view(&d.app, f)).unwrap();
+    term.backend().buffer().clone()
+}
+
 /// A [`FakeBoardClient`] wrapper that also answers the catalog RPCs
 /// (`harness.capabilities` / `session.list` / `space.list`) which the real
 /// daemon serves but the bare fake does not. Everything else delegates to the

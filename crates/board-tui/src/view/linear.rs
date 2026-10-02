@@ -3,7 +3,7 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearIssue, LinearSnapshot};
+use board_core::protocol::{LinearCardPr, LinearIssue, LinearSnapshot};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,16 +12,34 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{sanitise, App, CardOverlay, CardOverlays, Focus, LinearState, Screen};
+use crate::theme::Theme;
 use crate::widgets::{HitMap, Zone};
 
 use super::linear_strip::{draw_strip, strip_lines};
-use super::{centered_rect_abs, linear_help_keys, truncate};
+use super::{centered_rect_abs, linear_help_keys};
 
-// Identifier, two title lines, assignee, then the blank separator row; a
-// card with a note has one row more.
-const CARD_H: u16 = 5;
+// Fixed so lanes line up across columns; supersedes the 5-row card of the
+// 2026-09-16 pickers-and-layout plan.
+const CARD_H: u16 = 13;
+const CARD_INSET: u16 = 2;
+// Each column's half of the 4-cell gap between columns.
+const SLOT_PAD: u16 = 2;
 const MIN_COL_W: u16 = 36;
 const HEADER_ROWS: u16 = 2;
+// The column title bar and the blank row under it.
+const TITLE_ROWS: u16 = 2;
+
+mod icon {
+    pub const PERSON: &str = "\u{f415}";
+    pub const MILESTONE: &str = "\u{f45d}";
+    pub const PULL_REQUEST: &str = "\u{f407}";
+    pub const EYE: &str = "\u{f441}";
+    pub const DIFF: &str = "\u{f4d2}";
+    pub const CHECK: &str = "\u{f058}";
+    pub const FILTER: &str = "\u{f0232}";
+    pub const FILTER_OUTLINE: &str = "\u{f0233}";
+    pub const SLANT: &str = "\u{e0bc}";
+}
 const DEFAULT_VIEW_LABEL: &str = "view: project issues (default)";
 
 /// `Linear: <bound object>`: the project, else the space label, else the space
@@ -55,6 +73,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
     let Some(state) = app.linear.as_ref() else {
         return;
     };
+    f.render_widget(Block::default().style(state.theme.app()), area);
     match app.screen {
         Screen::LinearNotBound => draw_not_bound(app, state, f, area),
         Screen::LinearStaleDaemon => draw_stale_daemon(state, f, area),
@@ -83,6 +102,24 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         _ => draw_board(app, state, f, area),
     }
     draw_bottom(app, f, area);
+    scrub(f);
+}
+
+/// The view boundary for outside text (KTD15). Every Linear and agent string
+/// is sanitised on arrival, but ratatui writes ESC and BEL into cells as-is, so
+/// a string that missed that pass would reach the terminal as a sequence. A
+/// cell holding a control or format character is blanked instead.
+pub(super) fn scrub(f: &mut Frame) {
+    for cell in &mut f.buffer_mut().content {
+        let symbol = cell.symbol();
+        if symbol
+            .chars()
+            .any(|c| c.is_control() || board_core::text::is_format_char(c))
+        {
+            let clean = board_core::text::strip_control_and_format(symbol);
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
+    }
 }
 
 /// What an overlay covers: the not-bound screen when it opened there, the
@@ -171,7 +208,7 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
     }
     let second = if warnings.is_empty() {
         vec![Span::styled(
-            " Enter detail · r refresh · ? help · q quit",
+            " Enter detail · r refresh · ? help · ctrl+q quit",
             theme.dim(),
         )]
     } else {
@@ -206,80 +243,281 @@ pub(super) fn fit(s: &str, max: usize) -> String {
     format!("{}…", split_at_width(s, max - 1).0)
 }
 
-/// Two title lines: the first breaks at a word boundary (mid-word only when
-/// one word is wider than the column), the second takes the rest and ends in
-/// an ellipsis when it does not fit.
-fn title_lines(title: &str, width: usize) -> [String; 2] {
-    let words: Vec<&str> = title.split_whitespace().collect();
-    if words.is_empty() {
-        return ["(no title)".to_string(), String::new()];
-    }
-    let text = words.join(" ");
-    if text.width() <= width {
-        return [text, String::new()];
-    }
-    let mut first_len = 0;
-    for word in &words {
-        let end = if first_len == 0 {
-            word.len()
-        } else {
-            first_len + 1 + word.len()
-        };
-        if text[..end].width() > width {
+/// `n` rows of `text` by display width: every row but the last breaks at a
+/// word boundary (mid-word only when one word is wider than the row), and the
+/// last takes the rest, ending in an ellipsis when it does not fit.
+fn wrap_lines(text: &str, width: usize, n: usize) -> Vec<String> {
+    let mut rest = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = Vec::with_capacity(n);
+    for at in 0..n {
+        if at + 1 == n {
+            out.push(fit(&rest, width));
             break;
         }
-        first_len = end;
+        if rest.width() <= width {
+            out.push(std::mem::take(&mut rest));
+            continue;
+        }
+        let mut end = 0;
+        for (i, _) in rest.match_indices(' ') {
+            if rest[..i].width() > width {
+                break;
+            }
+            end = i;
+        }
+        let (head, tail) = if end == 0 {
+            split_at_width(&rest, width)
+        } else {
+            rest.split_at(end)
+        };
+        out.push(head.to_string());
+        rest = tail.trim_start().to_string();
     }
-    let (first, rest) = if first_len == 0 {
-        split_at_width(&text, width)
+    out.resize(n, String::new());
+    out
+}
+
+fn title_lines(title: &str, width: usize) -> Vec<String> {
+    if title.trim().is_empty() {
+        return vec!["(no title)".to_string(), String::new()];
+    }
+    wrap_lines(title, width, 2)
+}
+
+/// `spans` cut to `width` display cells, the last kept span ending in `…`
+/// when anything was cut.
+fn clip(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let mut used = 0;
+    let mut out = vec![];
+    for span in spans {
+        let w = span.content.width();
+        if used + w <= width {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let room = width - used;
+        if room > 0 {
+            out.push(Span::styled(fit(&span.content, room), span.style));
+        }
+        break;
+    }
+    out
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| s.content.width()).sum()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CardLook {
+    selected: bool,
+    muted: bool,
+}
+
+/// What `gh` adds to a card's PR row: nothing yet (Linear's number and status
+/// with dim placeholders), still loading, or unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrGh {
+    LinearOnly,
+    Loading,
+    GhUnavailable,
+}
+
+fn pr_gh(_pr: &LinearCardPr) -> PrGh {
+    PrGh::LinearOnly
+}
+
+/// The card's PR row: icon, number and Linear's status, then what `gh`
+/// knows, in the state `gh` says.
+pub fn card_pr_line(theme: &Theme, pr: &LinearCardPr, gh: PrGh, muted: bool) -> Line<'static> {
+    let icon_style = |c| Style::default().fg(if muted { theme.muted_detail } else { c });
+    let label = if muted {
+        theme.card_detail_muted()
     } else {
-        (&text[..first_len], &text[first_len..])
+        theme.card_detail()
     };
-    [first.to_string(), fit(rest.trim_start(), width)]
+    let dim = if muted {
+        theme.card_detail_muted()
+    } else {
+        theme.dim()
+    };
+    let mut spans = vec![
+        Span::styled(icon::PULL_REQUEST, icon_style(theme.palette.green)),
+        Span::styled(format!(" #{}", pr.number), label),
+    ];
+    let status = if pr.draft == Some(true) {
+        Some("draft".to_string())
+    } else {
+        pr.status.as_deref().map(line)
+    };
+    if let Some(status) = status.filter(|s| !s.trim().is_empty()) {
+        spans.push(Span::styled(format!(" {status}"), label));
+    }
+    match gh {
+        PrGh::LinearOnly => {
+            for glyph in [icon::EYE, icon::DIFF, icon::CHECK] {
+                spans.push(Span::styled(format!("  {glyph} –"), dim));
+            }
+        }
+        PrGh::Loading => spans.push(Span::styled("  …", dim)),
+        PrGh::GhUnavailable => spans.push(Span::styled("  gh unavailable", dim)),
+    }
+    Line::from(spans)
 }
 
-fn card_height(overlay: CardOverlay<'_>) -> u16 {
-    CARD_H + u16::from(overlay.latest_note.is_some())
-}
-
-fn card_lines(
+fn card_header(
     state: &LinearState,
     overlay: CardOverlay<'_>,
     issue: &LinearIssue,
-    width: usize,
-) -> Vec<String> {
-    let mut first = overlay.gutter();
-    first.push_str(&line(&issue.identifier));
+    inner: usize,
+    look: CardLook,
+) -> Vec<Span<'static>> {
+    let t = &state.theme;
+    let tone = |style: Style| {
+        if look.muted {
+            t.card_detail_muted()
+        } else {
+            style
+        }
+    };
+    let id_style = if look.muted {
+        t.card_title_muted()
+    } else {
+        t.card_title()
+    };
+    let mut left = vec![Span::styled(line(&issue.identifier), id_style)];
+    if let Some(p) = issue.priority {
+        let style = if p <= 1 { t.warning() } else { t.dim() };
+        left.push(Span::styled(format!(" P{p}"), tone(style)));
+    }
+    let panes = LinearState::pane_count(issue);
+    if panes > 0 {
+        left.push(Span::styled(
+            format!(" ⧉{panes}"),
+            tone(Style::default().fg(t.palette.teal)),
+        ));
+    }
+    if issue.stale {
+        left.push(Span::styled(" ~stale", tone(t.warning())));
+    }
+    let mut right: Vec<Span> = overlay
+        .marks()
+        .into_iter()
+        .map(|(glyph, kind)| {
+            let style = kind.map_or_else(|| t.show_mark(), |kind| t.mark(kind));
+            Span::styled(glyph.to_string(), style.add_modifier(Modifier::BOLD))
+        })
+        .collect();
     let running = issue
         .bindings
         .iter()
         .flat_map(|b| &b.panes)
         .any(|pane| state.pane_status(pane) == "working");
     if running {
-        first.push_str(" ▶");
+        let lead = if right.is_empty() { "▶" } else { " ▶" };
+        right.push(Span::styled(lead, tone(t.success())));
     }
-    if let Some(p) = issue.priority {
-        first.push_str(&format!("  P{p}"));
-    }
-    if issue.stale {
-        first.push_str("  ~stale");
-    }
-    let panes = LinearState::pane_count(issue);
-    if panes > 0 {
-        first.push_str(&format!("  ⧉{panes}"));
-    }
-    let assignee = issue
+    let right_w = spans_width(&right);
+    let mut out = clip(left, inner.saturating_sub(right_w + 1).max(1));
+    let gap = inner.saturating_sub(spans_width(&out) + right_w);
+    out.push(Span::raw(" ".repeat(gap)));
+    out.extend(right);
+    clip(out, inner)
+}
+
+fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> [Vec<Span<'static>>; 2] {
+    let t = &state.theme;
+    let icon_style = |c| Style::default().fg(if look.muted { t.muted_detail } else { c });
+    let label = if look.muted {
+        t.card_detail_muted()
+    } else {
+        t.card_detail()
+    };
+    let who = issue
         .assignee
         .as_ref()
         .and_then(|a| a.name.as_deref())
-        .map(|n| format!("@{}", line(n)))
-        .unwrap_or_else(|| "unassigned".to_string());
-    let [title_first, title_second] = title_lines(&line(&issue.title), width);
-    let mut lines = vec![fit(&first, width), title_first, title_second];
-    if let Some(note) = overlay.latest_note {
-        lines.push(fit(&format!("› {}", line(&note.body)), width));
+        .map(|n| format!(" @{}", line(n)))
+        .unwrap_or_else(|| " unassigned".to_string());
+    let mut first = vec![
+        Span::styled(icon::PERSON, icon_style(t.palette.blue)),
+        Span::styled(who, label),
+    ];
+    if let Some(name) = issue
+        .milestone
+        .as_ref()
+        .and_then(|m| m.name.as_deref())
+        .filter(|n| !n.trim().is_empty())
+    {
+        first.push(Span::raw("  "));
+        first.push(Span::styled(icon::MILESTONE, icon_style(t.palette.mauve)));
+        first.push(Span::styled(format!(" {}", line(name)), label));
     }
-    lines.push(fit(&assignee, width));
+    let second = issue
+        .pr
+        .as_ref()
+        .map(|pr| card_pr_line(t, pr, pr_gh(pr), look.muted).spans)
+        .unwrap_or_default();
+    [first, second]
+}
+
+/// A card's 13 rows, each starting with the 2-cell inset. Selection changes
+/// only the title colour and the two reserved rule rows, so no text moves.
+fn card_lines(
+    state: &LinearState,
+    overlay: CardOverlay<'_>,
+    issue: &LinearIssue,
+    width: u16,
+    look: CardLook,
+) -> Vec<Line<'static>> {
+    let t = &state.theme;
+    let inner = width.saturating_sub(2 * CARD_INSET) as usize;
+    let inset = |spans: Vec<Span<'static>>| {
+        let mut spans = clip(spans, inner);
+        spans.insert(0, Span::raw(" ".repeat(CARD_INSET as usize)));
+        Line::from(spans)
+    };
+    let rule = |text: String| {
+        if look.selected {
+            inset(vec![Span::styled(text, t.rule())])
+        } else {
+            Line::default()
+        }
+    };
+    let title_style = if look.selected {
+        t.card_title_active()
+    } else if look.muted {
+        t.card_title_muted()
+    } else {
+        t.card_title()
+    };
+    let detail = if look.muted {
+        t.card_detail_muted()
+    } else {
+        t.card_detail()
+    };
+    let mut lines = vec![
+        Line::default(),
+        inset(card_header(state, overlay, issue, inner, look)),
+        rule("─".repeat(inner)),
+    ];
+    for text in title_lines(&line(&issue.title), inner) {
+        lines.push(inset(vec![Span::styled(text, title_style)]));
+    }
+    lines.push(Line::default());
+    let mut description = wrap_lines(&line(issue.description.as_deref().unwrap_or("")), inner, 3);
+    if let Some(note) = overlay.latest_note {
+        description[2] = fit(&format!("› {}", line(&note.body)), inner);
+    }
+    for text in description {
+        lines.push(inset(vec![Span::styled(text, detail)]));
+    }
+    lines.push(rule("─ ".repeat(inner / 2)));
+    for row in card_meta(state, issue, look) {
+        lines.push(inset(row));
+    }
+    lines.push(Line::default());
     lines
 }
 
@@ -289,12 +527,26 @@ pub fn linear_columns_per_page(width: u16) -> usize {
     usize::from(width / MIN_COL_W).max(1)
 }
 
+fn draw_too_short(state: &LinearState, f: &mut Frame, area: Rect) {
+    let text = fit("pane too short", area.width as usize);
+    let x = area.x + area.width.saturating_sub(text.width() as u16) / 2;
+    let y = area.y + area.height.saturating_sub(1) / 2;
+    f.render_widget(
+        Paragraph::new(Span::styled(text, state.theme.dim())),
+        Rect::new(x, y, area.width.saturating_sub(x - area.x), 1),
+    );
+}
+
 fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
+    if area.height < HEADER_ROWS + CARD_H + 1 {
+        draw_too_short(state, f, area);
+        return;
+    }
     let (header, (view_x, view_w)) = header_lines(app, state);
-    let header_area = Rect::new(area.x, area.y, area.width, HEADER_ROWS.min(area.height));
+    let header_area = Rect::new(area.x, area.y, area.width, HEADER_ROWS);
     f.render_widget(Paragraph::new(header), header_area);
     let view_w = view_w.min(area.width.saturating_sub(view_x));
-    if header_area.height > 0 && view_w > 0 {
+    if view_w > 0 {
         app.hit_map.borrow_mut().push(
             Rect::new(area.x + view_x, area.y, view_w, 1),
             Zone::LinearHeaderView,
@@ -357,6 +609,423 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     draw_strip(app, strip, f, area, body.bottom() + pinned_h);
 }
 
+/// One powerline bar: each segment's text on its colour, a `/` cut where the
+/// colour changes and at the right end, and a plain cell between two
+/// segments of the same colour.
+fn powerline(theme: &Theme, segments: Vec<(String, bool)>) -> Vec<Span<'static>> {
+    let bg = |active: bool| {
+        if active {
+            theme.palette.accent
+        } else {
+            theme.palette.panel_bg
+        }
+    };
+    let mut spans = vec![];
+    for (at, (text, active)) in segments.iter().enumerate() {
+        let style = if *active {
+            theme.column_title_active()
+        } else {
+            theme.column_title_inactive()
+        };
+        spans.push(Span::styled(text.clone(), style));
+        let here = bg(*active);
+        let next = segments
+            .get(at + 1)
+            .map_or(theme.app_bg, |(_, active)| bg(*active));
+        spans.push(if next == here {
+            Span::styled(" ", Style::default().bg(here))
+        } else {
+            Span::styled(icon::SLANT, theme.cut(here, next))
+        });
+    }
+    spans
+}
+
+/// The view tabs as a powerline row, the active tab on the accent. `None`
+/// for a document from before tabs, whose one tab has no name to show. When
+/// the row is too narrow it starts at a later tab so the active one stays in
+/// view.
+fn tab_row(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    width: usize,
+) -> Option<Line<'static>> {
+    let tabs = state.tabs();
+    if tabs.iter().all(|tab| tab.label.is_empty()) {
+        return None;
+    }
+    let names: Vec<String> = tabs
+        .iter()
+        .enumerate()
+        .map(|(at, tab)| {
+            let label = line(&tab.label);
+            let label = if label.is_empty() {
+                "(no label)".to_string()
+            } else {
+                label
+            };
+            let count = if at == state.sel_tab {
+                String::new()
+            } else {
+                attention_count(overlays, tab.groups.iter().flat_map(|g| g.issues.iter()))
+            };
+            format!("  {label}{count}  ")
+        })
+        .collect();
+    let active = state.sel_tab.min(names.len() - 1);
+    let mut first = 0;
+    while first < active
+        && 1 + names[first..=active]
+            .iter()
+            .map(|n| n.width() + 1)
+            .sum::<usize>()
+            > width
+    {
+        first += 1;
+    }
+    let lead = if first > 0 { "‹" } else { " " };
+    let segments = names
+        .into_iter()
+        .enumerate()
+        .skip(first)
+        .map(|(at, name)| (name, at == active))
+        .collect();
+    let mut spans = vec![Span::styled(lead, state.theme.dim())];
+    spans.extend(powerline(&state.theme, segments));
+    Some(Line::from(clip(spans, width)))
+}
+
+/// One lane's band across the board: its line (when the board has lanes),
+/// a blank row, then as many card rows as its busiest column holds.
+struct Band<'a> {
+    key: &'a str,
+    label: Option<&'a str>,
+    total: usize,
+    folded: bool,
+    top: u16,
+    columns: Vec<Vec<&'a str>>,
+}
+
+impl Band<'_> {
+    fn head(&self) -> u16 {
+        if self.label.is_some() {
+            2
+        } else {
+            0
+        }
+    }
+
+    fn card_top(&self, at: usize) -> u16 {
+        self.top + self.head() + at as u16 * (CARD_H + 1)
+    }
+
+    fn height(&self) -> u16 {
+        let cards = self.columns.iter().map(Vec::len).max().unwrap_or(0);
+        self.head() + cards as u16 * (CARD_H + 1)
+    }
+}
+
+/// The active tab's bands, top to bottom, for every column (not just the
+/// page shown), so the bands keep their height across pages.
+fn bands(state: &LinearState) -> Vec<Band<'_>> {
+    let groups = state.groups();
+    let rows: Vec<_> = groups.iter().map(|g| state.lane_rows(g, None)).collect();
+    let lanes = state.lanes();
+    let keys: Vec<(&str, Option<&str>)> = if lanes.is_empty() {
+        vec![("", None)]
+    } else {
+        lanes
+            .into_iter()
+            .map(|(key, label)| (key, Some(label)))
+            .collect()
+    };
+    let mut top = 0;
+    keys.into_iter()
+        .map(|(key, label)| {
+            let mut total = 0;
+            let columns = rows
+                .iter()
+                .map(|column| {
+                    match column
+                        .iter()
+                        .find(|row| row.key == key && row.label.is_some() == label.is_some())
+                    {
+                        Some(row) => {
+                            total += row.count;
+                            row.issues.clone()
+                        }
+                        None => vec![],
+                    }
+                })
+                .collect();
+            let band = Band {
+                key,
+                label,
+                total,
+                folded: label.is_some() && state.folded(key),
+                top,
+                columns,
+            };
+            top += band.height();
+            band
+        })
+        .collect()
+}
+
+/// The board's offset after moving by the least that keeps `target` (top
+/// row and height) in a viewport of `h` rows; an item taller than the
+/// viewport shows its top.
+fn scroll_to(prev: u16, target: Option<(u16, u16)>, h: u16, total: u16) -> u16 {
+    let mut off = prev;
+    if let Some((top, len)) = target {
+        if top < off || len > h {
+            off = top;
+        } else if top + len > off + h {
+            off = top + len - h;
+        }
+    }
+    off.min(total.saturating_sub(h))
+}
+
+fn lane_line(
+    state: &LinearState,
+    band: &Band<'_>,
+    label: &str,
+    width: usize,
+    holding: bool,
+) -> Line<'static> {
+    let t = &state.theme;
+    let selected = state.selected_lane_line() == Some(band.key);
+    let (rule, label_style) = if selected || holding {
+        (t.lane(), t.lane_holding())
+    } else {
+        (t.rule(), t.lane())
+    };
+    let icon = if band.folded {
+        icon::FILTER
+    } else {
+        icon::FILTER_OUTLINE
+    };
+    let right = format!(" {} {icon} ", band.total);
+    let label = fit(
+        &format!(" {} ", line(label).to_uppercase()),
+        width.saturating_sub(2 + right.width()),
+    );
+    let rest = width.saturating_sub(2 + label.width() + right.width());
+    let line = Line::from(clip(
+        vec![
+            Span::styled("─", rule),
+            Span::styled(label, label_style.add_modifier(Modifier::BOLD)),
+            Span::styled("─".repeat(rest), rule),
+            Span::styled(right, label_style),
+            Span::styled("─", rule),
+        ],
+        width,
+    ));
+    if selected {
+        line.style(t.lane_selected())
+    } else {
+        line
+    }
+}
+
+fn draw_columns(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    snapshot: &LinearSnapshot,
+    f: &mut Frame,
+    body: Rect,
+    per_page: usize,
+    hit_map: &mut HitMap,
+) {
+    let groups = state.groups();
+    if body.height == 0 {
+        return;
+    }
+    if groups.is_empty() {
+        f.render_widget(Paragraph::new(" no columns in this snapshot"), body);
+        return;
+    }
+    let t = &state.theme;
+    let sel_group = state.sel_group.min(groups.len() - 1);
+    let (start, visible) = if groups.len() > per_page {
+        (sel_group / per_page * per_page, per_page)
+    } else {
+        (0, groups.len())
+    };
+    let col_w = body.width / visible as u16;
+    let nothing_selected = state.focus == Focus::None;
+    let bands = bands(state);
+    let counts: Vec<usize> = (0..groups.len())
+        .map(|g| {
+            state
+                .lane_rows(&groups[g], None)
+                .iter()
+                .map(|row| row.count)
+                .sum()
+        })
+        .collect();
+    let slots: Vec<(u16, usize)> = (start..(start + visible).min(groups.len()))
+        .enumerate()
+        .map(|(slot, idx)| (body.x + slot as u16 * col_w, idx))
+        .collect();
+
+    let titles = slots
+        .iter()
+        .map(|&(_, idx)| {
+            let text = fit(
+                &format!(
+                    "   {}  {}",
+                    line(&groups[idx].label).to_uppercase(),
+                    counts[idx]
+                ),
+                col_w.saturating_sub(1) as usize,
+            );
+            let pad = (col_w.saturating_sub(1) as usize).saturating_sub(text.width());
+            (
+                format!("{text}{}", " ".repeat(pad)),
+                !nothing_selected && idx == sel_group,
+            )
+        })
+        .collect();
+    f.render_widget(
+        Paragraph::new(Line::from(powerline(t, titles))),
+        Rect::new(body.x, body.y, body.width, 1),
+    );
+    for &(x, idx) in &slots {
+        hit_map.push(
+            Rect::new(x, body.y, col_w, 1),
+            Zone::LinearGroup(groups[idx].key.clone()),
+        );
+    }
+    if body.height <= TITLE_ROWS {
+        return;
+    }
+    let view = Rect::new(
+        body.x,
+        body.y + TITLE_ROWS,
+        body.width,
+        body.height - TITLE_ROWS,
+    );
+
+    let selected_slot = state.selected_slot();
+    let total: u16 = bands.iter().map(Band::height).sum();
+    let target = match &state.focus {
+        Focus::LaneLine(key) => bands
+            .iter()
+            .find(|b| b.label.is_some() && b.key == key)
+            .map(|b| (b.top, 1)),
+        Focus::Card(_) => selected_slot.and_then(|(lane, id)| {
+            let band = bands.iter().find(|b| b.key == lane)?;
+            let at = band.columns[sel_group].iter().position(|c| *c == id)?;
+            Some((band.card_top(at), CARD_H))
+        }),
+        Focus::Filter | Focus::None => None,
+    };
+    let off = scroll_to(state.board_scroll.get(), target, view.height, total);
+    state.board_scroll.set(off);
+    let on_screen = |top: u16, len: u16| -> Option<(u16, u16, u16)> {
+        let bottom = (top + len).min(off + view.height);
+        let from = top.max(off);
+        (from < bottom).then(|| (view.y + from - off, top.max(off) - top, bottom - from))
+    };
+
+    let inset = SLOT_PAD + CARD_INSET;
+    if !state.filter.is_empty() && counts.iter().all(|&n| n == 0) {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                fit(
+                    "no matching issues",
+                    view.width.saturating_sub(inset) as usize,
+                ),
+                t.dim(),
+            )),
+            Rect::new(
+                view.x + inset.min(view.width),
+                view.y,
+                view.width.saturating_sub(inset),
+                1,
+            ),
+        );
+        return;
+    }
+
+    let holding_lane = selected_slot.map(|(lane, _)| lane);
+    let line_w = body.width.saturating_sub(2 * SLOT_PAD);
+    for band in &bands {
+        let Some(label) = band.label else { continue };
+        if let Some((y, _, _)) = on_screen(band.top, 1) {
+            let holding = nothing_selected || holding_lane == Some(band.key);
+            f.render_widget(
+                Paragraph::new(lane_line(state, band, label, line_w as usize, holding)),
+                Rect::new(body.x + SLOT_PAD, y, line_w, 1),
+            );
+        }
+    }
+
+    let card_w = col_w.saturating_sub(2 * SLOT_PAD);
+    for &(x, idx) in &slots {
+        let in_focus = idx == sel_group;
+        let muted = !in_focus && !nothing_selected;
+        let card_x = x + SLOT_PAD;
+        if counts[idx] == 0 {
+            let first = bands.first().map_or(0, |b| b.card_top(0));
+            if let Some((y, _, _)) = on_screen(first, 1) {
+                f.render_widget(
+                    Paragraph::new(Span::styled(
+                        fit("no issues", card_w.saturating_sub(CARD_INSET) as usize),
+                        t.dim(),
+                    )),
+                    Rect::new(card_x + CARD_INSET, y, card_w.saturating_sub(CARD_INSET), 1),
+                );
+            }
+            continue;
+        }
+        for band in &bands {
+            for (at, &identifier) in band.columns[idx].iter().enumerate() {
+                let Some((y, skip, h)) = on_screen(band.card_top(at), CARD_H) else {
+                    continue;
+                };
+                let look = CardLook {
+                    selected: in_focus && selected_slot == Some((band.key, identifier)),
+                    muted,
+                };
+                let surface = if look.selected {
+                    t.card_active()
+                } else if look.muted {
+                    t.card_muted()
+                } else {
+                    t.card()
+                };
+                let lines = match snapshot.issues.get(identifier) {
+                    Some(issue) => card_lines(state, overlays.get(identifier), issue, card_w, look),
+                    None => vec![
+                        Line::default(),
+                        Line::from(format!(
+                            "{}{}",
+                            " ".repeat(CARD_INSET as usize),
+                            fit(
+                                &format!("{} (missing)", line(identifier)),
+                                card_w.saturating_sub(2 * CARD_INSET) as usize
+                            )
+                        )),
+                    ],
+                };
+                let rect = Rect::new(card_x, y, card_w, h);
+                f.render_widget(Paragraph::new(lines).style(surface).scroll((skip, 0)), rect);
+                hit_map.push(
+                    rect,
+                    Zone::LinearCard {
+                        group: groups[idx].key.clone(),
+                        lane: band.key.to_string(),
+                        identifier: identifier.to_string(),
+                    },
+                );
+            }
+        }
+    }
+}
+
 /// While a card with a suggestion is selected, the footer names `a` and `x`.
 fn suggestion_selected(state: &LinearState) -> bool {
     state.selected_suggestion().is_some()
@@ -411,61 +1080,6 @@ fn attention_count<'a>(
         0 => String::new(),
         n => format!(" !{n}"),
     }
-}
-
-/// The tab row, the active tab in brackets. `None` for a document from
-/// before tabs, whose one tab has no name to show. When the row is too narrow
-/// it starts at a later tab so the active one stays in view.
-fn tab_row(
-    state: &LinearState,
-    overlays: &CardOverlays<'_>,
-    width: usize,
-) -> Option<Line<'static>> {
-    let tabs = state.tabs();
-    if tabs.iter().all(|tab| tab.label.is_empty()) {
-        return None;
-    }
-    let names: Vec<String> = tabs
-        .iter()
-        .enumerate()
-        .map(|(at, tab)| {
-            let label = line(&tab.label);
-            let label = if label.is_empty() {
-                "(no label)".to_string()
-            } else {
-                label
-            };
-            if at == state.sel_tab {
-                format!("[{label}]")
-            } else {
-                let count =
-                    attention_count(overlays, tab.groups.iter().flat_map(|g| g.issues.iter()));
-                format!(" {label}{count} ")
-            }
-        })
-        .collect();
-    let active = state.sel_tab.min(names.len() - 1);
-    let mut first = 0;
-    while first < active
-        && 2 + names[first..=active]
-            .iter()
-            .map(|n| n.width() + 1)
-            .sum::<usize>()
-            > width
-    {
-        first += 1;
-    }
-    let mut spans = vec![Span::raw(if first > 0 { "‹" } else { " " })];
-    for (at, name) in names.into_iter().enumerate().skip(first) {
-        let style = if at == active {
-            state.theme.accent().add_modifier(Modifier::BOLD)
-        } else {
-            state.theme.dim()
-        };
-        spans.push(Span::styled(name, style));
-        spans.push(Span::raw(" "));
-    }
-    Some(Line::from(spans))
 }
 
 /// The board filter, shown while it is selected or holds text.
@@ -544,213 +1158,6 @@ fn pager_row(
         Span::styled(middle, dim),
         Span::raw(right),
     ])
-}
-
-/// The first and one-past-last item of a column's list to draw so `focus` is
-/// in view: from the top when everything up to it fits, else as far back as
-/// fits with `focus` last.
-fn visible_items(heights: &[u16], focus: usize, avail: u16) -> (usize, usize) {
-    if heights.is_empty() {
-        return (0, 0);
-    }
-    let focus = focus.min(heights.len() - 1);
-    let mut start = 0;
-    while start < focus && heights[start..=focus].iter().sum::<u16>() > avail {
-        start += 1;
-    }
-    let mut used: u16 = heights[start..=focus].iter().sum();
-    let mut end = focus + 1;
-    while end < heights.len() && used + heights[end] <= avail {
-        used += heights[end];
-        end += 1;
-    }
-    (start, end)
-}
-
-enum ColumnItem<'a> {
-    Lane {
-        key: &'a str,
-        label: &'a str,
-        count: usize,
-        folded: bool,
-    },
-    Card {
-        lane: &'a str,
-        identifier: &'a str,
-        height: u16,
-    },
-}
-
-fn draw_columns(
-    state: &LinearState,
-    overlays: &CardOverlays<'_>,
-    snapshot: &LinearSnapshot,
-    f: &mut Frame,
-    body: Rect,
-    per_page: usize,
-    hit_map: &mut HitMap,
-) {
-    let groups = state.groups();
-    if body.height == 0 {
-        return;
-    }
-    if groups.is_empty() {
-        f.render_widget(Paragraph::new(" no columns in this snapshot"), body);
-        return;
-    }
-    if body.height < 3 || body.width == 0 {
-        f.render_widget(
-            Paragraph::new(truncate(
-                " body too short for a card; make the pane taller",
-                body.width as usize,
-            )),
-            body,
-        );
-        return;
-    }
-    let sel_group = state.sel_group.min(groups.len() - 1);
-    let (start, visible) = if groups.len() > per_page {
-        (sel_group / per_page * per_page, per_page)
-    } else {
-        (0, groups.len())
-    };
-    let col_w = body.width / visible as u16;
-    let selected_slot = state.selected_slot();
-    for (slot, (idx, group)) in groups
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(visible)
-        .enumerate()
-    {
-        let x = body.x + slot as u16 * col_w;
-        let rect = Rect::new(x, body.y, col_w, body.height);
-        let in_focus = idx == sel_group;
-        let focused = in_focus && state.focus != Focus::None;
-        let lane_line = state.selected_lane_line().filter(|_| in_focus);
-        let title = fit(
-            &format!(" {} ({}) ", line(&group.label), group.issues.len()),
-            col_w.saturating_sub(2) as usize,
-        );
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(if focused {
-                state.theme.accent()
-            } else {
-                state.theme.dim()
-            });
-        let inner = block.inner(rect);
-        f.render_widget(block, rect);
-        hit_map.push(
-            Rect::new(x, body.y, col_w, 1),
-            Zone::LinearGroup(group.key.clone()),
-        );
-        let mut items = Vec::new();
-        for row in state.lane_rows(group, lane_line) {
-            if let Some(label) = row.label {
-                items.push(ColumnItem::Lane {
-                    key: row.key,
-                    label,
-                    count: row.count,
-                    folded: row.folded,
-                });
-            }
-            items.extend(row.issues.into_iter().map(|identifier| ColumnItem::Card {
-                lane: row.key,
-                identifier,
-                height: card_height(overlays.get(identifier)),
-            }));
-        }
-        let heights: Vec<u16> = items
-            .iter()
-            .map(|item| match item {
-                ColumnItem::Lane { .. } => 1,
-                ColumnItem::Card { height, .. } => *height,
-            })
-            .collect();
-        let focus = items
-            .iter()
-            .position(|item| match *item {
-                ColumnItem::Card {
-                    lane, identifier, ..
-                } => in_focus && selected_slot == Some((lane, identifier)),
-                ColumnItem::Lane { key, .. } => lane_line == Some(key),
-            })
-            .unwrap_or(0);
-        // The last card may drop its separator row at the column's bottom edge.
-        let (first, end) = visible_items(&heights, focus, inner.height + 1);
-        let mut y = inner.y;
-        for item in &items[first..end] {
-            if y >= inner.bottom() {
-                break;
-            }
-            match *item {
-                ColumnItem::Lane {
-                    key,
-                    label,
-                    count,
-                    folded,
-                } => {
-                    let lead = if folded { "▸ " } else { "── " };
-                    let text = fit(
-                        &format!("{lead}{} {count} ", line(label)),
-                        inner.width as usize,
-                    );
-                    let rule = "─".repeat((inner.width as usize).saturating_sub(text.width()));
-                    let mut style = state.theme.lane_holding().add_modifier(Modifier::BOLD);
-                    if lane_line == Some(key) {
-                        style = style.add_modifier(Modifier::REVERSED);
-                    }
-                    f.render_widget(
-                        Paragraph::new(format!("{text}{rule}")).style(style),
-                        Rect::new(inner.x, y, inner.width, 1),
-                    );
-                    y += 1;
-                }
-                ColumnItem::Card {
-                    lane,
-                    identifier,
-                    height,
-                } => {
-                    let card = Rect::new(
-                        inner.x,
-                        y,
-                        inner.width,
-                        (height - 1).min(inner.bottom().saturating_sub(y)),
-                    );
-                    let selected = in_focus && selected_slot == Some((lane, identifier));
-                    let lines: Vec<Line> = match snapshot.issues.get(identifier) {
-                        Some(issue) => {
-                            card_lines(state, overlays.get(identifier), issue, inner.width as usize)
-                                .into_iter()
-                                .map(Line::from)
-                                .collect()
-                        }
-                        None => vec![Line::from(fit(
-                            &format!("{identifier} (missing)"),
-                            inner.width as usize,
-                        ))],
-                    };
-                    let style = if selected {
-                        Style::default().add_modifier(Modifier::REVERSED)
-                    } else {
-                        Style::default()
-                    };
-                    f.render_widget(Paragraph::new(lines).style(style), card);
-                    hit_map.push(
-                        card,
-                        Zone::LinearCard {
-                            group: group.key.clone(),
-                            lane: lane.to_string(),
-                            identifier: identifier.to_string(),
-                        },
-                    );
-                    y += height;
-                }
-            }
-        }
-    }
 }
 
 fn boxed(f: &mut Frame, area: Rect, title: &str, border: Style, lines: Vec<Line<'static>>) {

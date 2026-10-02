@@ -12,7 +12,7 @@ use ratatui::Terminal;
 
 impl SharedFake {
     /// `tabs_lanes`-style board with no strip rows.
-    fn quiet(snapshot: LinearSnapshot) -> SharedFake {
+    pub(super) fn quiet(snapshot: LinearSnapshot) -> SharedFake {
         SharedFake {
             inner: Arc::new(Mutex::new(
                 fake_with(snapshot.clone()).with_linear_list(spaces(vec![])),
@@ -23,7 +23,7 @@ impl SharedFake {
     }
 
     /// The store refuses local state for an issue it has no record of.
-    fn known(&self, issue: &str) {
+    pub(super) fn known(&self, issue: &str) {
         self.inner
             .lock()
             .unwrap()
@@ -36,7 +36,7 @@ impl SharedFake {
             .unwrap();
     }
 
-    fn mark_kind(&self, issue: &str, kind: MarkKind, text: &str, by: &str) -> i64 {
+    pub(super) fn mark_kind(&self, issue: &str, kind: MarkKind, text: &str, by: &str) -> i64 {
         self.known(issue);
         self.inner
             .lock()
@@ -100,7 +100,7 @@ impl SharedFake {
         self.inner.lock().unwrap().linear_show_dismiss(id).unwrap();
     }
 
-    fn note(&self, issue: &str, body: &str, author: &str) {
+    pub(super) fn note(&self, issue: &str, body: &str, author: &str) {
         self.known(issue);
         self.inner
             .lock()
@@ -117,7 +117,7 @@ impl SharedFake {
 }
 
 /// A board over `shared` that has read its local state, with the log cleared.
-fn board(shared: &SharedFake) -> (Driver, RequestLog) {
+pub(super) fn board(shared: &SharedFake) -> (Driver, RequestLog) {
     let (client, log) = RecordingClient::new(shared.clone());
     let (mut d, _, _) = linear_driver(client, linear_start());
     d.on_local_state_changed(local(&[(Some("wA"), false)]));
@@ -162,8 +162,35 @@ fn row_with(frame: &str, needle: &str) -> String {
         .unwrap_or_else(|| panic!("no row with {needle:?}:\n{frame}"))
 }
 
+/// The header row of `id`'s card at 140 cells: its 38 inner cells from the
+/// identifier, trailing blanks trimmed. Marks sit right-aligned at its end.
+fn header_of(frame: &str, id: &str) -> String {
+    let row: Vec<char> = row_with(frame, id).chars().collect();
+    let id: Vec<char> = id.chars().collect();
+    let at = (0..row.len())
+        .find(|&i| row[i..].starts_with(&id))
+        .unwrap_or_else(|| panic!("no {id:?} in its own row"));
+    row[at..(at + 38).min(row.len())]
+        .iter()
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+/// The label of the view tab drawn on the accent, from the tab row.
+fn active_tab_label(d: &mut Driver, w: u16, h: u16) -> String {
+    let accent = board_tui::theme::Theme::default().palette.accent;
+    let buf = buffer(d, w, h);
+    (0..w)
+        .filter(|&x| buf[(x, 2)].bg == accent && buf[(x, 2)].symbol() != "\u{e0bc}")
+        .map(|x| buf[(x, 2)].symbol().to_string())
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[test]
-fn a_card_with_done_needs_you_and_question_marks_shows_bang_plus_in_its_gutter() {
+fn a_card_shows_every_mark_right_aligned_on_its_header() {
     let shared = SharedFake::quiet(tabs_lanes());
     shared.mark_kind("WEB-101", MarkKind::Done, "shipped", "agent-a");
     shared.mark_kind("WEB-101", MarkKind::Attention, "look", "agent-a");
@@ -172,14 +199,11 @@ fn a_card_with_done_needs_you_and_question_marks_shows_bang_plus_in_its_gutter()
     shared.mark_kind("WEB-102", MarkKind::Done, "done", "agent-a");
     shared.mark_kind("WEB-103", MarkKind::Done, "done", "agent-a");
     let (mut d, _) = board(&shared);
-    let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains("│!+WEB-101"), "{frame}");
-    assert!(frame.contains("│?✓WEB-102"), "{frame}");
-    assert!(frame.contains("│✓ WEB-103"), "{frame}");
-    assert!(
-        frame.contains("│  WEB-104"),
-        "an unmarked card keeps the gutter:\n{frame}"
-    );
+    let frame = render_at(&mut d, 140, 80);
+    assert!(header_of(&frame, "WEB-101").ends_with(" !?✓"), "{frame}");
+    assert!(header_of(&frame, "WEB-102").ends_with(" ?✓"), "{frame}");
+    assert!(header_of(&frame, "WEB-103").ends_with(" ✓"), "{frame}");
+    assert_eq!(header_of(&frame, "WEB-104"), "WEB-104 P3", "{frame}");
 }
 
 #[test]
@@ -191,8 +215,8 @@ fn a_requested_card_carries_the_badge_after_its_marks_and_before_done() {
     shared.mark_kind("WEB-102", MarkKind::Question, "which?", "agent-a");
     let (mut d, _) = board(&shared);
     let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains("│◉✓WEB-101"), "{frame}");
-    assert!(frame.contains("│?◉WEB-102"), "{frame}");
+    assert!(header_of(&frame, "WEB-101").ends_with(" ◉✓"), "{frame}");
+    assert!(header_of(&frame, "WEB-102").ends_with(" ?◉"), "{frame}");
 }
 
 #[test]
@@ -202,7 +226,7 @@ fn a_card_with_a_note_shows_the_latest_one_under_its_title() {
     shared.note("WEB-101", "waiting on review", "agent-a");
     let (mut d, _) = board(&shared);
     let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains("│› waiting on review"), "{frame}");
+    assert!(frame.contains("› waiting on review"), "{frame}");
     assert!(!frame.contains("first thought"), "{frame}");
     let rows: Vec<String> = frame.lines().map(backend_row).collect();
     let id = rows.iter().position(|r| r.contains("WEB-101")).unwrap();
@@ -218,7 +242,7 @@ fn the_board_reads_local_state_after_its_first_snapshot_and_after_a_reconnect() 
     let (client, log) = RecordingClient::new(shared.clone());
     let (mut d, _, _) = linear_driver(client, linear_start());
     assert_eq!(count(&log, "linear.state.get"), 1, "{:?}", methods(&log));
-    assert!(render_at(&mut d, 140, 40).contains("│! WEB-101"));
+    assert!(header_of(&render_at(&mut d, 140, 40), "WEB-101").ends_with(" !"));
     press(&mut d, KeyCode::Char('r'));
     assert_eq!(
         count(&log, "linear.state.get"),
@@ -237,7 +261,7 @@ fn a_suggestion_announced_only_by_a_refetch_renders() {
     shared.suggest("WEB-101", None);
     d.on_local_state_changed(local(&[(Some("wA"), true)]));
     let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains("│◇ WEB-101"), "{frame}");
+    assert!(header_of(&frame, "WEB-101").ends_with(" ◇"), "{frame}");
 }
 
 #[test]
@@ -248,7 +272,7 @@ fn ae1_a_on_a_selected_suggestion_binds_it_and_the_pinned_request_stays() {
     shared.suggest("WEB-101", Some(&worktree.0));
     let (mut d, log) = board(&shared);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
-    assert!(render_at(&mut d, 140, 40).contains("│◇ WEB-101"));
+    assert!(header_of(&render_at(&mut d, 140, 40), "WEB-101").ends_with(" ◇"));
     press(&mut d, KeyCode::Char('a'));
     let binds = params(&log, "linear.bind");
     assert_eq!(binds.len(), 1, "{:?}", methods(&log));
@@ -306,9 +330,9 @@ fn f2_an_accepted_request_for_a_card_on_another_tab_switches_tab_and_page_and_se
     assert_eq!(selected_column(&d), "st-prog");
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(count(&log, "linear.mark.clear"), 0);
+    assert_eq!(active_tab_label(&mut d, 44, 30), "Backend");
     let frame = render_at(&mut d, 44, 30);
-    assert!(frame.contains("[Backend]"), "{frame}");
-    assert!(frame.contains("In Progress (1)"), "{frame}");
+    assert!(frame.contains("IN PROGRESS  1"), "{frame}");
     assert!(!frame.contains('◉'), "{frame}");
     press(&mut d, KeyCode::Char('['));
     assert_eq!(
@@ -473,7 +497,7 @@ fn ae3_ae10_enter_clears_only_the_marks_it_showed_and_a_suggestion_stays() {
     press(&mut d, KeyCode::Esc);
     assert_eq!(d.app.screen, Screen::LinearBoard);
     let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains("│?◇WEB-101"), "{frame}");
+    assert!(header_of(&frame, "WEB-101").ends_with(" ?◇"), "{frame}");
     assert_eq!(count(&log, "linear.mark.clear"), 1);
 }
 
@@ -548,7 +572,7 @@ fn n_walks_marked_cards_across_pages_and_tabs_and_wraps() {
     press(&mut d, KeyCode::Char('N'));
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-201"));
     assert_eq!(active_tab(&d), "ms-backend");
-    assert!(render_at(&mut d, 44, 30).contains("[Backend]"));
+    assert_eq!(active_tab_label(&mut d, 44, 30), "Backend");
     assert!(
         methods(&log).is_empty(),
         "n writes nothing: {:?}",
@@ -587,8 +611,8 @@ fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
         pager.trim_end().ends_with("In Review 1 ›"),
         "done marks do not count:\n{frame}"
     );
-    assert!(frame_row(&frame, 2).contains(" Backend !1 "), "{frame}");
-    assert!(frame_row(&frame, 2).contains("[Frontend]"), "{frame}");
+    assert!(frame_row(&frame, 2).contains("  Backend !1  "), "{frame}");
+    assert_eq!(active_tab_label(&mut d, 44, 30), "Frontend");
     insta::assert_snapshot!("linear_marks_44", frame);
 }
 

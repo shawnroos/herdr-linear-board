@@ -232,8 +232,8 @@ fn return_on_a_lane_line_folds_it_in_every_column_and_again_unfolds_it() {
         assert!(!frame.contains(hidden), "{hidden}:\n{frame}");
     }
     assert!(
-        frame.contains("▸ Alpha 3") && frame.contains("▸ Alpha 1"),
-        "{frame}"
+        frame.contains("─ ALPHA ─") && frame.contains("5 \u{f0232} ─"),
+        "the folded lane keeps its line and count:\n{frame}"
     );
     assert!(
         frame.contains("WEB-104") && frame.contains("WEB-106"),
@@ -263,8 +263,8 @@ fn right_on_a_lane_line_focuses_the_next_column_with_the_line_still_selected() {
     assert_eq!(focus(&d), line("ln-alpha"));
     let frame = render_at(&mut d, 140, 40);
     assert!(
-        frame.contains("── Alpha 0"),
-        "the selected line is drawn where its lane has no card:\n{frame}"
+        frame.contains("─ ALPHA ─"),
+        "the selected line is drawn across the board, In Review included:\n{frame}"
     );
 }
 

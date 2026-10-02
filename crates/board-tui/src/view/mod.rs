@@ -426,7 +426,9 @@ pub use detail::{
     detail_layout, detail_toggle_rect, runs_viewport_height, DetailLayout,
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
-pub use linear::{linear_columns_per_page, linear_help_max_scroll, linear_pane_title};
+pub use linear::{
+    card_pr_line, linear_columns_per_page, linear_help_max_scroll, linear_pane_title, PrGh,
+};
 pub use session::session_help_max_scroll;
 
 /// How far the issue page can scroll at the last drawn size: the session
