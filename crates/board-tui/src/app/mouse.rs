@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 
 use crate::widgets::{UiAction, Zone};
 
-use super::{App, DetailScrollTarget, Effect, Mode, Screen};
+use super::{App, DetailScrollTarget, Effect, Mode, Screen, Side};
 
 pub(super) fn on_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
     if app.mode == Mode::Linear {
@@ -206,6 +206,14 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
                 }
                 _ => vec![],
             }
+        }
+        MouseEventKind::ScrollRight => super::linear::page_wheel(app, Side::Right),
+        MouseEventKind::ScrollLeft => super::linear::page_wheel(app, Side::Left),
+        MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::SHIFT) => {
+            super::linear::page_wheel(app, Side::Right)
+        }
+        MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::SHIFT) => {
+            super::linear::page_wheel(app, Side::Left)
         }
         MouseEventKind::ScrollDown => super::linear::wheel(app, 1),
         MouseEventKind::ScrollUp => super::linear::wheel(app, -1),

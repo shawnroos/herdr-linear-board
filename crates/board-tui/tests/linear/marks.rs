@@ -162,7 +162,7 @@ fn row_with(frame: &str, needle: &str) -> String {
         .unwrap_or_else(|| panic!("no row with {needle:?}:\n{frame}"))
 }
 
-/// The header row of `id`'s card at 140 cells: its 38 inner cells from the
+/// The header row of `id`'s card at 144 cells: its 40 inner cells from the
 /// identifier, trailing blanks trimmed. Marks sit right-aligned at its end.
 fn header_of(frame: &str, id: &str) -> String {
     let row: Vec<char> = row_with(frame, id).chars().collect();
@@ -170,7 +170,7 @@ fn header_of(frame: &str, id: &str) -> String {
     let at = (0..row.len())
         .find(|&i| row[i..].starts_with(&id))
         .unwrap_or_else(|| panic!("no {id:?} in its own row"));
-    row[at..(at + 38).min(row.len())]
+    row[at..(at + 40).min(row.len())]
         .iter()
         .collect::<String>()
         .trim_end()
@@ -199,7 +199,7 @@ fn a_card_shows_every_mark_right_aligned_on_its_header() {
     shared.mark_kind("WEB-102", MarkKind::Done, "done", "agent-a");
     shared.mark_kind("WEB-103", MarkKind::Done, "done", "agent-a");
     let (mut d, _) = board(&shared);
-    let frame = render_at(&mut d, 140, 80);
+    let frame = render_at(&mut d, 144, 80);
     assert!(header_of(&frame, "WEB-101").ends_with(" !?✓"), "{frame}");
     assert!(header_of(&frame, "WEB-102").ends_with(" ?✓"), "{frame}");
     assert!(header_of(&frame, "WEB-103").ends_with(" ✓"), "{frame}");
@@ -214,7 +214,7 @@ fn a_requested_card_carries_the_badge_after_its_marks_and_before_done() {
     shared.ask("WEB-102", "agent-b");
     shared.mark_kind("WEB-102", MarkKind::Question, "which?", "agent-a");
     let (mut d, _) = board(&shared);
-    let frame = render_at(&mut d, 140, 40);
+    let frame = render_at(&mut d, 144, 40);
     assert!(header_of(&frame, "WEB-101").ends_with(" ◉✓"), "{frame}");
     assert!(header_of(&frame, "WEB-102").ends_with(" ?◉"), "{frame}");
 }
@@ -242,7 +242,7 @@ fn the_board_reads_local_state_after_its_first_snapshot_and_after_a_reconnect() 
     let (client, log) = RecordingClient::new(shared.clone());
     let (mut d, _, _) = linear_driver(client, linear_start());
     assert_eq!(count(&log, "linear.state.get"), 1, "{:?}", methods(&log));
-    assert!(header_of(&render_at(&mut d, 140, 40), "WEB-101").ends_with(" !"));
+    assert!(header_of(&render_at(&mut d, 144, 40), "WEB-101").ends_with(" !"));
     press(&mut d, KeyCode::Char('r'));
     assert_eq!(
         count(&log, "linear.state.get"),
@@ -257,10 +257,10 @@ fn the_board_reads_local_state_after_its_first_snapshot_and_after_a_reconnect() 
 fn a_suggestion_announced_only_by_a_refetch_renders() {
     let shared = SharedFake::quiet(tabs_lanes());
     let (mut d, _) = board(&shared);
-    assert!(!render_at(&mut d, 140, 40).contains('◇'));
+    assert!(!render_at(&mut d, 144, 40).contains('◇'));
     shared.suggest("WEB-101", None);
     d.on_local_state_changed(local(&[(Some("wA"), true)]));
-    let frame = render_at(&mut d, 140, 40);
+    let frame = render_at(&mut d, 144, 40);
     assert!(header_of(&frame, "WEB-101").ends_with(" ◇"), "{frame}");
 }
 
@@ -272,7 +272,7 @@ fn ae1_a_on_a_selected_suggestion_binds_it_and_the_pinned_request_stays() {
     shared.suggest("WEB-101", Some(&worktree.0));
     let (mut d, log) = board(&shared);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
-    assert!(header_of(&render_at(&mut d, 140, 40), "WEB-101").ends_with(" ◇"));
+    assert!(header_of(&render_at(&mut d, 144, 40), "WEB-101").ends_with(" ◇"));
     press(&mut d, KeyCode::Char('a'));
     let binds = params(&log, "linear.bind");
     assert_eq!(binds.len(), 1, "{:?}", methods(&log));
@@ -496,7 +496,7 @@ fn ae3_ae10_enter_clears_only_the_marks_it_showed_and_a_suggestion_stays() {
     d.on_local_state_changed(local(&[(Some("wA"), false)]));
     press(&mut d, KeyCode::Esc);
     assert_eq!(d.app.screen, Screen::LinearBoard);
-    let frame = render_at(&mut d, 140, 40);
+    let frame = render_at(&mut d, 144, 40);
     assert!(header_of(&frame, "WEB-101").ends_with(" ?◇"), "{frame}");
     assert_eq!(count(&log, "linear.mark.clear"), 1);
 }
@@ -597,20 +597,16 @@ fn n_with_nothing_selected_starts_from_the_top_of_the_focused_column() {
 }
 
 #[test]
-fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
+fn ae6_a_sidebar_board_counts_attention_on_other_tabs() {
     let shared = SharedFake::quiet(tabs_lanes());
     shared.mark_kind("WEB-103", MarkKind::Attention, "look", "agent-a");
     shared.mark_kind("WEB-108", MarkKind::Done, "done", "agent-a");
     shared.mark_kind("WEB-202", MarkKind::Question, "which?", "agent-a");
     let (mut d, _) = board(&shared);
+    render_at(&mut d, 240, 30);
     press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 44, 30);
-    let pager = pager(&frame);
-    assert!(pager.starts_with("‹ Todo 4 !1"), "{frame}");
-    assert!(
-        pager.trim_end().ends_with("In Review 1 ›"),
-        "done marks do not count:\n{frame}"
-    );
+    assert_eq!(pager(&frame), (Some(1), Some(2)), "{frame}");
     assert!(frame_row(&frame, 2).contains("  Backend !1  "), "{frame}");
     assert_eq!(active_tab_label(&mut d, 44, 30), "Frontend");
     insta::assert_snapshot!("linear_marks_44", frame);

@@ -427,7 +427,7 @@ pub use detail::{
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
 pub use linear::{
-    card_pr_line, linear_columns_per_page, linear_help_max_scroll, linear_pane_title, PrGh,
+    board_columns, card_pr_line, linear_help_max_scroll, linear_pane_title, pin_fits, PrGh,
 };
 pub use session::session_help_max_scroll;
 

@@ -56,7 +56,9 @@ pub use linear::{
     LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
     StripView, WriteFailure,
 };
-pub use linear_cursor::{column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection};
+pub use linear_cursor::{
+    column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection, Page, Side,
+};
 pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use session::{session_lane, SessionLane, SessionState, SessionView};
@@ -401,6 +403,14 @@ impl App {
         self.switcher = None;
         self.help_return_to = Screen::Board;
         self.col_scroll.clear();
+    }
+
+    /// Re-fits the Linear board's page to `last_area`, as a resize needs.
+    pub fn refit_linear_page(&mut self) {
+        let width = self.last_area.width;
+        if let Some(state) = self.linear.as_mut() {
+            state.refit(width);
+        }
     }
 
     // -- board queries -------------------------------------------------------

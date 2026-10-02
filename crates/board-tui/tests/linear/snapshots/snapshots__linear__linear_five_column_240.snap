@@ -1,0 +1,24 @@
+---
+source: crates/board-tui/tests/linear/mod.rs
+expression: frame
+---
+" Linear  Frame Effects · view: Canvas board · space: Plugins · fetched 0s ago                                                                                                                                                                   "
+" Enter detail · r refresh · ? help · ctrl+q quit                                                                                                                                                                                                "
+"   BACKLOG  1                                     TODO  1                                         IN PROGRESS  1                                  DEV DONE  0                                     DONE  0                                     "
+"                                                                                                                                                                                                                                                "
+"                                                                                                                                                    no issues                                       no issues                                   "
+"    WEB-3308 P0                                     WEB-3307 P3                                     WEB-3302 P2 ⧉2                         ▶                                                                                                    "
+"    ────────────────────────────────────────                                                                                                                                                                                                    "
+"    Example issue: a panel is blank while an        Example issue: a long task stops when           Example issue: a saved item is empty                                                                                                        "
+"    item is still loading                           its panel is closed                             after reload                                                                                                                                "
+"                                                                                                                                                                                                                                                "
+"                                                                                                                                                                                                                                                "
+"                                                                                                                                                                                                                                                "
+"                                                                                                                                                                                                                                                "
+"    ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                                                                                                                                                                                                     "
+"     @Example User                                  unassigned                                     @Example User                                                                                                                             "
+"                                                                                                                                                                                                                                                "
+" Spaces with no project · s select · t unmapped tabs                                                                                                                                                                                            "
+"    Beta notes (wB)                                                                                                                                                                                                                             "
+"    Gamma docs (wC)                                                                                                                                                                                                                             "
+"                                                                                                                                                                                                                                                "

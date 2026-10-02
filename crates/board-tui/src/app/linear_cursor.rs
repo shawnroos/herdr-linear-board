@@ -91,19 +91,68 @@ pub fn tab_lanes(tab: &LinearTab) -> Vec<(&str, &str)> {
     lanes
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
 /// What the board has selected. `Card` indexes the focused column's visible
-/// cards; `None` keeps `sel_group` as the column the next key selects in.
+/// cards; `None` keeps `sel_group` as the column the next key selects in. A
+/// paging button holds the focus it was entered from, so paging never moves
+/// the board's selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Focus {
     Card(usize),
     LaneLine(String),
     Filter,
+    Pager(Side, Box<Focus>),
     None,
 }
 
 impl Default for Focus {
     fn default() -> Focus {
         Focus::Card(0)
+    }
+}
+
+impl Focus {
+    /// The board's own selection: through a paging button to the focus it
+    /// was entered from.
+    pub fn board(&self) -> &Focus {
+        match self {
+            Focus::Pager(_, from) => from.board(),
+            other => other,
+        }
+    }
+}
+
+/// The columns one page shows: `visible` of `total`, from `start`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Page {
+    pub start: usize,
+    pub visible: usize,
+    pub total: usize,
+}
+
+impl Page {
+    pub fn end(&self) -> usize {
+        self.start + self.visible
+    }
+
+    pub fn hidden(&self, side: Side) -> usize {
+        match side {
+            Side::Left => self.start,
+            Side::Right => self.total.saturating_sub(self.end()),
+        }
+    }
+
+    /// The shown column beside `side`'s button.
+    fn edge(&self, side: Side) -> usize {
+        match side {
+            Side::Left => self.start,
+            Side::Right => self.end().saturating_sub(1),
+        }
     }
 }
 
@@ -262,7 +311,7 @@ impl LinearState {
 
     /// `(lane key, identifier)` of the selected card.
     pub fn selected_slot(&self) -> Option<(&str, &str)> {
-        match self.focus {
+        match *self.focus.board() {
             Focus::Card(card) => self.visible_cards(self.sel_group).get(card).copied(),
             _ => None,
         }
@@ -274,7 +323,7 @@ impl LinearState {
 
     /// The selected lane line's key.
     pub fn selected_lane_line(&self) -> Option<&str> {
-        match &self.focus {
+        match self.focus.board() {
             Focus::LaneLine(key) => Some(key),
             _ => None,
         }
@@ -283,7 +332,7 @@ impl LinearState {
     pub fn cursor(&self) -> CardCursor {
         let column = self.groups().get(self.sel_group);
         let slot = self.selected_slot();
-        let (lane, third) = match &self.focus {
+        let (lane, third) = match self.focus.board() {
             Focus::Card(card) => (slot.map(|(lane, _)| lane.to_string()), *card),
             Focus::LaneLine(key) => (
                 Some(key.clone()),
@@ -292,7 +341,7 @@ impl LinearState {
                     .position(|(lane, _)| lane == key)
                     .unwrap_or(0),
             ),
-            Focus::Filter | Focus::None => (None, 0),
+            _ => (None, 0),
         };
         CardCursor {
             tab: self.active_tab().map(|t| t.key.clone()).unwrap_or_default(),
@@ -360,14 +409,19 @@ impl LinearState {
     pub(super) fn settle(&mut self) {
         self.sel_tab = self.sel_tab.min(self.tabs().len().saturating_sub(1));
         self.sel_group = self.sel_group.min(self.groups().len().saturating_sub(1));
-        self.focus = match &self.focus {
+        self.focus = self.settled(&self.focus);
+    }
+
+    fn settled(&self, focus: &Focus) -> Focus {
+        match focus {
             Focus::Card(card) => match self.visible_cards(self.sel_group).len() {
                 0 => self.line_or_filter(None),
                 n => Focus::Card((*card).min(n - 1)),
             },
             Focus::LaneLine(key) => self.line_or_filter(Some(key)),
+            Focus::Pager(side, from) => Focus::Pager(*side, Box::new(self.settled(from))),
             other => other.clone(),
-        };
+        }
     }
 
     /// Re-finds `cursor` after the document changed: its tab by key, then its
@@ -388,7 +442,12 @@ impl LinearState {
             .iter()
             .position(|g| g.key == cursor.column)
             .unwrap_or(cursor.at.1);
-        self.focus = match &cursor.focus {
+        self.focus = self.refind_focus(&cursor.focus, cursor);
+        self.clamp();
+    }
+
+    fn refind_focus(&mut self, focus: &Focus, cursor: &CardCursor) -> Focus {
+        match focus {
             Focus::Card(_) => self.refind_card(cursor),
             Focus::LaneLine(key) => {
                 let lanes = self.lanes();
@@ -402,9 +461,11 @@ impl LinearState {
                         .map_or(Focus::Filter, |(lane, _)| Focus::LaneLine(lane.to_string()))
                 }
             }
+            Focus::Pager(side, from) => {
+                Focus::Pager(*side, Box::new(self.refind_focus(from, cursor)))
+            }
             other => other.clone(),
-        };
-        self.clamp();
+        }
     }
 
     /// The card again, else the line of the folded or filtered lane hiding
@@ -488,7 +549,7 @@ impl LinearState {
     }
 
     fn remember_card(&mut self) {
-        if matches!(self.focus, Focus::Card(_)) {
+        if matches!(self.focus.board(), Focus::Card(_)) {
             self.last_card = Some(self.cursor());
         }
     }
@@ -519,9 +580,37 @@ impl LinearState {
         self.clamp();
     }
 
-    /// ← / → / Tab: the column `delta` away, clamped. A lane line stays
-    /// selected; a card that has no counterpart there selects its lane's line.
-    pub(super) fn move_column(&mut self, delta: isize) {
+    /// ← / → / Tab at `width` cells: the column `delta` away, clamped. A lane
+    /// line stays selected; a card that has no counterpart there selects its
+    /// lane's line. Past the page's last shown column, the paging button on
+    /// that side. On a button, toward it pages; away steps onto the column
+    /// beside it.
+    pub(super) fn move_column(&mut self, delta: isize, width: u16) {
+        let page = self.page(width);
+        self.page_start = page.start;
+        let toward = if delta > 0 { Side::Right } else { Side::Left };
+        if let Focus::Pager(side, _) = self.focus {
+            if side == toward {
+                self.page_start = match side {
+                    Side::Left => page.start.saturating_sub(1),
+                    Side::Right => page.start + 1,
+                };
+                self.refit(width);
+            } else {
+                self.leave_pager_to(page.edge(side));
+            }
+            return;
+        }
+        // The filter keeps the keyboard while it is open, so it never hands
+        // focus to a button.
+        if self.focus != Focus::Filter
+            && self.sel_group == page.edge(toward)
+            && page.hidden(toward) > 0
+        {
+            let from = std::mem::replace(&mut self.focus, Focus::None);
+            self.focus = Focus::Pager(toward, Box::new(from));
+            return;
+        }
         let lane = self.selected_slot().map(|(lane, _)| lane.to_string());
         let max = self.groups().len().saturating_sub(1);
         self.sel_group = step_clamped(self.sel_group, delta, max);
@@ -529,6 +618,92 @@ impl LinearState {
             self.focus = self.line_or_filter(lane.as_deref());
         }
         self.clamp();
+        self.refit(width);
+    }
+
+    /// The page at `width` cells. Only a paging button may leave the focused
+    /// column off the page; any other focus pulls the page by the least that
+    /// shows it.
+    pub fn page(&self, width: u16) -> Page {
+        let total = self.groups().len();
+        let visible = crate::view::board_columns(width).min(total);
+        let mut start = self.page_start.min(total - visible);
+        if visible > 0 && !matches!(self.focus, Focus::Pager(..)) {
+            let sel = self.sel_group.min(total - 1);
+            if sel < start {
+                start = sel;
+            } else if sel >= start + visible {
+                start = sel + 1 - visible;
+            }
+        }
+        Page {
+            start,
+            visible,
+            total,
+        }
+    }
+
+    /// Keeps the stored page what `page` draws at `width`, and moves a
+    /// paging button's focus whose button is gone onto the edge column.
+    pub(super) fn refit(&mut self, width: u16) {
+        let page = self.page(width);
+        self.page_start = page.start;
+        if let Focus::Pager(side, _) = self.focus {
+            if page.hidden(side) == 0 {
+                self.leave_pager_to(page.edge(side));
+            }
+        }
+    }
+
+    /// Off a paging button onto `column`, carrying the selection the button
+    /// held as `move_column` would.
+    fn leave_pager_to(&mut self, column: usize) {
+        let lane = self.selected_slot().map(|(lane, _)| lane.to_string());
+        self.focus = self.focus.board().clone();
+        self.sel_group = column;
+        match self.focus {
+            Focus::None => return self.reselect(),
+            Focus::Card(_) if self.visible_cards(column).is_empty() => {
+                self.focus = self.line_or_filter(lane.as_deref());
+            }
+            _ => {}
+        }
+        self.clamp();
+    }
+
+    /// Enter, Esc or ↑ / ↓ on a paging button: back to the selection it held;
+    /// the page follows it on the next fit.
+    pub(super) fn leave_pager(&mut self) {
+        if let Focus::Pager(_, from) = &self.focus {
+            self.focus = from.board().clone();
+            self.clamp();
+        }
+    }
+
+    /// A sideways scroll toward `side`, or `<` / `>`: pages one column and
+    /// selects the button that still has columns behind it, preferring
+    /// `side`'s. The board's selection stays where it is.
+    pub(super) fn scroll_page(&mut self, side: Side, width: u16) {
+        if matches!(self.focus, Focus::Filter) {
+            return;
+        }
+        let page = self.page(width);
+        if page.hidden(Side::Left) + page.hidden(Side::Right) == 0 {
+            return;
+        }
+        let start = match side {
+            Side::Left => page.start.saturating_sub(1),
+            Side::Right => (page.start + 1).min(page.total - page.visible),
+        };
+        let paged = Page { start, ..page };
+        let button = match (paged.hidden(side) > 0, side) {
+            (true, _) => side,
+            (false, Side::Left) => Side::Right,
+            (false, Side::Right) => Side::Left,
+        };
+        let from = std::mem::replace(&mut self.focus, Focus::None);
+        self.focus = Focus::Pager(button, Box::new(from.board().clone()));
+        self.page_start = start;
     }
 
     /// `[` / `]`: the tab `delta` away, wrapping. Each tab keeps its own
@@ -610,7 +785,7 @@ impl LinearState {
                 }
             }
         }
-        let (card, on_card) = match self.focus {
+        let (card, on_card) = match *self.focus.board() {
             Focus::Card(card) => (card, true),
             _ => (0, false),
         };
@@ -629,18 +804,5 @@ impl LinearState {
                 .or(slots.last())
                 .copied()
         }
-    }
-
-    /// `<` / `>`: the first column of the page `delta` pages away, with
-    /// `per_page` columns to a page. Stops at the first and last page.
-    pub(super) fn jump_page(&mut self, delta: isize, per_page: usize) {
-        let per_page = per_page.max(1);
-        let pages = self.groups().len().div_ceil(per_page);
-        let page = (self.sel_group / per_page) as isize + delta;
-        if page < 0 || page as usize >= pages {
-            return;
-        }
-        self.sel_group = page as usize * per_page;
-        self.clamp();
     }
 }

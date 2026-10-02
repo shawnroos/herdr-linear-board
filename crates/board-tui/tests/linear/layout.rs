@@ -5,7 +5,8 @@
 use super::marks::board;
 use super::*;
 
-use board_core::protocol::LinearCardPr;
+use board_core::protocol::{LinearCardPr, LinearGhSource, LinearPrCi};
+use board_tui::app::Side;
 use board_tui::testkit::buffer_at;
 use board_tui::theme::Theme;
 use board_tui::view::{card_pr_line, PrGh};
@@ -400,4 +401,376 @@ fn a_pane_narrower_than_a_card_draws_without_panicking() {
     let mut d = tabs_driver();
     render_at(&mut d, 5, 20);
     render_at(&mut d, 1, 20);
+}
+
+// -- widths, 2-up and paging (`docs/responsive-board.md` Width, Hidden columns)
+
+fn one_column_board() -> Driver {
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| groups.truncate(1));
+    driver_for(snapshot)
+}
+
+fn page_focus(d: &Driver) -> Focus {
+    d.app.linear.as_ref().unwrap().focus.clone()
+}
+
+fn on_pager(d: &Driver, side: Side) -> bool {
+    matches!(page_focus(d), Focus::Pager(s, _) if s == side)
+}
+
+fn resize(d: &mut Driver, w: u16, h: u16) -> Buffer {
+    d.sync_frame_area(ratatui::layout::Rect::new(0, 0, w, h));
+    buffer_at(d, w, h)
+}
+
+fn shift_wheel(kind: MouseEventKind, x: u16, y: u16) -> Msg {
+    Msg::Mouse(crossterm::event::MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: crossterm::event::KeyModifiers::SHIFT,
+    })
+}
+
+#[test]
+fn the_column_count_is_the_width_over_48_capped_at_the_workflow() {
+    let mut d = tabs_driver();
+    for (width, columns) in [
+        (47u16, 1usize),
+        (96, 2),
+        (143, 2),
+        (144, 3),
+        (191, 3),
+        (192, 4),
+        (228, 4),
+    ] {
+        let frame = render_at(&mut d, width, 40);
+        assert_eq!(titles(&frame), columns, "{width}:\n{frame}");
+    }
+}
+
+#[test]
+fn a_column_inside_80_shows_one_capped_card_a_row_and_81_shows_two() {
+    let theme = gruvbox();
+    let mut d = one_column_board();
+    // 84 cells: a 2-cell gap each side leaves an inside of 80.
+    let buf = buffer_at(&mut d, 84, 60);
+    let (x, y) = at(&buf, "WEB-101");
+    let (x2, y2) = at(&buf, "WEB-102");
+    assert_eq!((x2, y2), (x, y + 14), "1-up:\n{}", dump(&buf));
+    let card_x = x - 2;
+    assert_eq!(buf[(card_x + 63, y)].bg, theme.palette.surface0, "64 wide");
+    assert_eq!(buf[(card_x + 64, y)].bg, theme.app_bg, "capped at 64");
+
+    let buf = buffer_at(&mut d, 85, 60);
+    let (x, y) = at(&buf, "WEB-101");
+    let (x2, y2) = at(&buf, "WEB-102");
+    assert_eq!(
+        (x2, y2),
+        (x + 41, y),
+        "2-up, 40 wide, 1-cell gap:\n{}",
+        dump(&buf)
+    );
+    assert_eq!(buf[(x - 2 + 40, y)].bg, theme.app_bg, "the gap");
+    let (x3, y3) = at(&buf, "WEB-103");
+    assert_eq!((x3, y3), (x, y + 14), "{}", dump(&buf));
+    // Alpha holds three cards: two rows of them before the Beta line.
+    let (_, alpha) = at(&buf, "ALPHA");
+    let (_, beta) = at(&buf, "BETA");
+    assert_eq!(beta, alpha + 2 + 2 * 14, "{}", dump(&buf));
+}
+
+#[test]
+fn a_click_on_the_second_card_of_a_two_up_row_opens_it() {
+    let mut d = one_column_board();
+    let buf = buffer_at(&mut d, 85, 60);
+    let (x, y) = at(&buf, "WEB-102");
+    d.handle(left_down(x + 3, y + 3));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-102")
+    );
+}
+
+#[test]
+fn hidden_columns_turn_the_outer_gaps_into_arrow_buttons_with_counts() {
+    let theme = gruvbox();
+    let mut d = tabs_driver();
+    let buf = buffer_at(&mut d, 96, 40);
+    assert!(find(&buf, "←").is_none(), "{}", dump(&buf));
+    let (x, y) = at(&buf, "→");
+    assert_eq!(x, 94, "in the right gap");
+    assert_eq!(slice(&buf, y + 1, 94, 2).trim(), "2", "two hidden");
+    assert_eq!(buf[(x, y)].bg, theme.app_bg, "flush until selected");
+    assert!(
+        find(&buf, "‹").is_none() && find(&buf, "›").is_none(),
+        "no pager row:\n{}",
+        dump(&buf)
+    );
+}
+
+#[test]
+fn right_past_the_last_column_selects_the_button_and_again_pages_one_column() {
+    let theme = gruvbox();
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Right);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-105"));
+    press(&mut d, KeyCode::Right);
+    assert!(on_pager(&d, Side::Right), "{:?}", page_focus(&d));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-105"));
+    let buf = buffer_at(&mut d, 96, 40);
+    let (x, y) = at(&buf, "→");
+    assert_eq!(buf[(x, y)].bg, theme.palette.panel_bg, "selected");
+    press(&mut d, KeyCode::Right);
+    assert!(on_pager(&d, Side::Right));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-105"));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("IN PROGRESS  2"), "{frame}");
+    assert!(column_tops(&frame).contains("IN REVIEW  1"), "{frame}");
+    assert!(!column_tops(&frame).contains("TODO"), "{frame}");
+    let buf = buffer_at(&mut d, 96, 40);
+    let (lx, ly) = at(&buf, "←");
+    assert_eq!(lx, 1);
+    assert_eq!(slice(&buf, ly + 1, 0, 2).trim(), "1");
+}
+
+#[test]
+fn paging_to_the_end_lands_on_the_edge_column() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    for _ in 0..3 {
+        press(&mut d, KeyCode::Right);
+    }
+    assert!(on_pager(&d, Side::Right));
+    press(&mut d, KeyCode::Right);
+    assert!(
+        matches!(page_focus(&d), Focus::Card(_)),
+        "{:?}",
+        page_focus(&d)
+    );
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-108"));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("DONE  1"), "{frame}");
+    assert!(column_tops(&frame).contains("IN REVIEW  1"), "{frame}");
+}
+
+#[test]
+fn left_on_the_right_button_steps_onto_the_column_beside_it() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    for _ in 0..3 {
+        press(&mut d, KeyCode::Right);
+    }
+    press(&mut d, KeyCode::Left);
+    assert!(
+        matches!(page_focus(&d), Focus::Card(_)),
+        "{:?}",
+        page_focus(&d)
+    );
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-107"));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("IN PROGRESS  2"), "{frame}");
+}
+
+#[test]
+fn enter_on_a_button_returns_to_the_selected_issue_and_pages_back_to_it() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 48, 40);
+    press(&mut d, KeyCode::Right);
+    assert!(on_pager(&d, Side::Right), "{:?}", page_focus(&d));
+    press(&mut d, KeyCode::Right);
+    let frame = render_at(&mut d, 48, 40);
+    assert!(column_tops(&frame).contains("IN PROGRESS"), "{frame}");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearBoard, "Enter did not open it");
+    assert_eq!(page_focus(&d), Focus::Card(0));
+    let frame = render_at(&mut d, 48, 40);
+    assert!(column_tops(&frame).contains("TODO"), "{frame}");
+}
+
+#[test]
+fn a_sideways_scroll_pages_and_selects_the_matching_button() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    d.handle(board_tui::testkit::mouse(
+        MouseEventKind::ScrollRight,
+        40,
+        20,
+    ));
+    assert!(on_pager(&d, Side::Right), "{:?}", page_focus(&d));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("IN PROGRESS"), "{frame}");
+    assert!(!column_tops(&frame).contains("TODO"), "{frame}");
+    d.handle(board_tui::testkit::mouse(
+        MouseEventKind::ScrollRight,
+        40,
+        20,
+    ));
+    assert!(on_pager(&d, Side::Left), "the right button is gone");
+    d.handle(shift_wheel(MouseEventKind::ScrollUp, 40, 20));
+    assert!(on_pager(&d, Side::Left));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("IN PROGRESS"), "{frame}");
+    d.handle(shift_wheel(MouseEventKind::ScrollDown, 40, 20));
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("DONE"), "{frame}");
+}
+
+#[test]
+fn angle_brackets_page_like_a_sideways_scroll() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Char('>'));
+    assert!(on_pager(&d, Side::Right));
+    press(&mut d, KeyCode::Char('<'));
+    assert!(on_pager(&d, Side::Right), "back at the start");
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("TODO"), "{frame}");
+}
+
+#[test]
+fn a_resize_that_fits_every_column_moves_button_focus_to_the_edge_column() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Right);
+    press(&mut d, KeyCode::Right);
+    assert!(on_pager(&d, Side::Right));
+    let buf = resize(&mut d, 200, 40);
+    assert!(
+        matches!(page_focus(&d), Focus::Card(_)),
+        "{:?}",
+        page_focus(&d)
+    );
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-108"));
+    assert!(find(&buf, "→").is_none(), "{}", dump(&buf));
+}
+
+#[test]
+fn narrowing_the_pane_shifts_the_page_to_keep_the_selected_column() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 200, 40);
+    for _ in 0..3 {
+        press(&mut d, KeyCode::Right);
+    }
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-108"));
+    resize(&mut d, 96, 40);
+    let frame = render_at(&mut d, 96, 40);
+    assert!(column_tops(&frame).contains("DONE  1"), "{frame}");
+    assert!(column_tops(&frame).contains("IN REVIEW  1"), "{frame}");
+    press(&mut d, KeyCode::Left);
+    let frame = render_at(&mut d, 96, 40);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-107"));
+    assert!(
+        column_tops(&frame).contains("DONE  1"),
+        "the page moves only when the selection leaves it:\n{frame}"
+    );
+}
+
+#[test]
+fn a_snapshot_that_drops_the_hidden_columns_moves_button_focus_to_the_edge_column() {
+    let mut d = tabs_driver();
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Right);
+    press(&mut d, KeyCode::Right);
+    assert!(on_pager(&d, Side::Right));
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| groups.truncate(2));
+    arrive(&mut d, snapshot);
+    assert!(
+        matches!(page_focus(&d), Focus::Card(_)),
+        "{:?}",
+        page_focus(&d)
+    );
+    assert_eq!(selected_column(&d), "st-prog");
+}
+
+// -- the PR row from the daemon's gh data, through the snapshot ---------------
+
+fn pr_row(pr: LinearCardPr, gh: Option<(&str, Option<&str>)>) -> String {
+    let mut snapshot = tabs_lanes();
+    snapshot.issues.get_mut("WEB-101").unwrap().pr = Some(pr);
+    snapshot.gh = gh.map(|(status, message)| LinearGhSource {
+        status: status.into(),
+        message: message.map(str::to_string),
+    });
+    let mut d = driver_for(snapshot);
+    let buf = buffer_at(&mut d, 200, 80);
+    let (x, y) = at(&buf, "WEB-101");
+    slice(&buf, y + 10, x, 42)
+}
+
+fn linear_pr() -> LinearCardPr {
+    LinearCardPr {
+        repo: "acme/web".into(),
+        number: 2132,
+        url: "https://github.com/acme/web/pull/2132".into(),
+        status: Some("open".into()),
+        ..Default::default()
+    }
+}
+
+fn read_pr() -> LinearCardPr {
+    LinearCardPr {
+        state: Some("OPEN".into()),
+        ci: Some(LinearPrCi {
+            state: "fail".into(),
+            passed: 4,
+            failed: 1,
+            ..Default::default()
+        }),
+        additions: Some(48),
+        deletions: Some(12),
+        preview: Some("https://web-2132.preview.example".into()),
+        ..linear_pr()
+    }
+}
+
+#[test]
+fn a_pr_gh_has_read_shows_its_preview_diff_and_ci() {
+    let row = pr_row(read_pr(), Some(("ok", None)));
+    assert!(row.contains("#2132"), "{row:?}");
+    assert!(row.contains("Preview"), "{row:?}");
+    assert!(row.contains("+48") && row.contains("−12"), "{row:?}");
+    assert!(row.contains("\u{f057} CI"), "failing CI: {row:?}");
+    assert!(!row.contains('–') && !row.contains('…'), "{row:?}");
+}
+
+#[test]
+fn a_pr_gh_has_not_read_yet_shows_loading() {
+    for status in ["ok", "unknown"] {
+        let row = pr_row(linear_pr(), Some((status, None)));
+        assert!(row.contains("#2132 open"), "{status}: {row:?}");
+        assert!(row.trim_end().ends_with('…'), "{status}: {row:?}");
+    }
+}
+
+#[test]
+fn a_pr_while_gh_is_unavailable_says_so() {
+    let row = pr_row(
+        linear_pr(),
+        Some(("unavailable", Some("gh is not logged in"))),
+    );
+    assert!(row.contains("#2132 open"), "{row:?}");
+    assert!(row.contains("gh unavailable"), "{row:?}");
+    let failed = LinearCardPr {
+        gh_error: Some("HTTP 404".into()),
+        ..linear_pr()
+    };
+    let row = pr_row(failed, Some(("ok", None)));
+    assert!(
+        row.contains("gh unavailable"),
+        "a PR gh failed to read: {row:?}"
+    );
+}
+
+#[test]
+fn a_pr_from_a_daemon_without_gh_shows_linear_data_only() {
+    let row = pr_row(linear_pr(), None);
+    assert!(row.contains("#2132 open"), "{row:?}");
+    assert_eq!(row.matches('–').count(), 3, "{row:?}");
 }

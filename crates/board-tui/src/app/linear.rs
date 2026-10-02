@@ -16,7 +16,7 @@ use board_core::protocol::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
 
-use super::linear_cursor::{CardCursor, Focus};
+use super::linear_cursor::{CardCursor, Focus, Side};
 use super::nav::{nav_delta, step_clamped};
 use super::{App, Effect, Msg, Screen};
 
@@ -255,6 +255,9 @@ pub struct LinearState {
     /// next key selects in.
     pub sel_group: usize,
     pub focus: Focus,
+    /// The first column the board shows. Paging moves only this, so a
+    /// paging button can leave the focused column off the page.
+    pub page_start: usize,
     /// The board filter's text; it hides cards it does not match.
     pub filter: String,
     /// Folded lane keys by tab key.
@@ -385,6 +388,7 @@ impl LinearState {
             sel_tab: 0,
             sel_group: 0,
             focus: Focus::default(),
+            page_start: 0,
             filter: String::new(),
             folds: Default::default(),
             last_card: None,
@@ -1104,6 +1108,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             let cursor = state.cursor();
             state.last_good = Some(snapshot);
             state.refind(&cursor);
+            state.refit(app.last_area.width);
             state.clamp_strip();
             state.home_screen()
         }
@@ -1462,11 +1467,44 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         state.reselect();
         return vec![];
     }
+    let width = app.last_area.width;
+    // The stored page may predate a resize or a jump the draw already
+    // followed; moves below start from the page on screen.
+    state.refit(width);
+    if let Focus::Pager(..) = state.focus {
+        match k.code {
+            KeyCode::Enter | KeyCode::Esc => return pager_left(state, width),
+            _ if nav_delta(k.code).is_some() => return pager_left(state, width),
+            KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h' | 'l' | '<' | '>')
+            | KeyCode::Tab
+            | KeyCode::BackTab => {}
+            _ => state.leave_pager(),
+        }
+    }
     if let Some(delta) = nav_delta(k.code) {
         state.step(delta, false);
         return vec![];
     }
-    let per_page = crate::view::linear_columns_per_page(app.last_area.width);
+    let effects = board_action(app, k);
+    if let Some(state) = app.linear.as_mut() {
+        state.refit(width);
+    }
+    effects
+}
+
+fn pager_left(state: &mut LinearState, width: u16) -> Vec<Effect> {
+    state.leave_pager();
+    state.refit(width);
+    vec![]
+}
+
+fn board_action(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    let width = app.last_area.width;
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
     match k.code {
         KeyCode::Char('[') => state.cycle_tab(-1),
         KeyCode::Char(']') => state.cycle_tab(1),
@@ -1474,10 +1512,10 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('x') => return answer(app, false),
         KeyCode::Char('n') => walk(app, 1),
         KeyCode::Char('N') => walk(app, -1),
-        KeyCode::Char('<') => state.jump_page(-1, per_page),
-        KeyCode::Char('>') => state.jump_page(1, per_page),
-        KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.move_column(-1),
-        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.move_column(1),
+        KeyCode::Char('<') => state.scroll_page(Side::Left, width),
+        KeyCode::Char('>') => state.scroll_page(Side::Right, width),
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.move_column(-1, width),
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.move_column(1, width),
         KeyCode::Char('/') => state.open_filter(),
         KeyCode::Esc => state.deselect(),
         KeyCode::Enter => {
@@ -1529,14 +1567,15 @@ fn open_card(app: &mut App, id: &str) -> Vec<Effect> {
 
 /// Keys while the filter is selected: printable keys are filter text.
 fn filter_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
     match k.code {
         KeyCode::Esc => state.deselect(),
         KeyCode::Enter | KeyCode::Tab | KeyCode::Down => state.reselect(),
-        KeyCode::Left => state.move_column(-1),
-        KeyCode::Right => state.move_column(1),
+        KeyCode::Left => state.move_column(-1, width),
+        KeyCode::Right => state.move_column(1, width),
         KeyCode::Backspace => {
             state.filter.pop();
             state.clamp();
@@ -1618,6 +1657,17 @@ pub(super) fn wheel(app: &mut App, delta: isize) -> Vec<Effect> {
     }
 }
 
+/// A sideways scroll, or Shift with the wheel, over the board: pages toward
+/// `side` as `<` / `>` do.
+pub(super) fn page_wheel(app: &mut App, side: Side) -> Vec<Effect> {
+    let width = app.last_area.width;
+    match app.linear.as_mut() {
+        Some(state) if !state.strip_focus => state.scroll_page(side, width),
+        _ => {}
+    }
+    vec![]
+}
+
 /// Selects the strip row drawn under the click, found again by space id, then
 /// opens it the way `Enter` does. A space no longer listed is left alone.
 pub(super) fn click_strip_row(app: &mut App, space_id: &str) -> Vec<Effect> {
@@ -1641,9 +1691,11 @@ pub(super) fn click_strip_row(app: &mut App, space_id: &str) -> Vec<Effect> {
 /// the snapshot may have changed since that frame, then opens it the way
 /// `Enter` does. A card no longer in the snapshot is left alone.
 pub(super) fn click_card(app: &mut App, group: &str, lane: &str, identifier: &str) -> Vec<Effect> {
+    let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
+    state.refit(width);
     let Some((sel_group, sel_card)) = state.locate(group, lane, identifier) else {
         return vec![];
     };
@@ -1655,9 +1707,11 @@ pub(super) fn click_card(app: &mut App, group: &str, lane: &str, identifier: &st
 }
 
 pub(super) fn click_group(app: &mut App, group: &str) {
+    let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
         return;
     };
+    state.refit(width);
     if let Some(index) = state.groups().iter().position(|g| g.key == group) {
         state.strip_focus = false;
         state.sel_group = index;

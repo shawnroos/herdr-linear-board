@@ -3,7 +3,7 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearCardPr, LinearIssue, LinearSnapshot};
+use board_core::protocol::{LinearCardPr, LinearGhSource, LinearIssue, LinearSnapshot};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,7 +11,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{sanitise, App, CardOverlay, CardOverlays, Focus, LinearState, Screen};
+use crate::app::{
+    sanitise, App, CardOverlay, CardOverlays, Focus, LinearState, Page, Screen, Side,
+};
 use crate::theme::Theme;
 use crate::widgets::{HitMap, Zone};
 
@@ -22,9 +24,15 @@ use super::{centered_rect_abs, linear_help_keys};
 // 2026-09-16 pickers-and-layout plan.
 const CARD_H: u16 = 13;
 const CARD_INSET: u16 = 2;
-// Each column's half of the 4-cell gap between columns.
+// Each column's half of the 4-cell gap between columns; the outer halves
+// hold the paging buttons.
 const SLOT_PAD: u16 = 2;
-const MIN_COL_W: u16 = 36;
+// A 44-cell card and its gaps. Supersedes the 72-cell stacking threshold of
+// the 2026-09-16 pickers-and-layout plan.
+const MIN_COL_W: u16 = 48;
+const CARD_MAX: u16 = 64;
+const CARD_MIN: u16 = 40;
+const CARD_GAP: u16 = 1;
 const HEADER_ROWS: u16 = 2;
 // The column title bar and the blank row under it.
 const TITLE_ROWS: u16 = 2;
@@ -36,6 +44,8 @@ mod icon {
     pub const EYE: &str = "\u{f441}";
     pub const DIFF: &str = "\u{f4d2}";
     pub const CHECK: &str = "\u{f058}";
+    pub const CROSS: &str = "\u{f057}";
+    pub const CLOCK: &str = "\u{f017}";
     pub const FILTER: &str = "\u{f0232}";
     pub const FILTER_OUTLINE: &str = "\u{f0233}";
     pub const SLANT: &str = "\u{e0bc}";
@@ -315,17 +325,29 @@ struct CardLook {
     muted: bool,
 }
 
-/// What `gh` adds to a card's PR row: nothing yet (Linear's number and status
-/// with dim placeholders), still loading, or unavailable.
+/// What `gh` adds to a card's PR row: its preview, diff and CI once read,
+/// nothing from a daemon without `gh` (dim placeholders), still loading, or
+/// unavailable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrGh {
+    Read,
     LinearOnly,
     Loading,
     GhUnavailable,
 }
 
-fn pr_gh(_pr: &LinearCardPr) -> PrGh {
-    PrGh::LinearOnly
+/// Data `gh` already read wins, even while `gh` is failing now.
+fn pr_gh(source: Option<&LinearGhSource>, pr: &LinearCardPr) -> PrGh {
+    let read =
+        pr.state.is_some() || pr.ci.is_some() || pr.additions.is_some() || pr.preview.is_some();
+    match source {
+        _ if read => PrGh::Read,
+        None => PrGh::LinearOnly,
+        Some(source) if source.status == "unavailable" || pr.gh_error.is_some() => {
+            PrGh::GhUnavailable
+        }
+        Some(_) => PrGh::Loading,
+    }
 }
 
 /// The card's PR row: icon, number and Linear's status, then what `gh`
@@ -355,6 +377,7 @@ pub fn card_pr_line(theme: &Theme, pr: &LinearCardPr, gh: PrGh, muted: bool) -> 
         spans.push(Span::styled(format!(" {status}"), label));
     }
     match gh {
+        PrGh::Read => spans.extend(pr_read(theme, pr, muted)),
         PrGh::LinearOnly => {
             for glyph in [icon::EYE, icon::DIFF, icon::CHECK] {
                 spans.push(Span::styled(format!("  {glyph} –"), dim));
@@ -364,6 +387,50 @@ pub fn card_pr_line(theme: &Theme, pr: &LinearCardPr, gh: PrGh, muted: bool) -> 
         PrGh::GhUnavailable => spans.push(Span::styled("  gh unavailable", dim)),
     }
     Line::from(spans)
+}
+
+/// Preview, diff and CI as `gh` read them; each is left out when `gh` has
+/// nothing for it.
+fn pr_read(theme: &Theme, pr: &LinearCardPr, muted: bool) -> Vec<Span<'static>> {
+    let tone = |c| Style::default().fg(if muted { theme.muted_detail } else { c });
+    let label = if muted {
+        theme.card_detail_muted()
+    } else {
+        theme.card_detail()
+    };
+    let mut spans = vec![];
+    if pr.preview.is_some() {
+        spans.push(Span::styled(
+            format!("  {}", icon::EYE),
+            tone(theme.palette.teal),
+        ));
+        spans.push(Span::styled(" Preview", label));
+    }
+    if pr.additions.is_some() || pr.deletions.is_some() {
+        spans.push(Span::styled(
+            format!("  {}", icon::DIFF),
+            tone(theme.palette.yellow),
+        ));
+        spans.push(Span::styled(
+            format!(" +{}", pr.additions.unwrap_or(0)),
+            tone(theme.palette.green),
+        ));
+        spans.push(Span::styled(
+            format!(" −{}", pr.deletions.unwrap_or(0)),
+            tone(theme.palette.red),
+        ));
+    }
+    let ci = pr.ci.as_ref().and_then(|ci| match ci.state.as_str() {
+        "pass" => Some((icon::CHECK, theme.palette.green)),
+        "fail" => Some((icon::CROSS, theme.palette.red)),
+        "pending" => Some((icon::CLOCK, theme.palette.yellow)),
+        _ => None,
+    });
+    if let Some((glyph, colour)) = ci {
+        spans.push(Span::styled(format!("  {glyph}"), tone(colour)));
+        spans.push(Span::styled(" CI", label));
+    }
+    spans
 }
 
 fn card_header(
@@ -457,7 +524,10 @@ fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> [Vec<S
     let second = issue
         .pr
         .as_ref()
-        .map(|pr| card_pr_line(t, pr, pr_gh(pr), look.muted).spans)
+        .map(|pr| {
+            let source = state.snapshot().and_then(|s| s.gh.as_ref());
+            card_pr_line(t, pr, pr_gh(source, pr), look.muted).spans
+        })
         .unwrap_or_default();
     [first, second]
 }
@@ -521,10 +591,28 @@ fn card_lines(
     lines
 }
 
-/// How many columns one page holds at `width` cells: at least one, so a
-/// sidebar narrower than a column still shows a column.
-pub fn linear_columns_per_page(width: u16) -> usize {
+/// How many columns fit in `width` cells before the workflow caps them: at
+/// least one, so a pane narrower than a column still shows a column.
+pub fn board_columns(width: u16) -> usize {
     usize::from(width / MIN_COL_W).max(1)
+}
+
+/// Whether `width` cells leave the board two columns of room, the least a
+/// pinned issue panel keeps (KTD12).
+pub fn pin_fits(width: u16) -> bool {
+    width >= 2 * MIN_COL_W
+}
+
+/// Cards a row and card width for a column `inside` cells wide: two when two
+/// minimum cards and their gap fit, each capped at `CARD_MAX`.
+fn grid(inside: u16) -> (usize, u16) {
+    let ups = if inside >= 2 * CARD_MIN + CARD_GAP {
+        2
+    } else {
+        1
+    };
+    let width = (inside.saturating_sub((ups - 1) * CARD_GAP) / ups).min(CARD_MAX);
+    (usize::from(ups), width)
 }
 
 fn draw_too_short(state: &LinearState, f: &mut Frame, area: Rect) {
@@ -572,12 +660,9 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let mut body_h = area
         .height
         .saturating_sub(HEADER_ROWS + pinned_h + strip_h + footer_h);
-    let per_page = linear_columns_per_page(area.width);
     let overlays = state.overlays();
     let rows = [
         tab_row(state, &overlays, area.width as usize),
-        (state.groups().len() > per_page)
-            .then(|| pager_row(state, &overlays, per_page, area.width as usize)),
         filter_row(state, area.width as usize),
     ];
     for row in rows.into_iter().flatten() {
@@ -595,7 +680,6 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         snapshot,
         f,
         body,
-        per_page,
         &mut app.hit_map.borrow_mut(),
     );
     if let Some(pinned) = pinned {
@@ -703,6 +787,7 @@ struct Band<'a> {
     total: usize,
     folded: bool,
     top: u16,
+    ups: usize,
     columns: Vec<Vec<&'a str>>,
 }
 
@@ -716,18 +801,19 @@ impl Band<'_> {
     }
 
     fn card_top(&self, at: usize) -> u16 {
-        self.top + self.head() + at as u16 * (CARD_H + 1)
+        self.top + self.head() + (at / self.ups) as u16 * (CARD_H + 1)
     }
 
     fn height(&self) -> u16 {
         let cards = self.columns.iter().map(Vec::len).max().unwrap_or(0);
-        self.head() + cards as u16 * (CARD_H + 1)
+        self.head() + cards.div_ceil(self.ups) as u16 * (CARD_H + 1)
     }
 }
 
 /// The active tab's bands, top to bottom, for every column (not just the
-/// page shown), so the bands keep their height across pages.
-fn bands(state: &LinearState) -> Vec<Band<'_>> {
+/// page shown), so the bands keep their height across pages. `ups` is the
+/// same for every column, so a hidden column measures as a shown one would.
+fn bands(state: &LinearState, ups: usize) -> Vec<Band<'_>> {
     let groups = state.groups();
     let rows: Vec<_> = groups.iter().map(|g| state.lane_rows(g, None)).collect();
     let lanes = state.lanes();
@@ -764,6 +850,7 @@ fn bands(state: &LinearState) -> Vec<Band<'_>> {
                 total,
                 folded: label.is_some() && state.folded(key),
                 top,
+                ups,
                 columns,
             };
             top += band.height();
@@ -835,7 +922,6 @@ fn draw_columns(
     snapshot: &LinearSnapshot,
     f: &mut Frame,
     body: Rect,
-    per_page: usize,
     hit_map: &mut HitMap,
 ) {
     let groups = state.groups();
@@ -848,14 +934,23 @@ fn draw_columns(
     }
     let t = &state.theme;
     let sel_group = state.sel_group.min(groups.len() - 1);
-    let (start, visible) = if groups.len() > per_page {
-        (sel_group / per_page * per_page, per_page)
-    } else {
-        (0, groups.len())
-    };
-    let col_w = body.width / visible as u16;
-    let nothing_selected = state.focus == Focus::None;
-    let bands = bands(state);
+    let page = state.page(body.width);
+    let visible = page.visible as u16;
+    let board_focus = state.focus.board();
+    let nothing_selected = *board_focus == Focus::None;
+    // Columns share the width, the remainder spread one cell at a time, so
+    // the last column's outer gap ends at the board's edge.
+    let slot_x =
+        |slot: u16| body.x + (u32::from(slot) * u32::from(body.width) / u32::from(visible)) as u16;
+    let slots: Vec<(u16, u16, usize)> = (0..visible)
+        .map(|slot| {
+            let x = slot_x(slot);
+            (x, slot_x(slot + 1) - x, page.start + usize::from(slot))
+        })
+        .collect();
+    let narrowest = slots.iter().map(|&(_, w, _)| w).min().unwrap_or(0);
+    let (ups, _) = grid(narrowest.saturating_sub(2 * SLOT_PAD));
+    let bands = bands(state, ups);
     let counts: Vec<usize> = (0..groups.len())
         .map(|g| {
             state
@@ -865,14 +960,10 @@ fn draw_columns(
                 .sum()
         })
         .collect();
-    let slots: Vec<(u16, usize)> = (start..(start + visible).min(groups.len()))
-        .enumerate()
-        .map(|(slot, idx)| (body.x + slot as u16 * col_w, idx))
-        .collect();
 
     let titles = slots
         .iter()
-        .map(|&(_, idx)| {
+        .map(|&(_, col_w, idx)| {
             let text = fit(
                 &format!(
                     "   {}  {}",
@@ -892,7 +983,7 @@ fn draw_columns(
         Paragraph::new(Line::from(powerline(t, titles))),
         Rect::new(body.x, body.y, body.width, 1),
     );
-    for &(x, idx) in &slots {
+    for &(x, col_w, idx) in &slots {
         hit_map.push(
             Rect::new(x, body.y, col_w, 1),
             Zone::LinearGroup(groups[idx].key.clone()),
@@ -910,7 +1001,7 @@ fn draw_columns(
 
     let selected_slot = state.selected_slot();
     let total: u16 = bands.iter().map(Band::height).sum();
-    let target = match &state.focus {
+    let target = match board_focus {
         Focus::LaneLine(key) => bands
             .iter()
             .find(|b| b.label.is_some() && b.key == key)
@@ -920,7 +1011,7 @@ fn draw_columns(
             let at = band.columns[sel_group].iter().position(|c| *c == id)?;
             Some((band.card_top(at), CARD_H))
         }),
-        Focus::Filter | Focus::None => None,
+        _ => None,
     };
     let off = scroll_to(state.board_scroll.get(), target, view.height, total);
     state.board_scroll.set(off);
@@ -947,6 +1038,7 @@ fn draw_columns(
                 1,
             ),
         );
+        draw_pager(state, f, view, page);
         return;
     }
 
@@ -963,20 +1055,27 @@ fn draw_columns(
         }
     }
 
-    let card_w = col_w.saturating_sub(2 * SLOT_PAD);
-    for &(x, idx) in &slots {
+    for &(x, col_w, idx) in &slots {
         let in_focus = idx == sel_group;
         let muted = !in_focus && !nothing_selected;
-        let card_x = x + SLOT_PAD;
+        let column_x = x + SLOT_PAD;
+        let inside = col_w.saturating_sub(2 * SLOT_PAD);
+        let card_w =
+            (inside.saturating_sub((ups as u16 - 1) * CARD_GAP) / ups as u16).min(CARD_MAX);
         if counts[idx] == 0 {
             let first = bands.first().map_or(0, |b| b.card_top(0));
             if let Some((y, _, _)) = on_screen(first, 1) {
                 f.render_widget(
                     Paragraph::new(Span::styled(
-                        fit("no issues", card_w.saturating_sub(CARD_INSET) as usize),
+                        fit("no issues", inside.saturating_sub(CARD_INSET) as usize),
                         t.dim(),
                     )),
-                    Rect::new(card_x + CARD_INSET, y, card_w.saturating_sub(CARD_INSET), 1),
+                    Rect::new(
+                        column_x + CARD_INSET,
+                        y,
+                        inside.saturating_sub(CARD_INSET),
+                        1,
+                    ),
                 );
             }
             continue;
@@ -1011,6 +1110,7 @@ fn draw_columns(
                         )),
                     ],
                 };
+                let card_x = column_x + (at % ups) as u16 * (card_w + CARD_GAP);
                 let rect = Rect::new(card_x, y, card_w, h);
                 f.render_widget(Paragraph::new(lines).style(surface).scroll((skip, 0)), rect);
                 hit_map.push(
@@ -1023,6 +1123,51 @@ fn draw_columns(
                 );
             }
         }
+    }
+    draw_pager(state, f, view, page);
+}
+
+/// The outer gaps as `←` / `→` buttons over the columns hidden on that side,
+/// each with its count: one tone above the board while selected, flush
+/// otherwise.
+fn draw_pager(state: &LinearState, f: &mut Frame, view: Rect, page: Page) {
+    let t = &state.theme;
+    let focused = match state.focus {
+        Focus::Pager(side, _) => Some(side),
+        _ => None,
+    };
+    for side in [Side::Left, Side::Right] {
+        let hidden = page.hidden(side);
+        if hidden == 0 || view.width < 2 * SLOT_PAD {
+            continue;
+        }
+        let style = if focused == Some(side) {
+            t.panel().add_modifier(Modifier::BOLD)
+        } else {
+            t.app().patch(t.dim())
+        };
+        let count = fit(&hidden.to_string(), 2);
+        let (x, arrow, count) = match side {
+            Side::Left => (view.x, " ←", format!("{count:>2}")),
+            Side::Right => (view.right() - SLOT_PAD, "→ ", format!("{count:<2}")),
+        };
+        let mid = view.height.saturating_sub(1) / 2;
+        let lines: Vec<Line> = (0..view.height)
+            .map(|row| {
+                let text = if row == mid {
+                    arrow.to_string()
+                } else if row == mid + 1 {
+                    count.clone()
+                } else {
+                    "  ".to_string()
+                };
+                Line::styled(text, style)
+            })
+            .collect();
+        f.render_widget(
+            Paragraph::new(lines),
+            Rect::new(x, view.y, SLOT_PAD, view.height),
+        );
     }
 }
 
@@ -1098,66 +1243,6 @@ fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
         fit(&format!(" / {}{caret}", line(&state.filter)), width),
         style,
     )))
-}
-
-/// `‹ <hidden column> <cards>` on the left, `<hidden column> <cards> ›` on the
-/// right, and the page number between them when there is room.
-fn pager_row(
-    state: &LinearState,
-    overlays: &CardOverlays<'_>,
-    per_page: usize,
-    width: usize,
-) -> Line<'static> {
-    let groups = state.groups();
-    let start = state.sel_group.min(groups.len().saturating_sub(1)) / per_page * per_page;
-    let end = (start + per_page).min(groups.len());
-    let named = |at: usize| {
-        let group = &groups[at];
-        format!("{} {}", line(&group.label), group.issues.len())
-    };
-    let hidden = |range: std::ops::Range<usize>| {
-        attention_count(overlays, groups[range].iter().flat_map(|g| g.issues.iter()))
-    };
-    let left = if start > 0 {
-        format!("‹ {}{}", named(start - 1), hidden(0..start))
-    } else {
-        String::new()
-    };
-    let right = if end < groups.len() {
-        format!("{}{} ›", named(end), hidden(end..groups.len()))
-    } else {
-        String::new()
-    };
-    let page = format!(
-        "{}/{}",
-        start / per_page + 1,
-        groups.len().div_ceil(per_page)
-    );
-    let half = width / 2;
-    let (left, right) = if left.width() + right.width() + 1 > width {
-        let left = fit(&left, half.saturating_sub(1));
-        let right = fit(&right, width - half);
-        (left, right)
-    } else {
-        (left, right)
-    };
-    let gap = width.saturating_sub(left.width() + right.width());
-    let middle = if page.width() + 2 <= gap {
-        let before = (gap - page.width()) / 2;
-        format!(
-            "{}{page}{}",
-            " ".repeat(before),
-            " ".repeat(gap - page.width() - before)
-        )
-    } else {
-        " ".repeat(gap)
-    };
-    let dim = state.theme.dim();
-    Line::from(vec![
-        Span::raw(left),
-        Span::styled(middle, dim),
-        Span::raw(right),
-    ])
 }
 
 fn boxed(f: &mut Frame, area: Rect, title: &str, border: Style, lines: Vec<Line<'static>>) {

@@ -249,6 +249,7 @@ impl Driver {
             self.needs_full_redraw = true;
         }
         self.app.last_area = area;
+        self.app.refit_linear_page();
     }
 
     /// Subscribe to the daemon's board events, for the runtime's redraw-ping
