@@ -370,3 +370,34 @@ fn a_pending_pr_is_read_again_after_two_minutes_only_while_a_board_is_subscribed
     assert_eq!(board.wait_for_event(), announced());
     assert_eq!(board.views_of("4212"), 2);
 }
+
+#[test]
+fn a_missing_gh_is_tried_once_not_again_on_every_snapshot_it_announces() {
+    let rows = vec![issue("WEB-1", Some(PR_A))];
+    let mut board = Board::new(linear(rows.clone(), rows)).with_gh(false);
+    let log = board.gh.path().join("argv.log");
+    board.d.gh.configure(GhConfig {
+        bin: "/nonexistent/hb-gh".into(),
+        host: None,
+        env: vec![],
+        timeout: Duration::from_secs(5),
+    });
+
+    board.snapshot();
+    assert_eq!(
+        board.wait_for_event(),
+        announced(),
+        "the board learns gh is missing"
+    );
+    for _ in 0..3 {
+        board.snapshot();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    assert!(
+        board.events().is_empty(),
+        "each announcement re-queued the PR"
+    );
+    assert_eq!(board.snapshot().gh.unwrap().status, "unavailable");
+    assert!(!log.exists());
+}

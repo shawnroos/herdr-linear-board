@@ -632,10 +632,11 @@ daemon start).
     are cached per PR and shared by every board. A snapshot that shows a PR its space did not
     show before queues it for one debounced (500 ms) pass that reads at most 4 PRs at once; while
     at least one connection is subscribed to events, a check every 30 s also queues each
-    on-board PR whose checks were pending at a read 2 minutes old, or whose read is 10 minutes
-    old (after `gh` was unavailable, it waits 10 minutes). With no subscriber nothing is read
-    again. Each pass ends with one `local_state_changed {space, snapshot: true}` per space that
-    shows a PR it read, so a plain `linear.snapshot` carries the new fields. A snapshot never
+    on-board PR whose last read is 2 minutes old with checks pending, or 10 minutes old. With no
+    subscriber nothing is read again. After a pass finds `gh` unavailable, neither trigger
+    queues anything for 10 minutes. A pass that read a PR, or that changed `gh.status`, ends
+    with one `local_state_changed {space, snapshot: true}` per space that shows a PR it tried,
+    so a plain `linear.snapshot` carries the new fields. A snapshot never
     waits on `gh`.
   - Clients wait at most `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s). Error 1 for an empty
     `workspace_id`.

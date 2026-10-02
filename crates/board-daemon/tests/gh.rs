@@ -380,14 +380,14 @@ fn a_settled_pr_is_due_after_ten_minutes_and_a_pending_one_after_two() {
     let mut state = GhState::default();
     let settled = pr();
     let pending = PrRef::parse("https://github.com/acme/web/pull/9", None).unwrap();
-    assert!(state.observe(space(), [settled.clone(), pending.clone()].into()));
+    assert!(state.observe(space(), [settled.clone(), pending.clone()].into(), 1_000));
     assert_eq!(state.take_queue().len(), 2);
     let mut clean = parse::pr_detail(&open_view(), None);
     clean.ci.as_mut().unwrap().state = "pass".into();
     state.record(&settled, &Ok(clean), 1_000);
     state.record(&pending, &Ok(parse::pr_detail(&open_view(), None)), 1_000);
     assert!(
-        !state.observe(space(), [settled.clone(), pending.clone()].into()),
+        !state.observe(space(), [settled.clone(), pending.clone()].into(), 1_000),
         "same PRs"
     );
 
@@ -403,11 +403,16 @@ fn while_gh_is_unavailable_the_periodic_pass_waits_ten_minutes() {
     use board_daemon::gh::GhState;
 
     let mut state = GhState::default();
-    state.observe(space(), [pr()].into());
+    state.observe(space(), [pr()].into(), 1_000);
     state.take_queue();
     state.record(&pr(), &Err(GhError::Unavailable("no gh".into())), 1_000);
 
     assert_eq!(state.source().status, "unavailable");
+    let new = PrRef::parse("https://github.com/acme/web/pull/9", None).unwrap();
+    assert!(
+        !state.observe(space(), [pr(), new].into(), 1_100),
+        "a snapshot answering the announcement queues nothing"
+    );
     assert!(!state.queue_due(1_599));
     assert!(state.queue_due(1_600));
 }

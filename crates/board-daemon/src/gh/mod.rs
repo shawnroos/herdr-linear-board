@@ -126,7 +126,11 @@ pub struct GhState {
 }
 
 impl GhState {
-    pub fn observe(&mut self, space: SpaceKey, prs: BTreeSet<PrRef>) -> bool {
+    pub fn observe(&mut self, space: SpaceKey, prs: BTreeSet<PrRef>, now: i64) -> bool {
+        if self.backing_off(now) {
+            self.boards.insert(space, prs);
+            return false;
+        }
         let before = self.boards.get(&space);
         let new: Vec<PrRef> = prs
             .iter()
@@ -139,12 +143,16 @@ impl GhState {
         queued
     }
 
-    pub fn queue_due(&mut self, now: i64) -> bool {
-        if self
-            .unavailable
+    // A pass that finds `gh` missing still announces, and the snapshot that
+    // answers it must not queue the same PRs straight back.
+    fn backing_off(&self, now: i64) -> bool {
+        self.unavailable
             .as_ref()
             .is_some_and(|(_, at)| now - at < STALE_AFTER_SECS)
-        {
+    }
+
+    pub fn queue_due(&mut self, now: i64) -> bool {
+        if self.backing_off(now) {
             return false;
         }
         let on_board: BTreeSet<&PrRef> = self.boards.values().flatten().collect();

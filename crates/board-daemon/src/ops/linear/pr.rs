@@ -25,7 +25,8 @@ pub(in crate::ops) fn enrich(
         .collect();
     let queued = {
         let mut state = d.gh.state();
-        let queued = state.observe(key, shown.iter().map(|(_, pr)| pr.clone()).collect());
+        let prs = shown.iter().map(|(_, pr)| pr.clone()).collect();
+        let queued = state.observe(key, prs, now_secs(d));
         for (id, pr) in &shown {
             if let Some(card) = doc.issues.get_mut(id).and_then(|i| i.pr.as_mut()) {
                 state.merge_into(pr, card);
@@ -58,10 +59,17 @@ fn run_pass(d: &Arc<Daemon>) {
     if prs.is_empty() {
         return;
     }
+    let before = d.gh.state().source();
+    let read = std::sync::atomic::AtomicBool::new(false);
     read_all(&d.gh, prs.clone(), |pr, result| {
+        if !matches!(result, Err(GhError::Unavailable(_))) {
+            read.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         d.gh.state().record(pr, &result, now_secs(d));
     });
-    announce(d, &prs);
+    if read.into_inner() || d.gh.state().source() != before {
+        announce(d, &prs);
+    }
 }
 
 fn announce(d: &Arc<Daemon>, prs: &[PrRef]) {
