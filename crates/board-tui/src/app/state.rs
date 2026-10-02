@@ -179,7 +179,7 @@ pub fn collapse_line(s: &str) -> String {
     s.replace(['\n', '\t'], " ")
 }
 
-fn collapse_spaces(s: &str) -> String {
+pub(super) fn collapse_spaces(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if !(c == ' ' && out.ends_with(' ')) {

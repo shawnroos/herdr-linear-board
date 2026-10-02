@@ -4,10 +4,10 @@
 use super::*;
 
 use board_core::protocol::{LinearNoteSetParams, LinearShowRequestParams};
+use board_tui::app::{LinearWrite, WriteFailure};
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::Terminal;
 
 impl SharedFake {
@@ -154,26 +154,6 @@ fn buffer_row(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// The foreground of the cell where `needle` starts on row `y`.
-fn fg_at(buf: &Buffer, y: u16, needle: &str) -> Color {
-    let cells: Vec<&str> = (0..buf.area.width)
-        .map(|x| {
-            buf.content[usize::from(y) * usize::from(buf.area.width) + usize::from(x)].symbol()
-        })
-        .collect();
-    let first = needle.chars().next().unwrap().to_string();
-    let at = (0..cells.len())
-        .find(|&x| {
-            cells[x] == first
-                && needle
-                    .chars()
-                    .enumerate()
-                    .all(|(i, c)| cells.get(x + i).is_some_and(|s| *s == c.to_string()))
-        })
-        .unwrap_or_else(|| panic!("{needle:?} not on row {y}: {}", buffer_row(buf, y)));
-    buf.content[usize::from(y) * usize::from(buf.area.width) + at].fg
-}
-
 fn row_with(frame: &str, needle: &str) -> String {
     frame
         .lines()
@@ -286,36 +266,41 @@ fn ae1_a_on_a_selected_suggestion_binds_it_and_the_pinned_request_stays() {
 }
 
 #[test]
-fn ae2_x_with_no_suggestion_selected_dismisses_the_request_and_keeps_the_selection() {
+fn a_and_x_on_the_board_leave_a_pending_request_alone() {
     let shared = SharedFake::quiet(tabs_lanes());
-    let id = shared.ask("WEB-105", "agent-b");
+    shared.ask("WEB-105", "agent-b");
     let (mut d, log) = board(&shared);
     press(&mut d, KeyCode::Char('j'));
     assert!(render_at(&mut d, 140, 40).contains("◉ agent-b"));
     press(&mut d, KeyCode::Char('x'));
-    assert_eq!(
-        params(&log, "linear.show.dismiss"),
-        vec![serde_json::json!({ "id": id })]
-    );
-    assert_eq!(count(&log, "linear.show.accept"), 0);
+    assert_eq!(toast(&d), "nothing to dismiss");
+    press(&mut d, KeyCode::Char('a'));
+    assert_eq!(toast(&d), "nothing to accept");
+    assert!(methods(&log).is_empty(), "{:?}", methods(&log));
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
-    assert_eq!(d.app.screen, Screen::LinearBoard);
-    let frame = render_at(&mut d, 140, 40);
-    assert!(!frame.contains('◉'), "line entry and badge gone:\n{frame}");
+    assert!(render_at(&mut d, 140, 40).contains("◉ agent-b"));
+}
+
+fn accepted(d: &mut Driver, id: i64, issue: &str, result: Result<(), WriteFailure>) {
+    d.handle(Msg::LinearArrived(Box::new(
+        board_tui::app::LinearArrival::Wrote {
+            write: LinearWrite::AcceptShow {
+                id,
+                issue: issue.into(),
+            },
+            result,
+        },
+    )));
 }
 
 #[test]
-fn f2_a_on_a_request_for_a_card_on_another_tab_switches_tab_and_page_and_selects_it() {
+fn f2_an_accepted_request_for_a_card_on_another_tab_switches_tab_and_page_and_selects_it() {
     let shared = SharedFake::quiet(tabs_lanes());
     let id = shared.ask("WEB-202", "agent-b");
     let (mut d, log) = board(&shared);
     render_at(&mut d, 44, 30);
     assert_eq!(active_tab(&d), "ms-frontend");
-    press(&mut d, KeyCode::Char('a'));
-    assert_eq!(
-        params(&log, "linear.show.accept"),
-        vec![serde_json::json!({ "id": id })]
-    );
+    accepted(&mut d, id, "WEB-202", Ok(()));
     assert_eq!(active_tab(&d), "ms-backend");
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-202"));
     assert_eq!(selected_column(&d), "st-prog");
@@ -336,13 +321,12 @@ fn f2_a_on_a_request_for_a_card_on_another_tab_switches_tab_and_page_and_selects
 }
 
 #[test]
-fn a_on_a_request_whose_target_is_not_on_the_board_opens_its_detail_and_clears_nothing() {
+fn an_accepted_request_whose_target_is_not_on_the_board_opens_its_detail_and_clears_nothing() {
     let shared = SharedFake::quiet(tabs_lanes());
     shared.mark_kind("WEB-9999", MarkKind::Attention, "look here", "agent-a");
-    shared.ask("WEB-9999", "agent-b");
+    let id = shared.ask("WEB-9999", "agent-b");
     let (mut d, log) = board(&shared);
-    press(&mut d, KeyCode::Char('a'));
-    assert_eq!(count(&log, "linear.show.accept"), 1);
+    accepted(&mut d, id, "WEB-9999", Ok(()));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     let state = d.app.linear.as_ref().unwrap();
     assert_eq!(state.detail.as_deref(), Some("WEB-9999"));
@@ -359,16 +343,21 @@ fn a_on_a_request_whose_target_is_not_on_the_board_opens_its_detail_and_clears_n
 }
 
 #[test]
-fn a_on_a_request_answered_after_drawing_says_it_is_gone_and_rereads_state() {
+fn an_accept_answered_elsewhere_first_says_it_is_gone_and_rereads_state() {
     let shared = SharedFake::quiet(tabs_lanes());
     let id = shared.ask("WEB-105", "agent-b");
     let (mut d, log) = board(&shared);
     assert!(render_at(&mut d, 140, 40).contains("◉ agent-b"));
     shared.close(id);
-    press(&mut d, KeyCode::Char('a'));
+    accepted(
+        &mut d,
+        id,
+        "WEB-105",
+        Err(WriteFailure::Gone("gone".into())),
+    );
     assert_eq!(
         methods(&log),
-        vec!["linear.show.accept", "linear.state.get"],
+        vec!["linear.state.get"],
         "{:?}",
         methods(&log)
     );
@@ -568,6 +557,22 @@ fn n_walks_marked_cards_across_pages_and_tabs_and_wraps() {
 }
 
 #[test]
+fn n_with_nothing_selected_starts_from_the_top_of_the_focused_column() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    shared.mark_kind("WEB-101", MarkKind::Attention, "look", "agent-a");
+    shared.mark_kind("WEB-104", MarkKind::Attention, "look", "agent-a");
+    let (mut d, _) = board(&shared);
+    press(&mut d, KeyCode::Esc);
+    press(&mut d, KeyCode::Char('n'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    press(&mut d, KeyCode::Char('n'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+    press(&mut d, KeyCode::Char('n'));
+    press(&mut d, KeyCode::Char('N'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
+}
+
+#[test]
 fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
     let shared = SharedFake::quiet(tabs_lanes());
     shared.mark_kind("WEB-103", MarkKind::Attention, "look", "agent-a");
@@ -588,26 +593,21 @@ fn ae6_a_sidebar_board_counts_attention_on_hidden_columns_and_other_tabs() {
 }
 
 #[test]
-fn with_a_suggestion_selected_the_footer_names_bind_and_the_pinned_keys_dim() {
+fn with_a_suggestion_selected_the_footer_names_bind() {
     let shared = SharedFake::quiet(tabs_lanes());
     let worktree = Worktree::new("cue");
     shared.suggest("WEB-101", Some(&worktree.0));
     shared.ask("WEB-105", "agent-b");
     let (mut d, _) = board(&shared);
     let buf = buffer(&mut d, 80, 30);
-    let pinned = (0..30)
-        .find(|&y| buffer_row(&buf, y).contains("◉ agent-b"))
-        .expect("a pinned line");
     assert!(buffer_row(&buf, 29).contains("a bind · x dismiss"));
-    assert_eq!(fg_at(&buf, pinned, "a show"), Color::DarkGray);
     press(&mut d, KeyCode::Char('j'));
     let buf = buffer(&mut d, 80, 30);
     assert!(!buffer_row(&buf, 29).contains("a bind"));
-    assert_ne!(fg_at(&buf, pinned, "a show"), Color::DarkGray);
 }
 
 #[test]
-fn the_pinned_line_truncates_the_title_and_keeps_the_keys_and_count_at_44_cells() {
+fn the_pinned_line_truncates_the_title_and_keeps_the_count_at_44_cells() {
     let mut snapshot = tabs_lanes();
     snapshot.issues.get_mut("WEB-105").unwrap().title = NINETY.into();
     let shared = SharedFake::quiet(snapshot);
@@ -618,9 +618,10 @@ fn the_pinned_line_truncates_the_title_and_keeps_the_keys_and_count_at_44_cells(
     let frame = render_at(&mut d, 44, 30);
     let line = row_with(&frame, "◉ agent-b");
     assert!(line.contains("WEB-105"), "oldest first:\n{frame}");
+    assert!(line.trim_end().ends_with(" +2"), "{frame}");
     assert!(
-        line.trim_end().ends_with("a show · x dismiss +2"),
-        "{frame}"
+        !line.contains("dismiss"),
+        "a and x no longer answer it:\n{frame}"
     );
     assert!(line.contains('…'), "{frame}");
     assert!(unicode_width::UnicodeWidthStr::width(line.trim_end()) <= 44);

@@ -11,7 +11,7 @@ use board_core::protocol::{
     CardCreateParams, Event, LinearActivityRecordParams, LinearBindParams, LinearGroup,
     LinearMarkSetParams, LinearSnapshot, MarkKind, PaneFocusResult,
 };
-use board_tui::app::{Effect, LocalStateSignals, Mode, Msg, Screen};
+use board_tui::app::{Effect, Focus, LocalStateSignals, Mode, Msg, Screen};
 use board_tui::testkit::left_down;
 use board_tui::testkit::{
     draw, hostile_origin, key, linear_driver, linear_driver_deferred,
@@ -58,6 +58,13 @@ fn start_with_socket() -> LinearStart {
         },
         ..linear_start()
     }
+}
+
+fn ctrl_q() -> Msg {
+    Msg::Key(crossterm::event::KeyEvent::new(
+        KeyCode::Char('q'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
 }
 
 fn press(d: &mut Driver, code: KeyCode) {
@@ -407,7 +414,7 @@ fn help_sheet_lists_the_linear_keys_and_any_key_closes_it() {
     assert_eq!(d.app.screen, Screen::Help);
     let frame = render_at(&mut d, W, H);
     assert!(frame.contains("Help — Linear mode"), "{frame}");
-    assert!(frame.contains("copy worktree path"), "{frame}");
+    assert!(frame.contains("quit (q does nothing)"), "{frame}");
     assert!(frame.contains("more below"), "{frame}");
     insta::assert_snapshot!("linear_help", frame);
     press(&mut d, KeyCode::Char('x'));
@@ -545,7 +552,7 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
     press(&mut d, KeyCode::Char('r'));
     press(&mut d, KeyCode::Char('?'));
     press(&mut d, KeyCode::Esc);
-    press(&mut d, KeyCode::Char('q'));
+    d.handle(ctrl_q());
     assert!(d.app.should_quit);
     let seen = methods(&log);
     assert!(!seen.iter().any(|m| m == "board.get"), "{seen:?}");
@@ -1579,7 +1586,7 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
     assert!(pager(&frame).starts_with("‹ Dev Done 0"), "{frame}");
     let state = d.app.linear.as_mut().unwrap();
     state.sel_group = 2;
-    state.sel_card = 9;
+    state.focus = Focus::Card(9);
     let frame = render_at(&mut d, 70, 20);
     assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
     assert!(
@@ -2181,7 +2188,11 @@ fn wheel(d: &mut Driver, kind: MouseEventKind) {
 
 fn selection(d: &Driver) -> (usize, usize, Option<String>) {
     let state = d.app.linear.as_ref().unwrap();
-    (state.sel_group, state.sel_card, state.detail.clone())
+    let card = match state.focus {
+        Focus::Card(card) => card,
+        _ => usize::MAX,
+    };
+    (state.sel_group, card, state.detail.clone())
 }
 
 /// Frame row `row` as the screen shows it, without the backend's quoting.
@@ -2335,7 +2346,7 @@ fn a_click_on_the_issue_page_does_not_reach_the_board() {
         assert_eq!(selection(&d), (2, 0, Some("WEB-3302".into())));
     }
     wheel(&mut d, MouseEventKind::ScrollDown);
-    assert_eq!(d.app.linear.as_ref().unwrap().sel_card, 0);
+    assert_eq!(d.app.linear.as_ref().unwrap().focus, Focus::Card(0));
 }
 
 #[test]
@@ -2979,7 +2990,12 @@ fn escape_on_the_not_bound_strip_unfocuses_it_and_a_second_escape_quits() {
     let (mut d, _, _) = linear_driver(not_bound_client(), linear_start());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Char('q'));
-    assert!(d.app.should_quit, "q quits even with the strip focused");
+    assert!(!d.app.should_quit, "plain q is inert");
+    d.handle(ctrl_q());
+    assert!(
+        d.app.should_quit,
+        "ctrl+q quits even with the strip focused"
+    );
     let (mut d, _, _) = linear_driver(not_bound_client(), linear_start());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Esc);
@@ -4117,9 +4133,9 @@ fn a_selected_card_that_moved_columns_is_followed() {
 #[test]
 fn a_selected_card_that_left_the_snapshot_leaves_the_cursor_in_the_same_column() {
     let mut d = tabs_driver();
-    press(&mut d, KeyCode::Char('j'));
-    press(&mut d, KeyCode::Char('j'));
-    press(&mut d, KeyCode::Char('j'));
+    for _ in 0..4 {
+        press(&mut d, KeyCode::Char('j'));
+    }
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
     let mut snapshot = tabs_lanes();
     edit_first_tab(&mut snapshot, |groups| {
@@ -4306,7 +4322,8 @@ fn an_issue_in_two_lanes_keeps_the_lane_it_was_selected_in() {
         fake_with(web_104_in_two_lanes()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
-    for _ in 0..4 {
+    // WEB-101..103, WEB-104 in Alpha, the Beta lane line, WEB-104 in Beta.
+    for _ in 0..5 {
         press(&mut d, KeyCode::Char('j'));
     }
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
@@ -4347,5 +4364,6 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
     assert_eq!(selected_lane(&d), "ln-beta");
 }
 
+mod focus;
 mod landing;
 mod marks;

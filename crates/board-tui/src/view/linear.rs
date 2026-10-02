@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{lane_sections, sanitise, App, CardOverlay, CardOverlays, LinearState, Screen};
+use crate::app::{sanitise, App, CardOverlay, CardOverlays, Focus, LinearState, Screen};
 use crate::widgets::{HitMap, Zone};
 
 use super::linear_strip::{draw_strip, strip_lines};
@@ -331,6 +331,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         tab_row(state, &overlays, area.width as usize),
         (state.groups().len() > per_page)
             .then(|| pager_row(state, &overlays, per_page, area.width as usize)),
+        filter_row(state, area.width as usize),
     ];
     for row in rows.into_iter().flatten() {
         if body_h == 0 {
@@ -361,18 +362,14 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     draw_strip(app, strip, f, area, body.bottom() + pinned_h);
 }
 
-/// `a` and `x` act on the selected card's suggestion before any request, so
-/// while one is selected the request's keys dim and the footer names the
-/// suggestion's.
+/// While a card with a suggestion is selected, the footer names `a` and `x`.
 fn suggestion_selected(state: &LinearState) -> bool {
     state.selected_suggestion().is_some()
 }
 
-const PINNED_KEYS: &str = "a show · x dismiss";
-
-/// The oldest pending show-request: who asked, the issue, its title, the keys
-/// and how many more wait. Only the title and then the head give way to a
-/// narrow pane; the keys and the count are never cut.
+/// The oldest pending show-request: who asked, the issue, its title and how
+/// many more wait. Only the title and then the head give way to a narrow
+/// pane; the count is never cut.
 fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
     let requests = state.pending_requests();
     let oldest = requests.first()?;
@@ -391,24 +388,18 @@ fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
         .map(|i| line(&i.title))
         .or_else(|| oldest.reason.as_deref().map(line))
         .unwrap_or_default();
-    let tail = PINNED_KEYS.width() + more.width();
+    let tail = more.width();
     let room = width.saturating_sub(tail + 2);
     let head = fit(&format!("◉ {who} · {} ", line(&oldest.issue)), room);
     let title = fit(&title, room.saturating_sub(head.width()));
     let gap = width
         .saturating_sub(head.width() + title.width() + tail)
         .max(1);
-    let keys = if suggestion_selected(state) {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::LightCyan)
-    };
     Some(Line::from(vec![
         Span::styled(head, Style::default().fg(Color::LightMagenta)),
         Span::raw(title),
         Span::raw(" ".repeat(gap)),
-        Span::styled(PINNED_KEYS, keys),
-        Span::styled(more, keys),
+        Span::styled(more, Style::default().fg(Color::LightCyan)),
     ]))
 }
 
@@ -482,6 +473,24 @@ fn tab_row(
         spans.push(Span::raw(" "));
     }
     Some(Line::from(spans))
+}
+
+/// The board filter, shown while it is selected or holds text.
+fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
+    let selected = state.focus == Focus::Filter;
+    if !selected && state.filter.is_empty() {
+        return None;
+    }
+    let caret = if selected { "▏" } else { "" };
+    let style = if selected {
+        Style::default().fg(Color::LightBlue)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    Some(Line::from(Span::styled(
+        fit(&format!(" / {}{caret}", line(&state.filter)), width),
+        style,
+    )))
 }
 
 /// `‹ <hidden column> <cards>` on the left, `<hidden column> <cards> ›` on the
@@ -567,8 +576,10 @@ fn visible_items(heights: &[u16], focus: usize, avail: u16) -> (usize, usize) {
 
 enum ColumnItem<'a> {
     Lane {
+        key: &'a str,
         label: &'a str,
         count: usize,
+        folded: bool,
     },
     Card {
         lane: &'a str,
@@ -621,7 +632,9 @@ fn draw_columns(
     {
         let x = body.x + slot as u16 * col_w;
         let rect = Rect::new(x, body.y, col_w, body.height);
-        let focused = idx == sel_group;
+        let in_focus = idx == sel_group;
+        let focused = in_focus && state.focus != Focus::None;
+        let lane_line = state.selected_lane_line().filter(|_| in_focus);
         let title = fit(
             &format!(" {} ({}) ", line(&group.label), group.issues.len()),
             col_w.saturating_sub(2) as usize,
@@ -641,23 +654,20 @@ fn draw_columns(
             Zone::LinearGroup(group.key.clone()),
         );
         let mut items = Vec::new();
-        for section in lane_sections(group) {
-            if let Some(label) = section.label {
+        for row in state.lane_rows(group, lane_line) {
+            if let Some(label) = row.label {
                 items.push(ColumnItem::Lane {
+                    key: row.key,
                     label,
-                    count: section.issues.len(),
+                    count: row.count,
+                    folded: row.folded,
                 });
             }
-            items.extend(
-                section
-                    .issues
-                    .into_iter()
-                    .map(|identifier| ColumnItem::Card {
-                        lane: section.key,
-                        identifier,
-                        height: card_height(overlays.get(identifier)),
-                    }),
-            );
+            items.extend(row.issues.into_iter().map(|identifier| ColumnItem::Card {
+                lane: row.key,
+                identifier,
+                height: card_height(overlays.get(identifier)),
+            }));
         }
         let heights: Vec<u16> = items
             .iter()
@@ -666,16 +676,15 @@ fn draw_columns(
                 ColumnItem::Card { height, .. } => *height,
             })
             .collect();
-        let focus = if focused {
-            items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| matches!(item, ColumnItem::Card { .. }))
-                .nth(state.sel_card)
-                .map_or(0, |(at, _)| at)
-        } else {
-            0
-        };
+        let focus = items
+            .iter()
+            .position(|item| match *item {
+                ColumnItem::Card {
+                    lane, identifier, ..
+                } => in_focus && selected_slot == Some((lane, identifier)),
+                ColumnItem::Lane { key, .. } => lane_line == Some(key),
+            })
+            .unwrap_or(0);
         // The last card may drop its separator row at the column's bottom edge.
         let (first, end) = visible_items(&heights, focus, inner.height + 1);
         let mut y = inner.y;
@@ -684,18 +693,26 @@ fn draw_columns(
                 break;
             }
             match *item {
-                ColumnItem::Lane { label, count } => {
+                ColumnItem::Lane {
+                    key,
+                    label,
+                    count,
+                    folded,
+                } => {
+                    let lead = if folded { "▸ " } else { "── " };
                     let text = fit(
-                        &format!("── {} {count} ", line(label)),
+                        &format!("{lead}{} {count} ", line(label)),
                         inner.width as usize,
                     );
                     let rule = "─".repeat((inner.width as usize).saturating_sub(text.width()));
+                    let mut style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+                    if lane_line == Some(key) {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
                     f.render_widget(
-                        Paragraph::new(format!("{text}{rule}")).style(
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        Paragraph::new(format!("{text}{rule}")).style(style),
                         Rect::new(inner.x, y, inner.width, 1),
                     );
                     y += 1;
@@ -711,7 +728,7 @@ fn draw_columns(
                         inner.width,
                         (height - 1).min(inner.bottom().saturating_sub(y)),
                     );
-                    let selected = focused && selected_slot == Some((lane, identifier));
+                    let selected = in_focus && selected_slot == Some((lane, identifier));
                     let lines: Vec<Line> = match snapshot.issues.get(identifier) {
                         Some(issue) => {
                             card_lines(state, overlays.get(identifier), issue, inner.width as usize)

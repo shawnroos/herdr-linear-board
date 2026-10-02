@@ -207,8 +207,8 @@ fn on_linear_mouse(app: &mut App, m: MouseEvent) -> Vec<Effect> {
                 _ => vec![],
             }
         }
-        MouseEventKind::ScrollDown => super::linear::linear_key(app, key(KeyCode::Down)),
-        MouseEventKind::ScrollUp => super::linear::linear_key(app, key(KeyCode::Up)),
+        MouseEventKind::ScrollDown => super::linear::wheel(app, 1),
+        MouseEventKind::ScrollUp => super::linear::wheel(app, -1),
         _ => vec![],
     }
 }

@@ -56,7 +56,7 @@ pub use linear::{
     LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
     StripView, WriteFailure,
 };
-pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
+pub use linear_cursor::{column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection};
 pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use session::{session_lane, SessionLane, SessionState, SessionView};

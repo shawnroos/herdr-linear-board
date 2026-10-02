@@ -16,7 +16,7 @@ use board_core::protocol::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
 
-use super::linear_cursor::CardCursor;
+use super::linear_cursor::{CardCursor, Focus};
 use super::nav::{nav_delta, step_clamped};
 use super::{App, Effect, Msg, Screen};
 
@@ -244,9 +244,17 @@ pub struct LinearState {
     /// later refresh fails (R19).
     pub last_good: Option<LinearSnapshot>,
     pub sel_tab: usize,
+    /// The focused column, kept while nothing is selected as the column the
+    /// next key selects in.
     pub sel_group: usize,
-    /// Index into the selected column's card slots (`column_cards`).
-    pub sel_card: usize,
+    pub focus: Focus,
+    /// The board filter's text; it hides cards it does not match.
+    pub filter: String,
+    /// Folded lane keys by tab key.
+    pub folds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    /// The card selected when the focus last left a card, which Esc and the
+    /// filter return to.
+    pub last_card: Option<CardCursor>,
     /// The cursor each tab had when it was left, by tab key.
     pub tab_cursors: std::collections::BTreeMap<String, CardCursor>,
     /// The identifier open on `Screen::LinearDetail`.
@@ -364,7 +372,10 @@ impl LinearState {
             last_good: None,
             sel_tab: 0,
             sel_group: 0,
-            sel_card: 0,
+            focus: Focus::default(),
+            filter: String::new(),
+            folds: Default::default(),
+            last_card: None,
             tab_cursors: Default::default(),
             detail: None,
             in_flight: false,
@@ -727,15 +738,7 @@ impl LinearState {
     }
 
     pub(super) fn clamp(&mut self) {
-        self.sel_tab = self.sel_tab.min(self.tabs().len().saturating_sub(1));
-        let n = self.groups().len();
-        if self.sel_group >= n {
-            self.sel_group = n.saturating_sub(1);
-        }
-        let cards = self.selected_column_len();
-        if self.sel_card >= cards {
-            self.sel_card = cards.saturating_sub(1);
-        }
+        self.settle();
         // Only close the page for an issue the reader reached FROM the board:
         // a linked issue is deliberately off-board, and closing it on the next
         // refresh would drop the reader back mid-read.
@@ -1249,8 +1252,8 @@ fn show_target(app: &mut App, issue: &str) -> Vec<Effect> {
     request_issue(app, issue)
 }
 
-/// `a` (accept) and `x` (reject): the selected card's oldest suggestion
-/// first, else the first drawn show-request, resolved now by id.
+/// `a` (accept) and `x` (reject) on the board: the selected card's oldest
+/// suggestion. Show-requests are answered from the bottom bar, not here.
 fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
     let Some(state) = app.linear.as_ref() else {
         return vec![];
@@ -1275,26 +1278,15 @@ fn answer(app: &mut App, accept: bool) -> Vec<Effect> {
             cwd,
         }];
     }
-    let Some((id, issue)) = state
-        .pending_requests()
-        .first()
-        .map(|r| (r.id, r.issue.clone()))
-    else {
-        app.set_toast(
-            if accept {
-                "nothing to accept"
-            } else {
-                "nothing to dismiss"
-            },
-            false,
-        );
-        return vec![];
-    };
-    if accept {
-        vec![Effect::LinearShowAccept { id, issue }]
-    } else {
-        vec![Effect::LinearShowDismiss { id }]
-    }
+    app.set_toast(
+        if accept {
+            "nothing to accept"
+        } else {
+            "nothing to dismiss"
+        },
+        false,
+    );
+    vec![]
 }
 
 /// `n` / `N`: the next or previous card carrying a mark or badge, in tab,
@@ -1310,6 +1302,10 @@ fn walk(app: &mut App, delta: isize) {
 }
 
 pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    // Above the chord guard, which drops every Control press.
+    if k.code == KeyCode::Char('q') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        return vec![Effect::Quit];
+    }
     // Same rule as the upstream reducer: a fast `Esc <key>` arrives as
     // `Alt+<key>`, which would otherwise open the browser or focus a pane.
     if k.modifiers.intersects(
@@ -1325,6 +1321,15 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     // so `r` must not fetch and `?` must not open help.
     if app.screen == Screen::LinearPicker {
         return super::linear_picker::linear_picker_key(app, k);
+    }
+    // Before the global keys for the same reason: `?`, `r` and `q` are text.
+    if app.screen == Screen::LinearBoard
+        && app
+            .linear
+            .as_ref()
+            .is_some_and(|s| s.focus == Focus::Filter && !s.strip_focus)
+    {
+        return filter_key(app, k);
     }
     if k.code == KeyCode::Char('?') && app.screen != Screen::Help {
         app.help_return_to = app.screen;
@@ -1368,26 +1373,22 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         Screen::LinearBoard => board_key(app, k),
         Screen::LinearDetail => detail_key(app, k),
         Screen::LinearError => {
-            match k.code {
-                KeyCode::Char('q') => return vec![Effect::Quit],
-                KeyCode::Esc => {
-                    if let Some(state) = app.linear.as_ref() {
-                        if state.last_good.is_some() {
-                            app.screen = state.home_screen();
-                        }
+            if k.code == KeyCode::Esc {
+                if let Some(state) = app.linear.as_ref() {
+                    if state.last_good.is_some() {
+                        app.screen = state.home_screen();
                     }
                 }
-                _ => {}
             }
             vec![]
         }
         Screen::LinearNotBound => match strip_owned_key(app, k) {
             Some(effects) => effects,
-            None if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) => vec![Effect::Quit],
+            None if k.code == KeyCode::Esc => vec![Effect::Quit],
             None => vec![],
         },
         Screen::LinearStaleDaemon => match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => vec![Effect::Quit],
+            KeyCode::Esc => vec![Effect::Quit],
             _ => vec![],
         },
         _ => vec![],
@@ -1431,9 +1432,24 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
+    if state.focus == Focus::None
+        && matches!(
+            k.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Enter
+                | KeyCode::Char('h' | 'j' | 'k' | 'l')
+        )
+    {
+        state.reselect();
+        return vec![];
+    }
     if let Some(delta) = nav_delta(k.code) {
-        let cards = state.selected_column_len();
-        state.sel_card = step_clamped(state.sel_card, delta, cards.saturating_sub(1));
+        state.step(delta, false);
         return vec![];
     }
     let per_page = crate::view::linear_columns_per_page(app.last_area.width);
@@ -1446,46 +1462,75 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('N') => walk(app, -1),
         KeyCode::Char('<') => state.jump_page(-1, per_page),
         KeyCode::Char('>') => state.jump_page(1, per_page),
-        KeyCode::Left | KeyCode::Char('h') => {
-            state.sel_group = step_clamped(state.sel_group, -1, 0);
-            state.clamp();
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            let max = state.groups().len().saturating_sub(1);
-            state.sel_group = step_clamped(state.sel_group, 1, max);
-            state.clamp();
-        }
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.move_column(-1),
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.move_column(1),
+        KeyCode::Char('/') => state.open_filter(),
+        KeyCode::Esc => state.deselect(),
         KeyCode::Enter => {
+            if let Some(lane) = state.selected_lane_line().map(str::to_string) {
+                state.toggle_fold(&lane);
+                return vec![];
+            }
             if let Some(id) = state.selected_identifier().map(str::to_string) {
-                state.detail = Some(id.clone());
-                state.detail_stack.clear();
-                state.detail_seed = None;
-                // The working pane, as the overlay opened on: getting to the
-                // pane working on an issue is why a card gets opened.
-                state.detail_selection = state
-                    .detail_pane_rows()
-                    .iter()
-                    .position(|row| row.status == "working")
-                    .map(crate::view::IssueRowKind::Pane);
-                // The marks shown now clear, in one request; one
-                // set later stays. A suggestion clears only on `a` or `x`.
-                let shown: Vec<Mark> = state.marks_for(&id).cloned().collect();
-                let ids: Vec<i64> = shown
-                    .iter()
-                    .filter(|m| m.kind != MarkKind::Suggestion)
-                    .map(|m| m.id)
-                    .collect();
-                state.detail_marks = Some((id.clone(), shown));
-                app.screen = Screen::LinearDetail;
-                let mut effects = vec![];
-                if !ids.is_empty() {
-                    effects.push(Effect::LinearMarkClear { ids, on_open: true });
-                }
-                effects.extend(request_issue(app, &id));
-                return effects;
+                return open_card(app, &id);
             }
         }
-        KeyCode::Char('q') | KeyCode::Esc => return vec![Effect::Quit],
+        _ => {}
+    }
+    vec![]
+}
+
+/// Return on a card: its issue page, clearing the marks it shows.
+fn open_card(app: &mut App, id: &str) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    state.detail = Some(id.to_string());
+    state.detail_stack.clear();
+    state.detail_seed = None;
+    // The working pane, as the overlay opened on: getting to the
+    // pane working on an issue is why a card gets opened.
+    state.detail_selection = state
+        .detail_pane_rows()
+        .iter()
+        .position(|row| row.status == "working")
+        .map(crate::view::IssueRowKind::Pane);
+    // The marks shown now clear, in one request; one
+    // set later stays. A suggestion clears only on `a` or `x`.
+    let shown: Vec<Mark> = state.marks_for(id).cloned().collect();
+    let ids: Vec<i64> = shown
+        .iter()
+        .filter(|m| m.kind != MarkKind::Suggestion)
+        .map(|m| m.id)
+        .collect();
+    state.detail_marks = Some((id.to_string(), shown));
+    app.screen = Screen::LinearDetail;
+    let mut effects = vec![];
+    if !ids.is_empty() {
+        effects.push(Effect::LinearMarkClear { ids, on_open: true });
+    }
+    effects.extend(request_issue(app, id));
+    effects
+}
+
+/// Keys while the filter is selected: printable keys are filter text.
+fn filter_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    match k.code {
+        KeyCode::Esc => state.deselect(),
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Down => state.reselect(),
+        KeyCode::Left => state.move_column(-1),
+        KeyCode::Right => state.move_column(1),
+        KeyCode::Backspace => {
+            state.filter.pop();
+            state.clamp();
+        }
+        KeyCode::Char(c) => {
+            state.filter.push(c);
+            state.clamp();
+        }
         _ => {}
     }
     vec![]
@@ -1524,7 +1569,6 @@ fn strip_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     }
     match k.code {
         KeyCode::Esc => state.strip_focus = false,
-        KeyCode::Char('q') => return vec![Effect::Quit],
         KeyCode::Enter => {
             let Some(space) = state.unbound_spaces().into_iter().nth(state.strip_sel) else {
                 return vec![];
@@ -1540,6 +1584,24 @@ fn strip_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// The wheel over the board: ↑ / ↓ that never opens the filter.
+pub(super) fn wheel(app: &mut App, delta: isize) -> Vec<Effect> {
+    let strip = app.linear.as_ref().is_some_and(|s| s.strip_focus);
+    let key = if delta < 0 {
+        KeyCode::Up
+    } else {
+        KeyCode::Down
+    };
+    match app.linear.as_mut() {
+        Some(state) if !strip && matches!(state.focus, Focus::Card(_) | Focus::LaneLine(_)) => {
+            state.step(delta, true);
+            vec![]
+        }
+        Some(state) if !strip && state.focus == Focus::Filter => vec![],
+        _ => linear_key(app, KeyEvent::new(key, KeyModifiers::NONE)),
+    }
 }
 
 /// Selects the strip row drawn under the click, found again by space id, then
@@ -1572,7 +1634,7 @@ pub(super) fn click_card(app: &mut App, group: &str, lane: &str, identifier: &st
         return vec![];
     };
     state.sel_group = sel_group;
-    state.sel_card = sel_card;
+    state.focus = Focus::Card(sel_card);
     // Otherwise the Enter below reaches the strip, not the card.
     state.strip_focus = false;
     linear_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
@@ -1585,6 +1647,9 @@ pub(super) fn click_group(app: &mut App, group: &str) {
     if let Some(index) = state.groups().iter().position(|g| g.key == group) {
         state.strip_focus = false;
         state.sel_group = index;
+        if matches!(state.focus, Focus::None | Focus::Filter) {
+            state.focus = Focus::default();
+        }
         state.clamp();
     }
 }
@@ -1668,7 +1733,7 @@ fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
             }
         }
         KeyCode::Char('b') => return bind_detail_card(app),
-        KeyCode::Char('q') | KeyCode::Esc => return leave_issue_page(app),
+        KeyCode::Esc => return leave_issue_page(app),
         _ => {}
     }
     vec![]

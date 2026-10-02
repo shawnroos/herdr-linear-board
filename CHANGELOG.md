@@ -13,6 +13,10 @@ All notable changes to this project are documented here. The format is based on
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode reads Linear itself, owns its bindings (import once with board import work-store) and gives agents board mcp tools.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board reads carry each issue's description, milestone and newest pull request, and `board linear issue` lists attachments.
 
+### Changed
+
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board lanes fold with Return, / filters cards, Esc clears the selection, and ctrl+q quits (plain q does nothing).
+
 ## [0.17.0] - 2026-09-13
 
 ### Added
