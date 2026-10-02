@@ -495,6 +495,14 @@ one headless (no client attached), one with a client attached as
   the pane fills its tab when it is the only entry in `panes`, or when `zoomed` is true and
   `focused_pane_id` is the pane. Re-read the layout on `layout_updated` and on `pane_focused`/`tab_focused`.
 
+**Known gap: managed Codex readiness on 0.9.3.** The provider-free suite passes on 0.9.3 except
+`e2e/31-managed-codex.sh`, which failed every run (6 of 6) and passes on 0.9.0 (2 of 2). The fake
+`codex` reports `pane.report_agent_session` and `pane.report_agent {state: "idle"}`, and both
+return `ok`, but `agent.get` keeps the pane at `launch_pending: true`, `agent_status: "unknown"`
+with no `interactive_ready`, so the daemon's 30 s readiness wait ends in "spawn failed". The
+0.9.1/0.9.2 release notes change Codex screen detection (#4092, #4099, #4507) and self-reported
+agents (#4687); which change causes this, and whether a real Codex is affected, is not yet known.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:
