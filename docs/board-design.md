@@ -1,0 +1,114 @@
+---
+authors: Claude
+type: design-spec
+project: herdr-board
+topics: [linear, tui-design, theme, responsive]
+---
+
+# Linear board design
+
+The target look and behaviour for the Linear-mode board TUI, agreed with Shawn on 2026-10-01/02.
+The working reference is the tui-realm prototype at `~/projects/tuirealm-toy` (commit 1c1b43d).
+Read it for exact rendering. The prototype uses tui-realm and mock data; herdr-board keeps ratatui
+and its own reducer. Port the design, not the framework.
+
+Related: `responsive-board.md` (levels, widths, paging, issue open modes) and
+`issue-detail-inventory.md` (what data exists, and the Linear + `gh` source split).
+
+## 1. Theme
+
+The board uses herdr's theme. herdr exposes no theme API to panes, so the board reads
+`[theme] name` and `[theme.custom]` from `~/.config/herdr/config.toml` and maps them to herdr's own
+token names. The current theme is `gruvbox` (herdr v0.9.3 `src/app/state.rs`).
+
+| Role | Token | gruvbox value |
+|---|---|---|
+| App background | not a herdr token (Shawn's value) | `#1e1e1e` |
+| Card / panel surface | `panel_bg` | `#282828` |
+| Raised surface (selected card, chips, modal cards) | `surface0` | `#3c3836` |
+| Rules, quiet lines | `surface1` | `#504945` |
+| Dim text | `overlay0` / `overlay1` | `#928374` / `#a89984` |
+| Text / secondary text | `text` / `subtext0` | `#ebdbb2` / `#d5c4a1` |
+| Accent | `accent` | `#d79921` |
+| Semantic | `red green yellow blue teal mauve peach` | herdr gruvbox values |
+| Muted cards (unfocused columns) | not herdr tokens | text `#928374`, detail `#7c6f64`, surface `#262626` |
+
+Rule: a surface is one tone above whatever it sits on. A card on the board is `panel_bg`. A card
+inside a modal or a pinned panel (both `panel_bg`) is `surface0`.
+
+Icons are Nerd Font glyphs (the terminal font is JetBrainsMono Nerd Font). The codepoints are in
+the prototype's `icon` modules.
+
+## 2. Board layout
+
+| Element | Design |
+|---|---|
+| Columns | No borders. 4-cell gap between columns (2 cells of each column's slot). |
+| Column titles | One powerline bar across the board. Focused column: herdr's active-tab style (`panel_bg` text on `accent`, bold), filling its slot including its half of each gap. Others: `overlay0` on `panel_bg`, running together with no divider. A full `/` cut (`U+E0BC`) where the colour changes, and at the bar's right end. No underline row. |
+| Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). One blank row below. Each lane band is as tall as its busiest column, so lanes align. |
+| Lane states | Normal: dim. Holds the selected card: label `accent`. Lane line selected: plus `surface0` background. Nothing selected: all lanes in the "holds the selected card" state. |
+| Folding | Lane lines are selectable in ↑↓ order (lane, its cards, next lane). Return folds or unfolds the lane in every column. |
+| Spacing | 1 blank row between cards, below lane lines, and between a lane's last card and the next lane. |
+
+## 3. Cards
+
+Every card has the same height (13 rows), and selecting one never moves text.
+
+| Row | Content |
+|---|---|
+| reserved | blank (top) |
+| header | `WEB-101 P0 ⧉2`, left-aligned. Marks and `▶` right-aligned. |
+| reserved | blank; a solid rule when selected |
+| title | 2 rows, bold; `yellow` when selected |
+| blank | |
+| description | 3 rows, ends in `…` |
+| reserved | blank; a dashed rule when selected |
+| meta | 2 rows of Nerd Font icon items: assignee, milestone; PR, preview, diff, CI |
+| reserved | blank (bottom) |
+
+- **Inset:** 2 cells on each side, so text keeps its column whether or not the card is selected.
+- **Selected card:** `surface0` background and a yellow title. No border.
+- **Unfocused columns:** muted tones (section 1).
+- **Marks keep their colour everywhere:** `!` red, `?` peach, `✓` green, `◇` mauve, `◉` blue.
+- **Width:** cards cap at 64 cells. A column whose inside is ≥ 81 cells shows cards 2-up (minimum 40 each, 1-cell gap). See `responsive-board.md`.
+
+## 4. Focus and keys
+
+| Key | Action |
+|---|---|
+| ↑↓ / jk | Move through lanes and cards; ↑ from the top item reveals the filter |
+| ←→ / hl / Tab | Change column. Past the last visible column, select the paging button |
+| `/` | Filter (hidden until opened; stays visible while it holds text) |
+| Return | Card: open the issue. Lane: fold or unfold |
+| Esc | Clear the selection: nothing focused; all columns and cards in their default, unmuted state; all lanes active |
+| `?` | Open the bottom bar |
+| ctrl+q | Quit (plain `q` does nothing) |
+
+When nothing is selected, an arrow key, Tab or Return selects again in the last column you used.
+
+## 5. Bottom bar
+
+- **Zones:** global controls (left), context tip (centre, with `md-information_outline`), board-wide alerts (right).
+- **Tip:** follows the selection. It shows the card's signals ("needs you and has a question · Enter opens it"), the lane fold action, the filter help, or "nothing selected".
+- **Alerts:** cards with `!`, cards with `?`, failing CI. Each one jumps to its card and unfolds its lane.
+- **`?` focuses the bar.** ←→ move between items, Return runs one, ↑ goes back, Esc clears the selection. It always opens on the first item.
+- **Narrow screens:** when the three zones don't fit on one row, the bar stacks into three centred rows: tip, alerts, controls.
+
+## 6. Issue view
+
+Open modes are in `responsive-board.md` (modal, expand `e`, pinned overlay `o`, narrow).
+
+- **Header:** powerline `ID │ status`, then the breadcrumb. In wide views, buttons are right-aligned (`󰁌 Expand e`, `Overlay o`; `Window e` when expanded; `Unpin o` when pinned).
+- **Two columns:** a scrolling main column (100-cell reading cap) and a 40-cell sidebar docked to the right edge at full height. Below 100 cells, one column.
+- **Main column:** title, description, ATTACHMENTS, PULL REQUESTS, ACTIVITY. Section lines use the lane line style.
+- **Open PRs** are cards: state chip, branch → target, diff stats, checks summary, the specific merge blocker, reviews, preview URL. **Merged PRs** are one line each, with repo and diff aligned in columns.
+- **Attachments other than PRs** are cards: kind and chip (commit, Slack thread, upload, link), title, detail (branch, channel, file name), link.
+- **Modal:** everything behind it is faded about 60% toward the background. The bottom bar is not faded.
+- **Pinned panel:** takes one column's slot at the right. The board drops a column. No cards are hidden behind the panel.
+
+## 7. Data sources for the issue view
+
+- **Linear:** the issue, plus its attachments. Attachments say which PRs belong to the issue.
+- **`gh`:** everything git-related for each PR: state, mergeability and the blocker, checks (deduplicated to the latest run per check), diff stats, reviews, and the preview URL from deployments.
+
+See `issue-detail-inventory.md`.
