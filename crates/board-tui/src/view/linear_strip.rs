@@ -3,7 +3,7 @@
 
 use board_core::protocol::{LinearListStatus, LinearSnapshot};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -81,9 +81,10 @@ pub(super) fn strip_lines(
         }
         return lines;
     }
-    let dim = Style::default().fg(Color::DarkGray);
-    let warn = Style::default().fg(Color::LightYellow);
-    let error = Style::default().fg(Color::LightRed);
+    let theme = &state.theme;
+    let dim = theme.dim();
+    let warn = theme.warning();
+    let error = theme.error();
     let note =
         |text: String, style: Style| (Line::from(Span::styled(fit(&text, width), style)), None);
     let with_message = |label: &str, message: &Option<String>| match message {
@@ -149,7 +150,7 @@ pub(super) fn strip_lines(
                 width,
             );
             let style = if selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                theme.chip()
             } else {
                 Style::default()
             };

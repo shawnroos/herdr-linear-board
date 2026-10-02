@@ -5,7 +5,7 @@
 
 use board_core::protocol::{LinearIssue, LinearSnapshot};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -124,6 +124,7 @@ fn age(app: &App, state: &LinearState) -> String {
 /// The header's two lines, and the columns of the first line the view text
 /// spans as `(start, width)`.
 fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u16)) {
+    let theme = &state.theme;
     let snapshot = state.snapshot();
     let project = snapshot
         .and_then(|s| s.project.name.clone())
@@ -154,19 +155,13 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
         u16::try_from(view.width()).unwrap_or(u16::MAX),
     );
     let mut first = vec![
-        Span::styled(
-            badge,
-            Style::default().fg(Color::Black).bg(Color::LightBlue),
-        ),
+        Span::styled(badge, theme.column_title_active()),
         Span::raw(lead),
         Span::raw(view),
         Span::raw(format!(" · space: {space} · fetched {}", age(app, state))),
     ];
     if state.in_flight {
-        first.push(Span::styled(
-            " · refreshing…",
-            Style::default().fg(Color::Yellow),
-        ));
+        first.push(Span::styled(" · refreshing…", theme.accent()));
     }
     let mut warnings = state.source_warnings();
     if let Some(mapping) = state.non_default_mapping() {
@@ -177,12 +172,12 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
     let second = if warnings.is_empty() {
         vec![Span::styled(
             " Enter detail · r refresh · ? help · q quit",
-            Style::default().fg(Color::DarkGray),
+            theme.dim(),
         )]
     } else {
         vec![Span::styled(
             format!(" ! {}", warnings.join(" · ")),
-            Style::default().fg(Color::LightYellow),
+            theme.warning(),
         )]
     };
     (vec![Line::from(first), Line::from(second)], view_span)
@@ -396,10 +391,10 @@ fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
         .saturating_sub(head.width() + title.width() + tail)
         .max(1);
     Some(Line::from(vec![
-        Span::styled(head, Style::default().fg(Color::LightMagenta)),
+        Span::styled(head, state.theme.show_mark()),
         Span::raw(title),
         Span::raw(" ".repeat(gap)),
-        Span::styled(more, Style::default().fg(Color::LightCyan)),
+        Span::styled(more, state.theme.accent()),
     ]))
 }
 
@@ -463,11 +458,9 @@ fn tab_row(
     let mut spans = vec![Span::raw(if first > 0 { "‹" } else { " " })];
     for (at, name) in names.into_iter().enumerate().skip(first) {
         let style = if at == active {
-            Style::default()
-                .fg(Color::LightBlue)
-                .add_modifier(Modifier::BOLD)
+            state.theme.accent().add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            state.theme.dim()
         };
         spans.push(Span::styled(name, style));
         spans.push(Span::raw(" "));
@@ -483,9 +476,9 @@ fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
     }
     let caret = if selected { "▏" } else { "" };
     let style = if selected {
-        Style::default().fg(Color::LightBlue)
+        state.theme.accent()
     } else {
-        Style::default().fg(Color::DarkGray)
+        state.theme.dim()
     };
     Some(Line::from(Span::styled(
         fit(&format!(" / {}{caret}", line(&state.filter)), width),
@@ -545,7 +538,7 @@ fn pager_row(
     } else {
         " ".repeat(gap)
     };
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = state.theme.dim();
     Line::from(vec![
         Span::raw(left),
         Span::styled(middle, dim),
@@ -643,9 +636,9 @@ fn draw_columns(
             .borders(Borders::ALL)
             .title(title)
             .border_style(if focused {
-                Style::default().fg(Color::LightBlue)
+                state.theme.accent()
             } else {
-                Style::default().fg(Color::DarkGray)
+                state.theme.dim()
             });
         let inner = block.inner(rect);
         f.render_widget(block, rect);
@@ -705,9 +698,7 @@ fn draw_columns(
                         inner.width as usize,
                     );
                     let rule = "─".repeat((inner.width as usize).saturating_sub(text.width()));
-                    let mut style = Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD);
+                    let mut style = state.theme.lane_holding().add_modifier(Modifier::BOLD);
                     if lane_line == Some(key) {
                         style = style.add_modifier(Modifier::REVERSED);
                     }
@@ -762,14 +753,14 @@ fn draw_columns(
     }
 }
 
-fn boxed(f: &mut Frame, area: Rect, title: &str, color: Color, lines: Vec<Line<'static>>) {
+fn boxed(f: &mut Frame, area: Rect, title: &str, border: Style, lines: Vec<Line<'static>>) {
     let h = (lines.len() as u16 + 2).min(area.height);
     let rect = centered_rect_abs(area.width.saturating_sub(4).clamp(20, 90), h, area);
     f.render_widget(Clear, rect);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {title} "))
-        .border_style(Style::default().fg(color));
+        .border_style(border);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -807,16 +798,16 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     for warning in state.source_warnings() {
         lines.push(Line::from(Span::styled(
             format!("! {warning}"),
-            Style::default().fg(Color::LightYellow),
+            state.theme.warning(),
         )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "s pick a space · r refresh · q quit",
-        Style::default().fg(Color::DarkGray),
+        state.theme.dim(),
     )));
     let Some(snapshot) = state.snapshot() else {
-        boxed(f, area, "Not bound", Color::LightYellow, lines);
+        boxed(f, area, "Not bound", state.theme.warning(), lines);
         return;
     };
     let strip = strip_lines(state, snapshot, area.width as usize);
@@ -826,7 +817,7 @@ fn draw_not_bound(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         .saturating_sub(strip.len() as u16 + 1)
         .max(area.y);
     let above = Rect::new(area.x, area.y, area.width, strip_y - area.y);
-    boxed(f, above, "Not bound", Color::LightYellow, lines);
+    boxed(f, above, "Not bound", state.theme.warning(), lines);
     draw_strip(app, strip, f, area, strip_y);
 }
 
@@ -843,12 +834,7 @@ pub(super) fn not_imported(state: &LinearState) -> Option<Vec<Line<'static>>> {
     Some(
         message
             .lines()
-            .map(|text| {
-                Line::from(Span::styled(
-                    text.to_string(),
-                    Style::default().fg(Color::LightYellow),
-                ))
-            })
+            .map(|text| Line::from(Span::styled(text.to_string(), state.theme.warning())))
             .collect(),
     )
 }
@@ -869,13 +855,13 @@ fn draw_stale_daemon(state: &LinearState, f: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "r retry · q quit",
-        Style::default().fg(Color::DarkGray),
+        state.theme.dim(),
     )));
     boxed(
         f,
         area,
         "Daemon is older than this board",
-        Color::LightRed,
+        state.theme.error(),
         lines,
     );
 }
@@ -883,7 +869,7 @@ fn draw_stale_daemon(state: &LinearState, f: &mut Frame, area: Rect) {
 fn draw_error(state: &LinearState, f: &mut Frame, area: Rect) {
     let mut lines = vec![Line::from(Span::styled(
         line(state.error.as_deref().unwrap_or("snapshot failed")),
-        Style::default().fg(Color::LightRed),
+        state.theme.error(),
     ))];
     lines.push(Line::from(""));
     lines.push(Line::from(if state.last_good.is_some() {
@@ -898,9 +884,9 @@ fn draw_error(state: &LinearState, f: &mut Frame, area: Rect) {
         } else {
             "r retry · q quit"
         },
-        Style::default().fg(Color::DarkGray),
+        state.theme.dim(),
     )));
-    boxed(f, area, "Snapshot failed", Color::LightRed, lines);
+    boxed(f, area, "Snapshot failed", state.theme.error(), lines);
 }
 
 const HELP_KEY_W: usize = 12;
@@ -1009,7 +995,7 @@ fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .title(" Help — Linear mode ")
-            .border_style(Style::default().fg(Color::LightBlue)),
+            .border_style(state.theme.accent()),
         geometry.sheet,
     );
     let shown: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
@@ -1023,7 +1009,7 @@ fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(
             fit(&footer, geometry.footer.width as usize),
-            Style::default().fg(Color::DarkGray),
+            state.theme.dim(),
         )),
         geometry.footer,
     );
@@ -1043,6 +1029,9 @@ fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
         return;
     }
     let rect = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+    let Some(theme) = app.linear.as_ref().map(|state| &state.theme) else {
+        return;
+    };
     let Some(toast) = &app.toast else {
         let cue = app.screen == Screen::LinearBoard
             && app.linear.as_ref().is_some_and(suggestion_selected);
@@ -1050,18 +1039,14 @@ fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
             f.render_widget(
                 Paragraph::new(Span::styled(
                     fit(" a bind · x dismiss", area.width as usize),
-                    Style::default().fg(Color::LightCyan),
+                    theme.accent(),
                 )),
                 rect,
             );
         }
         return;
     };
-    let style = if toast.is_error {
-        Style::default().fg(Color::White).bg(Color::Red)
-    } else {
-        Style::default().fg(Color::Black).bg(Color::Yellow)
-    };
+    let style = theme.toast(toast.is_error);
     f.render_widget(
         Paragraph::new(Span::styled(
             fit(

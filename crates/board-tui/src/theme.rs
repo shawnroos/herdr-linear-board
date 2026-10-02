@@ -825,6 +825,15 @@ impl Theme {
         Style::default().fg(self.palette.green)
     }
 
+    pub fn toast(&self, is_error: bool) -> Style {
+        let bg = if is_error {
+            self.palette.red
+        } else {
+            self.palette.yellow
+        };
+        Style::default().fg(self.palette.panel_bg).bg(bg)
+    }
+
     /// `c` faded toward the app background, for what sits behind a modal.
     pub fn fade(&self, c: Color) -> Color {
         blend(c, self.app_bg, FADE)

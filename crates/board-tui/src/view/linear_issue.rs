@@ -15,7 +15,7 @@ use board_core::protocol::{
     LinearIssue, LinearIssueDetail, LinearIssueDocument, LinearLinkedIssue,
 };
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -23,6 +23,7 @@ use ratatui::Frame;
 use super::linear::{fit, line};
 use super::truncate;
 use crate::app::{App, LinearState, Mode};
+use crate::theme::Theme;
 
 /// Two columns need this much body width, the same rule the board stacks by.
 const MIN_COL_W: u16 = 36;
@@ -66,8 +67,8 @@ pub struct Page {
     pub stacked: bool,
 }
 
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn dim(theme: &Theme) -> Style {
+    theme.dim()
 }
 
 fn heading(text: &str, width: usize) -> Line<'static> {
@@ -80,7 +81,7 @@ fn heading(text: &str, width: usize) -> Line<'static> {
 /// A property row. The value is always drawn, as an em dash when Linear has
 /// none: a row that disappears when empty makes "no milestone" and "not loaded
 /// yet" the same thing on screen (R4).
-fn property(label: &str, value: Option<String>, width: usize) -> Line<'static> {
+fn property(theme: &Theme, label: &str, value: Option<String>, width: usize) -> Line<'static> {
     let value = value.filter(|v| !v.trim().is_empty());
     let text = format!("{label:<9} {}", value.clone().unwrap_or_else(|| "—".into()));
     Line::from(Span::styled(
@@ -88,7 +89,7 @@ fn property(label: &str, value: Option<String>, width: usize) -> Line<'static> {
         if value.is_some() {
             Style::default()
         } else {
-            dim()
+            dim(theme)
         },
     ))
 }
@@ -202,14 +203,21 @@ fn plain_lines(text: &str, width: usize) -> Vec<Line<'static>> {
 
 /// The main column: what Linear puts on the left of its issue page.
 fn main_column(
+    state: &LinearState,
     now: i64,
     issue: &Subject<'_>,
     detail: Option<&LinearIssueDetail>,
-    truncated: &[String],
-    loading: bool,
     width: usize,
     rows: &mut Vec<Row>,
 ) -> Vec<Line<'static>> {
+    let theme = &state.theme;
+    let loading = state.detail_in_flight.is_some() && state.detail_error.is_none();
+    let truncated: &[String] = state
+        .detail_doc
+        .as_ref()
+        .filter(|(id, _)| Some(id.as_str()) == state.detail.as_deref())
+        .map(|(_, doc)| doc.truncated.as_slice())
+        .unwrap_or(&[]);
     let mut out: Vec<Line> = vec![];
     for line_of_title in plain_lines(issue.title(), width) {
         out.push(Line::from(Span::styled(
@@ -223,8 +231,8 @@ fn main_column(
         Some(text) if !text.trim().is_empty() => {
             out.extend(crate::markdown::render(text, width));
         }
-        _ if loading => out.push(Line::from(Span::styled("loading…", dim()))),
-        Some(_) | None => out.push(Line::from(Span::styled("no description", dim()))),
+        _ if loading => out.push(Line::from(Span::styled("loading…", dim(theme)))),
+        Some(_) | None => out.push(Line::from(Span::styled("no description", dim(theme)))),
     }
     out.push(Line::from(""));
 
@@ -257,7 +265,7 @@ fn main_column(
     if comments.is_empty() && history.is_empty() {
         out.push(Line::from(Span::styled(
             if loading { "loading…" } else { "nothing yet" },
-            dim(),
+            dim(theme),
         )));
     }
     for event in history {
@@ -280,7 +288,7 @@ fn main_column(
     if truncated.iter().any(|s| s == "comments" || s == "history") {
         out.push(Line::from(Span::styled(
             fit("  the rest is in Linear — u opens it", width),
-            dim(),
+            dim(theme),
         )));
     }
     for comment in comments.iter().filter(|c| c.parent_id.is_none()) {
@@ -367,15 +375,28 @@ fn sidebar_column(
     width: usize,
     rows: &mut Vec<Row>,
 ) -> Vec<Line<'static>> {
+    let theme = &state.theme;
     let mut out: Vec<Line> = vec![];
-    out.push(property("Status", issue.state_name().map(line), width));
     out.push(property(
+        theme,
+        "Status",
+        issue.state_name().map(line),
+        width,
+    ));
+    out.push(property(
+        theme,
         "Priority",
         issue.priority().map(|p| format!("P{p}")),
         width,
     ));
-    out.push(property("Assignee", issue.assignee().map(line), width));
     out.push(property(
+        theme,
+        "Assignee",
+        issue.assignee().map(line),
+        width,
+    ));
+    out.push(property(
+        theme,
         "Labels",
         (!issue.labels().is_empty()).then(|| {
             issue
@@ -388,6 +409,7 @@ fn sidebar_column(
         width,
     ));
     out.push(property(
+        theme,
         "Project",
         detail
             .and_then(|d| d.project.as_ref())
@@ -396,6 +418,7 @@ fn sidebar_column(
         width,
     ));
     out.push(property(
+        theme,
         "Milestone",
         detail
             .and_then(|d| d.milestone.as_ref())
@@ -404,6 +427,7 @@ fn sidebar_column(
         width,
     ));
     out.push(property(
+        theme,
         "Cycle",
         detail.and_then(|d| d.cycle.as_ref()).and_then(|c| {
             c.name
@@ -414,11 +438,13 @@ fn sidebar_column(
         width,
     ));
     out.push(property(
+        theme,
         "Estimate",
         detail.and_then(|d| d.estimate).map(|e| format!("{e}")),
         width,
     ));
     out.push(property(
+        theme,
         "Due",
         detail.and_then(|d| d.due_date.as_deref()).map(line),
         width,
@@ -443,7 +469,7 @@ fn sidebar_column(
         for relation in relations {
             out.push(Line::from(Span::styled(
                 fit(&format!("  {}", relation_label(relation)), width),
-                dim(),
+                dim(theme),
             )));
             rows.push(Row {
                 line: out.len(),
@@ -493,6 +519,7 @@ fn board_block(
     rows: &mut Vec<Row>,
     offset: usize,
 ) -> Vec<Line<'static>> {
+    let theme = &state.theme;
     let mut out: Vec<Line> = vec![];
     // No row on the board at all: a linked issue the reader opened from this
     // page is not on it, which is a different thing from one that is on it with
@@ -500,7 +527,7 @@ fn board_block(
     let Some(issue) = issue.filter(|i| !i.bindings.is_empty()) else {
         out.push(Line::from(Span::styled(
             fit("not on this board", width),
-            dim(),
+            dim(theme),
         )));
         return out;
     };
@@ -630,18 +657,9 @@ pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> 
         .as_ref()
         .filter(|(id, _)| Some(id.as_str()) == state.detail.as_deref())
         .and_then(|(_, doc): &(String, LinearIssueDocument)| doc.issue.as_ref());
-    let loading = state.detail_in_flight.is_some() && state.detail_error.is_none();
-    let truncated: &[String] = state
-        .detail_doc
-        .as_ref()
-        .filter(|(id, _)| Some(id.as_str()) == state.detail.as_deref())
-        .map(|(_, doc)| doc.truncated.as_slice())
-        .unwrap_or(&[]);
 
     let mut rows = vec![];
-    let main = main_column(
-        app.now, &issue, detail, truncated, loading, main_w, &mut rows,
-    );
+    let main = main_column(state, app.now, &issue, detail, main_w, &mut rows);
     // The sidebar's rows follow the main column's, which is the order they are
     // read in at both widths: the narrow layout is this list flattened.
     let mut sidebar_rows = vec![];
@@ -771,7 +789,7 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 fit(&format!(" {}", error.message), width),
-                Style::default().fg(Color::Yellow),
+                state.theme.warning(),
             ))),
             Rect::new(content.x, content.y + 1, content.width, 1),
         );
@@ -804,7 +822,7 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(
             truncate(hint_text(app, state), content.width as usize),
-            dim(),
+            dim(&state.theme),
         )),
         hint,
     );
