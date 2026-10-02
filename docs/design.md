@@ -1067,7 +1067,8 @@ keeps it on the same card when it can. The header names the recorded view, or `v
 chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
 herdr config (`$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`), read
 once at start. A missing, unreadable, oversized (over 64 KiB) or unparseable config leaves the
-section out; it is never an error.
+section out; it is never an error. The same read takes herdr's `[theme] name` and `[theme.custom]`
+for the board's colours (`docs/herdr.md`, "The board uses herdr's theme").
 
 **Mouse.** A click on a card opens its detail. A click on a group header focuses that group. The
 wheel moves the card selection. A click on a strip row opens the project picker for that space, a

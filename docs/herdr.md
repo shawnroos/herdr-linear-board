@@ -503,6 +503,27 @@ with no `interactive_ready`, so the daemon's 30 s readiness wait ends in "spawn 
 0.9.1/0.9.2 release notes change Codex screen detection (#4092, #4099, #4507) and self-reported
 agents (#4687); which change causes this, and whether a real Codex is affected, is not yet known.
 
+## The board uses herdr's theme
+
+herdr exposes no theme API to panes. The Linear board and the session pane read `[theme] name` and
+`[theme.custom]` from the herdr config in the same once-at-start read as the `?` sheet's keys
+(`board-tui` `herdr_keys.rs`), and look the name up in `board-tui` `theme.rs`. That module holds
+herdr's 18 built-in palettes, token names and name aliases, transcribed from herdr v0.9.3
+`src/app/state.rs` and `src/config/theme.rs`. Re-transcribe them when herdr adds or retunes a theme.
+
+Where the board differs from herdr on purpose:
+
+- A missing, unreadable, oversized or malformed config, a missing `[theme] name`, or an unknown
+  name gives gruvbox. herdr itself falls back to catppuccin.
+- A `[theme.custom]` value herdr cannot parse keeps the base token. herdr paints it cyan.
+- `auto_switch`, `dark_name`, `light_name`, `[theme.custom.light|dark]` and the legacy
+  `[ui] accent` are not read.
+
+The board adds four tones herdr has no token for: the app background one step below `panel_bg`,
+the muted (unfocused) card just under it, muted text (`overlay0`) and muted detail one step dimmer.
+They are pinned for gruvbox (`#1e1e1e`, `#262626`, `#928374`, `#7c6f64`) and derived for every
+other theme, darker below the card on dark themes and lighter on light ones.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:

@@ -1,6 +1,7 @@
-//! The keys a person has set in their herdr config, for the Linear `?` sheet.
-//! Read once at start; any failure means no section, never an error. The rows
-//! never join `view::HELP_KEYS`.
+//! What the board takes from the person's herdr config: the keys they set,
+//! for the Linear `?` sheet, and the theme. Read once at start; any failure
+//! means no keys and the fallback theme, never an error. The key rows never
+//! join `view::HELP_KEYS`.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -9,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
+
+use crate::theme::{Theme, ThemeSection};
 
 pub const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_FIELD_CHARS: usize = 120;
@@ -26,7 +29,13 @@ pub fn resolve_path(xdg_config_home: Option<OsString>, home: Option<OsString>) -
         .map(|base| base.join("herdr").join("config.toml"))
 }
 
-pub fn from_environment() -> Vec<HerdrKey> {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HerdrConfig {
+    pub keys: Vec<HerdrKey>,
+    pub theme: Theme,
+}
+
+pub fn from_environment() -> HerdrConfig {
     resolve_path(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
@@ -35,25 +44,45 @@ pub fn from_environment() -> Vec<HerdrKey> {
     .unwrap_or_default()
 }
 
-pub fn read_file(path: &Path) -> Vec<HerdrKey> {
+pub fn read_file(path: &Path) -> HerdrConfig {
     let Ok(meta) = std::fs::metadata(path) else {
-        return Vec::new();
+        return HerdrConfig::default();
     };
     if meta.len() > MAX_CONFIG_BYTES {
-        return Vec::new();
+        return HerdrConfig::default();
     }
     let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
+        return HerdrConfig::default();
     };
     // The file can grow between the metadata call and the read.
     let mut text = String::new();
     match file.take(MAX_CONFIG_BYTES + 1).read_to_string(&mut text) {
         Ok(n) if n as u64 <= MAX_CONFIG_BYTES => parse(&text),
-        _ => Vec::new(),
+        _ => HerdrConfig::default(),
     }
 }
 
-pub fn parse(text: &str) -> Vec<HerdrKey> {
+pub fn parse(text: &str) -> HerdrConfig {
+    HerdrConfig {
+        keys: parse_keys(text),
+        theme: parse_theme(text),
+    }
+}
+
+// Parsed apart from the keys so a bad `[theme]` never costs the key rows.
+fn parse_theme(text: &str) -> Theme {
+    #[derive(Deserialize)]
+    struct ThemeFile {
+        theme: Option<ThemeSection>,
+    }
+    toml::from_str::<ThemeFile>(text)
+        .ok()
+        .and_then(|file| file.theme)
+        .map(|section| Theme::from_section(&section))
+        .unwrap_or_default()
+}
+
+fn parse_keys(text: &str) -> Vec<HerdrKey> {
     let Ok(config) = toml::from_str::<Config>(text) else {
         return Vec::new();
     };
@@ -159,6 +188,14 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/linear/fixtures/herdr-config.toml")
     }
 
+    fn keys_in(path: &Path) -> Vec<HerdrKey> {
+        read_file(path).keys
+    }
+
+    fn keys_of(text: &str) -> Vec<HerdrKey> {
+        parse(text).keys
+    }
+
     fn row(key: &str, label: &str) -> HerdrKey {
         HerdrKey {
             key: key.into(),
@@ -169,7 +206,7 @@ mod tests {
     #[test]
     fn the_fixture_yields_named_actions_then_commands_in_file_order() {
         assert_eq!(
-            read_file(&fixture()),
+            keys_in(&fixture()),
             vec![
                 row("ctrl+b", "prefix"),
                 row("ctrl+alt+1..9", "switch tab"),
@@ -186,40 +223,40 @@ mod tests {
     #[test]
     fn a_missing_config_yields_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_file(&dir.path().join("absent.toml")).is_empty());
+        assert!(keys_in(&dir.path().join("absent.toml")).is_empty());
     }
 
     #[test]
     fn an_unreadable_config_yields_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read_file(dir.path()).is_empty());
+        assert!(keys_in(dir.path()).is_empty());
     }
 
     #[test]
     fn a_malformed_config_yields_nothing() {
-        assert!(parse("[keys\nprefix = ").is_empty());
-        assert!(parse("keys = 3").is_empty());
-        assert!(parse("[keys]\ncommand = \"not a table\"").is_empty());
+        assert!(keys_of("[keys\nprefix = ").is_empty());
+        assert!(keys_of("keys = 3").is_empty());
+        assert!(keys_of("[keys]\ncommand = \"not a table\"").is_empty());
     }
 
     #[test]
     fn an_empty_keys_table_yields_nothing() {
-        assert!(parse("[keys]\n").is_empty());
-        assert!(parse("[ui]\nprefix = \"ctrl+b\"\n").is_empty());
+        assert!(keys_of("[keys]\n").is_empty());
+        assert!(keys_of("[ui]\nprefix = \"ctrl+b\"\n").is_empty());
     }
 
     #[test]
     fn entries_missing_a_key_or_a_string_value_are_skipped() {
         let text = "[keys]\nprefix = 3\nnew_tab = \"ctrl+t\"\n\
                     [[keys.command]]\ncommand = \"herdr plugin pane open --plugin a --entrypoint b\"\n";
-        assert_eq!(parse(text), vec![row("ctrl+t", "new tab")]);
+        assert_eq!(keys_of(text), vec![row("ctrl+t", "new tab")]);
     }
 
     #[test]
     fn control_and_bidi_characters_are_stripped_from_every_field() {
         let text = "[keys]\nnew_tab = \"ctrl+\\u001b[2Jt\"\n\
                     [[keys.command]]\nkey = \"ctrl+\\u202Ed\"\ndescription = \"open\\u202E the\\u0007 panel\\n\"\n";
-        let rows = parse(text);
+        let rows = keys_of(text);
         assert_eq!(
             rows,
             vec![row("ctrl+[2Jt", "new tab"), row("ctrl+d", "open the panel")]
@@ -237,7 +274,7 @@ mod tests {
         let mut text = String::from("[keys]\nprefix = \"ctrl+b\"\n#");
         text.push_str(&"x".repeat(MAX_CONFIG_BYTES as usize));
         std::fs::write(&path, text).unwrap();
-        assert!(read_file(&path).is_empty());
+        assert!(keys_in(&path).is_empty());
     }
 
     #[test]
@@ -248,7 +285,7 @@ mod tests {
         text.push_str(&"x".repeat(MAX_CONFIG_BYTES as usize - text.len()));
         std::fs::write(&path, &text).unwrap();
         assert_eq!(text.len() as u64, MAX_CONFIG_BYTES);
-        assert_eq!(read_file(&path), vec![row("ctrl+b", "prefix")]);
+        assert_eq!(keys_in(&path), vec![row("ctrl+b", "prefix")]);
     }
 
     #[test]

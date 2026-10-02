@@ -277,6 +277,7 @@ pub struct LinearState {
     pub pick: Option<super::LinearPick>,
     /// Read once at start; shown only in the `?` sheet.
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub theme: crate::theme::Theme,
     pub spaces: SpaceList,
     pub strip: StripView,
     /// Whether up, down, Enter and Escape act on the strip instead of the board.
@@ -387,6 +388,7 @@ impl LinearState {
             lists_in_flight: Default::default(),
             pick: None,
             herdr_keys: Vec::new(),
+            theme: crate::theme::Theme::default(),
             spaces: SpaceList::NotRead,
             strip: StripView::Spaces,
             strip_focus: false,

@@ -27,3 +27,9 @@ key = "ctrl+alt+d"
 type = "shell"
 command = "example-script --run"
 description = "open the example dashboard"
+
+[theme]
+name = "gruvbox"
+
+[theme.custom]
+accent = "#fe8019"

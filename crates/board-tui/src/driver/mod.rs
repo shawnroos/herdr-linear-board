@@ -38,6 +38,7 @@ pub struct LinearStart {
     pub board_version: String,
     pub daemon_version: Option<String>,
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub theme: crate::theme::Theme,
     pub show: crate::ShowContext,
 }
 
@@ -91,6 +92,7 @@ impl Driver {
             start.daemon_version,
         );
         state.herdr_keys = start.herdr_keys;
+        state.theme = start.theme;
         state.landing = Some(start.show);
         let app = App::linear(state, start.origin.clone());
         Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
@@ -104,11 +106,12 @@ impl Driver {
         start: LinearStart,
         identity: crate::SessionIdentity,
     ) -> Driver {
-        let state = LinearState::new(
+        let mut state = LinearState::new(
             start.workspace_id,
             start.board_version,
             start.daemon_version,
         );
+        state.theme = start.theme;
         let app = App::session(
             state,
             crate::app::SessionState::new(identity),

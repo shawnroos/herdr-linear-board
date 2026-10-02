@@ -427,9 +427,20 @@ fn herdr_fixture() -> std::path::PathBuf {
 
 fn start_with_herdr_fixture() -> LinearStart {
     LinearStart {
-        herdr_keys: board_tui::herdr_keys::read_file(&herdr_fixture()),
+        herdr_keys: board_tui::herdr_keys::read_file(&herdr_fixture()).keys,
         ..linear_start()
     }
+}
+
+#[test]
+fn the_board_keeps_the_theme_it_starts_with() {
+    let theme = board_tui::theme::Theme::named("tokyo-night").unwrap();
+    let start = LinearStart {
+        theme: theme.clone(),
+        ..linear_start()
+    };
+    let (d, _, _) = linear_driver(fake_with(bound_with_view()), start);
+    assert_eq!(d.app.linear.as_ref().unwrap().theme, theme);
 }
 
 fn help_scrolled_to_the_end(start: LinearStart) -> (Driver, String) {
@@ -476,7 +487,7 @@ fn the_help_sheet_scrolls_to_a_herdr_section_built_from_the_config() {
 fn a_missing_herdr_config_leaves_no_herdr_section() {
     let dir = tempfile::tempdir().unwrap();
     let start = LinearStart {
-        herdr_keys: board_tui::herdr_keys::read_file(&dir.path().join("config.toml")),
+        herdr_keys: board_tui::herdr_keys::read_file(&dir.path().join("config.toml")).keys,
         ..linear_start()
     };
     let (_, frame) = help_scrolled_to_the_end(start);
@@ -486,7 +497,7 @@ fn a_missing_herdr_config_leaves_no_herdr_section() {
 
 #[test]
 fn herdr_keys_never_join_the_board_key_table() {
-    let rows = board_tui::herdr_keys::read_file(&herdr_fixture());
+    let rows = board_tui::herdr_keys::read_file(&herdr_fixture()).keys;
     assert!(!rows.is_empty());
     for row in rows {
         assert!(

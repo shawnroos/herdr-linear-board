@@ -115,6 +115,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     board_version: env!("CARGO_PKG_VERSION").to_string(),
                     daemon_version,
                     herdr_keys: Vec::new(),
+                    theme: board_tui::herdr_keys::from_environment().theme,
                     show: board_tui::ShowContext::default(),
                 },
                 identity,
@@ -132,6 +133,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     }
                     let mut client = ctx.into_client()?;
                     let daemon_version = client.daemon_status().ok().map(|status| status.version);
+                    let herdr = board_tui::herdr_keys::from_environment();
                     board_tui::run_linear(
                         Box::new(client),
                         board_tui::LinearStart {
@@ -139,7 +141,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                             origin: board_tui::OriginContext::from_environment(),
                             board_version: env!("CARGO_PKG_VERSION").to_string(),
                             daemon_version,
-                            herdr_keys: board_tui::herdr_keys::from_environment(),
+                            herdr_keys: herdr.keys,
+                            theme: herdr.theme,
                             show,
                         },
                     )

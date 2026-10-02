@@ -659,6 +659,7 @@ pub fn linear_start() -> LinearStart {
         board_version: "0.17.0".to_string(),
         daemon_version: Some("0.17.0".to_string()),
         herdr_keys: Vec::new(),
+        theme: crate::theme::Theme::default(),
         show: ShowContext::default(),
     }
 }
