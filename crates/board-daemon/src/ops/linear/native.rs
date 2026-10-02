@@ -340,7 +340,65 @@ fn linear_issue(node: &Value, identifier: String, stale: bool) -> LinearIssue {
         labels: names(&node["labels"]["nodes"]),
         stale,
         bindings: vec![],
+        description: text(&node["description"])
+            .map(|d| excerpt(&d))
+            .filter(|d| !d.is_empty()),
+        milestone: named(&node["projectMilestone"]),
+        pr: newest_pr(&node["attachments"]),
     }
+}
+
+// About three card rows at the widest card; the TUI wraps and ends it in `…`.
+const DESCRIPTION_EXCERPT_CHARS: usize = 240;
+
+fn excerpt(description: &str) -> String {
+    description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(DESCRIPTION_EXCERPT_CHARS)
+        .collect()
+}
+
+/// `(owner/repo, number)` for a `https://github.com/<owner>/<repo>/pull/<n>`
+/// URL and nothing else, so a commit or file link under a PR is not one.
+fn github_pr(url: &str) -> Option<(String, u64)> {
+    let path = url.strip_prefix("https://github.com/")?;
+    let path = path.split(['?', '#']).next()?.trim_end_matches('/');
+    let [owner, repo, "pull", number] = path.split('/').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let name_ok = |part: &str| {
+        !matches!(part, "" | "." | "..")
+            && !part.starts_with('-')
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    };
+    if !(name_ok(owner) && name_ok(repo) && number.chars().all(|c| c.is_ascii_digit())) {
+        return None;
+    }
+    Some((format!("{owner}/{repo}"), number.parse().ok()?))
+}
+
+fn newest_pr(attachments: &Value) -> Option<LinearCardPr> {
+    nodes(attachments)
+        .iter()
+        .filter_map(|a| {
+            let url = a["url"].as_str()?;
+            let (repo, number) = github_pr(url)?;
+            let pr = LinearCardPr {
+                repo,
+                number,
+                url: url.to_string(),
+                status: text(&a["metadata"]["status"]),
+                draft: a["metadata"]["draft"].as_bool(),
+            };
+            Some((a["createdAt"].as_str().unwrap_or("").to_string(), pr))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, pr)| pr)
 }
 
 /// Worktree bindings of listed issues, with their herdr tab and panes; tabs
@@ -745,6 +803,7 @@ fn issue_detail(node: &Value) -> (LinearIssueDetail, Vec<String>) {
         ("relations", "inverseRelations"),
         ("comments", "comments"),
         ("history", "history"),
+        ("attachments", "attachments"),
     ] {
         if node[connection]["pageInfo"]["hasNextPage"].as_bool() == Some(true)
             && !truncated.iter().any(|t| t == name)
@@ -828,6 +887,18 @@ fn issue_detail(node: &Value) -> (LinearIssueDetail, Vec<String>) {
             })
             .collect(),
         history,
+        attachments: nodes(&node["attachments"])
+            .iter()
+            .map(|a| LinearAttachment {
+                id: text(&a["id"]),
+                source_type: text(&a["sourceType"]),
+                title: a["title"].as_str().unwrap_or("").to_string(),
+                subtitle: text(&a["subtitle"]),
+                url: a["url"].as_str().unwrap_or("").to_string(),
+                created_at: text(&a["createdAt"]),
+                metadata: a["metadata"].clone(),
+            })
+            .collect(),
     };
     (detail, truncated)
 }

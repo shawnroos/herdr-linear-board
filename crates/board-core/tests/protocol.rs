@@ -1009,3 +1009,51 @@ fn new_local_state_results_read_every_field_as_null() {
     let older_reader: LinearChange<WorktreeBinding> = serde_json::from_value(bound).unwrap();
     assert_eq!(older_reader.after, None);
 }
+
+#[test]
+fn card_fields_on_a_snapshot_issue_read_absent_or_null_as_empty() {
+    use board_core::protocol::{LinearCardPr, LinearIssue};
+
+    let older: LinearIssue =
+        serde_json::from_value(json!({"identifier": "WEB-1", "title": "t"})).unwrap();
+    assert!(older.description.is_none() && older.milestone.is_none() && older.pr.is_none());
+    let nulls: LinearIssue = serde_json::from_value(json!({
+        "identifier": "WEB-1", "description": null, "milestone": null, "pr": null
+    }))
+    .unwrap();
+    assert!(nulls.pr.is_none());
+    let pr: LinearCardPr = serde_json::from_value(json!({
+        "repo": null, "number": null, "url": null, "status": null, "draft": null
+    }))
+    .unwrap();
+    assert_eq!(pr, LinearCardPr::default());
+    let issue = LinearIssue {
+        pr: Some(LinearCardPr {
+            repo: "acme/web".into(),
+            number: 12,
+            url: "https://github.com/acme/web/pull/12".into(),
+            status: Some("open".into()),
+            draft: Some(false),
+        }),
+        ..Default::default()
+    };
+    let back: LinearIssue = serde_json::from_value(serde_json::to_value(&issue).unwrap()).unwrap();
+    assert_eq!(back, issue);
+}
+
+#[test]
+fn issue_detail_attachments_read_absent_null_or_null_fields() {
+    use board_core::protocol::{LinearAttachment, LinearIssueDetail};
+
+    let absent: LinearIssueDetail = serde_json::from_value(json!({"identifier": "WEB-1"})).unwrap();
+    assert!(absent.attachments.is_empty());
+    let null: LinearIssueDetail =
+        serde_json::from_value(json!({"identifier": "WEB-1", "attachments": null})).unwrap();
+    assert!(null.attachments.is_empty());
+    let row: LinearAttachment = serde_json::from_value(json!({
+        "id": null, "source_type": null, "title": null, "subtitle": null,
+        "url": null, "created_at": null, "metadata": null
+    }))
+    .unwrap();
+    assert_eq!(row, LinearAttachment::default());
+}

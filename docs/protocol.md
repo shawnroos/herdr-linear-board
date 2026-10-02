@@ -603,6 +603,13 @@ daemon start).
     board's `R` key sends it. A daemon that predates `force` ignores it.
   - Additive: `linear.message` (string, omitted when there is nothing to say), `linear.status`
     values `not_imported` and `unavailable`.
+  - Card fields on each `issues[]` entry, all additive and `null` when Linear has nothing:
+    `description` (an excerpt of at most 240 characters, whitespace collapsed), `milestone`
+    (`{id, name}`), and `pr` (`{repo, number, url, status, draft}`), the issue's newest pull
+    request attachment by creation time. The read asks Linear for up to 10 attachments whose URL
+    contains `/pull/`; only a `https://github.com/<owner>/<repo>/pull/<number>` URL becomes `pr`,
+    with `repo` and `number` taken from the URL and `status` and `draft` from the attachment's
+    metadata as Linear sends them.
   - Clients wait at most `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s). Error 1 for an empty
     `workspace_id`.
 - `linear.list {kind, id?, origin_socket?}` → `{status, message, rows}`. `status` is one of `ok`,
@@ -627,7 +634,9 @@ daemon start).
   `projects`, a missing id on `views`, or an id of the wrong shape.
 - `linear.issue {issue, origin_socket?}` → the issue document — one Linear issue read whole for
   the board's issue page: description, sub-issues, parent and relations, comments and history,
-  plus project, milestone, cycle, estimate and due date. The read is ONE GraphQL request: each
+  plus project, milestone, cycle, estimate and due date, and `attachments`: every attachment of
+  any source as `{id, source_type, title, subtitle, url, created_at, metadata}`, with `metadata`
+  passed through as Linear sends it (it can be `null`). The read is ONE GraphQL request: each
   paged connection is asked for one page, and what did not fit is named in `truncated`, with
   `status` `partial`, so a busy issue opens as fast as an empty one. History events that change
   nothing the page shows are dropped. Every Linear failure, no such issue included, is a document

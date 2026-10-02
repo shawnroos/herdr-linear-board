@@ -1230,6 +1230,28 @@ pub struct LinearIssueDetail {
     pub comments: Vec<LinearComment>,
     #[serde(default)]
     pub history: Vec<LinearHistoryEvent>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub attachments: Vec<LinearAttachment>,
+}
+
+/// One Linear attachment, of any source. `metadata` is passed through as
+/// Linear sends it; its shape depends on `source_type`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearAttachment {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
 }
 
 /// An id-and-name pair: a project or a milestone.
@@ -2041,6 +2063,32 @@ pub struct LinearIssue {
     pub stale: bool,
     #[serde(default)]
     pub bindings: Vec<LinearBinding>,
+    /// An excerpt, whitespace collapsed, for the card.
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<LinearNamed>,
+    /// The issue's newest GitHub pull request attachment.
+    #[serde(default)]
+    pub pr: Option<LinearCardPr>,
+}
+
+/// The pull request a card shows, from Linear's attachment. A struct so the
+/// daemon can add `gh` fields later without breaking older readers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearCardPr {
+    /// `owner/repo`, from the URL.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub repo: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    /// Linear's `metadata.status`, as sent.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub draft: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
