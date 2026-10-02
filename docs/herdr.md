@@ -443,6 +443,58 @@ Linear's GraphQL `CustomView` exposes its board grouping through `viewPreference
 `columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
 schema, 2026-09-29).
 
+## Herdr 0.9.3 compatibility (observed 2026-10-02)
+
+**Schema.** `herdr api schema --json` from the 0.9.3 sandbox image, diffed against
+`docs/herdr-0.9.0-schema.json`: protocol stays 22, and no `required` list changed. 0.9.3 adds the
+optional fields `PaneInfo.restore_error`, `AgentInfo.completion_seq`,
+`ServerCapabilities.ssh_agent_registration` and `resume_argv` on the two `pane.report_agent*`
+params, and the methods `pane.clear`, `pane.link.resolve` and `server.ssh_agent.register`. It
+removes `pane.graphics.set`, `pane.graphics.clear` and `pane.graphics.info`. `board-herdr` calls
+none of the removed methods and decodes without `deny_unknown_fields`, so every shape it uses is
+unchanged.
+
+**Live probe.** Observed on Herdr 0.9.3 / protocol 22 in the sandbox
+(`scripts/sandbox.sh --herdr-version 0.9.3`), against ephemeral `hb-e2e-*` sessions booted by
+`e2e/lib.sh` (`e2e_init`, then `e2e_ws_standard`). Calls are raw socket requests through
+`e2e/hrpc.py <method> '<params>'`; events come from one `events.subscribe` connection. Two runs:
+one headless (no client attached), one with a client attached as
+`herdr --session <name>` on a 100×30 pty (`TIOCSWINSZ` rows 30, cols 100).
+
+- **Default tab label.** `tab.create {"workspace_id":"w1","focus":false}` with no `label` returned
+  `label: "2"`; the first tab of a new workspace is `"1"`. The default label is the tab's `number`
+  as a string.
+- **Rename events.** `tab.rename {"tab_id":"w1:t2","label":"probe-renamed"}` emitted
+  `tab_renamed {tab_id, workspace_id, label}`. `pane.rename {"pane_id":"w1:p2","label":"probe-pane"}`
+  emitted **no** `pane_updated` event (subscribed, 1.5 s wait, in both runs); the new label shows
+  only in `pane.get` / `pane.list`. A `cd` in a pane emitted no `pane_updated` either.
+- **`pane_focused`.** `pane.focus {"pane_id":"w1:p2"}` emitted `tab_focused {tab_id, workspace_id}`
+  then `pane_focused {pane_id, workspace_id}`; `pane_focused` carries no `tab_id` and no layout.
+  A focus change emitted no `layout_updated`.
+- **`layout_updated`.** Its `data.layout` is the full `pane.layout` snapshot
+  (`workspace_id, tab_id, zoomed, area, focused_pane_id, panes[{pane_id, focused, rect}],
+  splits[{id, direction, ratio, rect}]`). It fired on `pane.split`, on `tab.create` (for the new
+  tab, whose `focused_pane_id` is tab-local), and on opening and closing an overlay pane.
+- **Overlay panes are in `pane.layout`.** `plugin.pane.open
+  {"plugin_id":"u1-probe2","entrypoint":"ov","focus":true}` for a manifest entrypoint with
+  `placement = "overlay"` opened `w1:p3` in the focused tab: it split the active pane in the tree
+  (new split `split_1_0`), the layout reported `zoomed: true` with `focused_pane_id: "w1:p3"`,
+  `pane.list` listed it with the same `tab_id`, and `tab.list` counted it in `pane_count`. Closing it
+  restored `zoomed: false` and the previous rects. Passing `target_pane_id` for an overlay fails with
+  `invalid_params` "overlay and popup plugin panes target the active pane".
+- **Cwd is readable.** `pane.get` returns `cwd` and `foreground_cwd`; after `cd /tmp/u1-probe-cwd`
+  in the pane both changed to that path. A split inherits the source pane's cwd.
+- **Layout rects vs terminal size.** Headless, `area` is a fixed 120×40 and pane PTYs do not follow
+  their rects (a 60-wide rect still reported `stty size` 40 119). With the 100×30 client attached,
+  `area` was 74×29 (herdr's sidebar and status row take the rest). A lone pane with rect 74×29 had a
+  29×73 PTY (one column less). After a right split, each 37×29 rect had a 27×34 PTY (two rows and
+  three columns less: the split borders). The zoomed overlay's PTY was 29×37 while its rect said
+  18×29, so a rect is not the size of a zoomed overlay. Read the pane's own terminal size (the
+  TUI's `crossterm::terminal::size`) for widths; use the layout only to tell alone from split.
+- **Telling a full pane from a split** (for the board's level): from `pane.layout {"pane_id":<own>}`,
+  the pane fills its tab when it is the only entry in `panes`, or when `zoomed` is true and
+  `focused_pane_id` is the pane. Re-read the layout on `layout_updated` and on `pane_focused`/`tab_focused`.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:
