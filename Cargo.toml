@@ -28,7 +28,7 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 thiserror = "1"
 
-# Async runtime (daemon only)
+# Async runtime: the daemon, and `board mcp` in board-cli (rmcp requires tokio)
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "net",
@@ -53,10 +53,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 libc = "0.2"
 base64 = "0.22"
 
+# `board mcp`: the official MCP SDK over stdio, and the schema derive its tool
+# parameters need.
+rmcp = { version = "3.5", features = ["transport-io"] }
+schemars = "1"
+
+# Linear GraphQL (daemon only). rustls with the ring provider: aws-lc-sys wants
+# cmake, which the sandbox image does not carry.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 # Dev / test
 insta = "1"
 tempfile = "3"
-sha2 = "0.10"
 
 # Internal crates
 board-core = { path = "crates/board-core" }

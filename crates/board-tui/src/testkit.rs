@@ -28,7 +28,7 @@ use crate::app::{App, Msg};
 use crate::editor::FakeEditor;
 use crate::forms::{Field, FieldId, FieldKind, Form};
 use crate::view::view;
-use crate::{Driver, LinearStart, OriginContext, PlatformActions};
+use crate::{Driver, LinearStart, OriginContext, PlatformActions, SessionIdentity, ShowContext};
 
 // -- form introspection ------------------------------------------------------
 
@@ -112,7 +112,6 @@ pub fn hostile_origin() -> OriginContext {
         session: Some("hostile-session".into()),
         plugin_id: Some("hostile-plugin-sentinel".into()),
         pane_id: Some("hostile-pane-sentinel".into()),
-        plugin_root: Some("/hostile/plugin-root".into()),
     }
 }
 
@@ -660,6 +659,7 @@ pub fn linear_start() -> LinearStart {
         board_version: "0.17.0".to_string(),
         daemon_version: Some("0.17.0".to_string()),
         herdr_keys: Vec::new(),
+        show: ShowContext::default(),
     }
 }
 
@@ -715,4 +715,15 @@ pub fn methods(log: &RequestLog) -> Vec<String> {
         .iter()
         .map(|(method, _)| method.clone())
         .collect()
+}
+
+/// A session-pane driver over `client` with a fake platform, beside the
+/// agent `identity` names, in space `identity.space`.
+pub fn session_driver<C: BoardClient + 'static>(client: C, identity: SessionIdentity) -> Driver {
+    let (platform, _, _) = FakePlatform::new();
+    let start = LinearStart {
+        workspace_id: identity.space.clone(),
+        ..linear_start()
+    };
+    Driver::session(Box::new(client), Box::new(platform), start, identity)
 }

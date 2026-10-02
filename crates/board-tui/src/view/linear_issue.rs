@@ -22,7 +22,7 @@ use ratatui::Frame;
 
 use super::linear::{fit, line};
 use super::truncate;
-use crate::app::{App, LinearState};
+use crate::app::{App, LinearState, Mode};
 
 /// Two columns need this much body width, the same rule the board stacks by.
 const MIN_COL_W: u16 = 36;
@@ -454,6 +454,20 @@ fn sidebar_column(
         }
     }
 
+    // What the card showed when it was opened, kept after it clears.
+    let marks = state.detail_marks();
+    if !marks.is_empty() {
+        out.push(Line::from(""));
+        out.push(heading("Marks", width));
+        for mark in marks {
+            let by = mark.created_by.as_deref().map(line).unwrap_or_default();
+            let text = mark.text.as_deref().map(line).unwrap_or_default();
+            out.push(Line::from(fit(
+                &format!("{} {by}  {text}", crate::app::mark_glyph(mark.kind)),
+                width,
+            )));
+        }
+    }
     out.push(Line::from(""));
     out.push(heading("Board", width));
     out.extend(board_block(state, issue.bindings(), width, rows, out.len()));
@@ -652,8 +666,11 @@ pub(super) fn build(app: &App, state: &LinearState, area: Rect) -> Option<Page> 
         rows,
         stacked,
     };
-    let selected = LinearState::selected_row(&page.rows, state.detail_selection.as_ref());
-    mark_selected(&mut page, selected, stacked, main_len);
+    // The session pane has no row to act on, so it marks none.
+    if app.mode != Mode::Session {
+        let selected = LinearState::selected_row(&page.rows, state.detail_selection.as_ref());
+        mark_selected(&mut page, selected, stacked, main_len);
+    }
     Some(page)
 }
 
@@ -761,7 +778,7 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     }
 
     let body = page_body(app, area);
-    let scroll = page_scroll(&page, state, body.height as usize);
+    let scroll = page_scroll(app, &page, state, body.height as usize);
     if page.stacked {
         let mut all = page.main.clone();
         all.extend(page.sidebar.clone());
@@ -786,14 +803,17 @@ pub(super) fn draw(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let hint = Rect::new(content.x, content.bottom() - 1, content.width, 1);
     f.render_widget(
         Paragraph::new(Span::styled(
-            truncate(hint_text(state), content.width as usize),
+            truncate(hint_text(app, state), content.width as usize),
             dim(),
         )),
         hint,
     );
 }
 
-fn hint_text(state: &LinearState) -> &'static str {
+fn hint_text(app: &App, state: &LinearState) -> &'static str {
+    if app.mode == Mode::Session {
+        return " Tab lane list · j/k scroll · ? help · q close";
+    }
     match state.detail_error.as_ref() {
         Some(e) if e.retryable => {
             " j/k move · Enter open · r retry · o focus pane · u Linear · y copy · b bind · Esc back"
@@ -804,16 +824,31 @@ fn hint_text(state: &LinearState) -> &'static str {
 
 /// Scroll the page as one unit, keeping the selected row on screen with a line
 /// of context either side where the content allows (R5).
-fn page_scroll(page: &Page, state: &LinearState, height: usize) -> usize {
-    let total = if page.stacked {
+fn page_lines(page: &Page) -> usize {
+    if page.stacked {
         page.main.len() + page.sidebar.len()
     } else {
         page.main.len().max(page.sidebar.len())
+    }
+}
+
+/// The furthest the page scrolls at `area`, the same arithmetic the draw uses.
+pub(super) fn max_scroll(app: &App, state: &LinearState, area: Rect) -> usize {
+    let Some(page) = build(app, state, area) else {
+        return 0;
     };
+    page_lines(&page).saturating_sub(page_body(app, area).height as usize)
+}
+
+fn page_scroll(app: &App, page: &Page, state: &LinearState, height: usize) -> usize {
+    let total = page_lines(page);
     if total <= height {
         return 0;
     }
     let max = total - height;
+    if app.mode == Mode::Session {
+        return state.detail_scroll.min(max);
+    }
     let selected = LinearState::selected_row(&page.rows, state.detail_selection.as_ref());
     let Some(row) = page.rows.get(selected) else {
         return 0;

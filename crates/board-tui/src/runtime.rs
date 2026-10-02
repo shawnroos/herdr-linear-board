@@ -19,7 +19,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use crate::app::Msg;
+use crate::app::{LocalStateSignals, Msg};
 use crate::driver::LinearStart;
 use crate::editor::RealEditor;
 use crate::view::view;
@@ -28,10 +28,34 @@ use crate::{Driver, OriginContext};
 const RECONNECT_BACKOFF_MIN: Duration = Duration::from_millis(100);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SubscriptionSignal {
     Changed,
+    LocalState {
+        space: Option<String>,
+        snapshot: bool,
+    },
     Reconnected,
+}
+
+/// Every signal drained in one idle tick, merged.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Coalesced {
+    changed: bool,
+    reconnected: bool,
+    local: LocalStateSignals,
+}
+
+fn coalesce(signals: impl IntoIterator<Item = SubscriptionSignal>) -> Coalesced {
+    let mut out = Coalesced::default();
+    for signal in signals {
+        match signal {
+            SubscriptionSignal::Changed => out.changed = true,
+            SubscriptionSignal::Reconnected => out.reconnected = true,
+            SubscriptionSignal::LocalState { space, snapshot } => out.local.add(space, snapshot),
+        }
+    }
+    out
 }
 
 fn epoch_secs() -> i64 {
@@ -69,6 +93,17 @@ pub fn run_with_board(client: Box<dyn BoardClient>, board: BoardSnapshot) -> Res
 /// written; the first `linear.snapshot` leaves from the driver constructor.
 pub fn run_linear(client: Box<dyn BoardClient>, start: LinearStart) -> Result<()> {
     let mut driver = Driver::linear(client, Box::new(RealEditor), start);
+    run_driver(&mut driver)
+}
+
+/// The session side pane beside one agent: reads only, never a
+/// write, not even its own pane title.
+pub fn run_session(
+    client: Box<dyn BoardClient>,
+    start: LinearStart,
+    identity: crate::SessionIdentity,
+) -> Result<()> {
+    let mut driver = Driver::session(client, Box::new(crate::RealPlatform), start, identity);
     run_driver(&mut driver)
 }
 
@@ -151,16 +186,13 @@ fn event_loop(
         } else {
             // Drain and coalesce pending refresh/reconnect signals. A daemon
             // replacement invalidates the request socket as well as the event
-            // stream, so install a fresh request client before refetching.
-            let mut refreshed = false;
-            let mut reconnected = false;
-            while let Ok(signal) = rx.try_recv() {
-                match signal {
-                    SubscriptionSignal::Changed => refreshed = true,
-                    SubscriptionSignal::Reconnected => reconnected = true,
-                }
+            // stream, so install a fresh request client before refetching;
+            // the local-state read goes after it for the same reason.
+            let batch = coalesce(std::iter::from_fn(|| rx.try_recv().ok()));
+            driver.on_daemon_signals(batch.changed, batch.reconnected);
+            if !batch.local.is_empty() {
+                driver.on_local_state_changed(batch.local);
             }
-            driver.on_daemon_signals(refreshed, reconnected);
         }
 
         if driver.app.should_quit {
@@ -173,8 +205,14 @@ fn forward_events(
     stream: Box<dyn Iterator<Item = Event> + Send>,
     tx: &mpsc::Sender<SubscriptionSignal>,
 ) {
-    for _event in stream {
-        if tx.send(SubscriptionSignal::Changed).is_err() {
+    for event in stream {
+        let signal = match event {
+            Event::LocalStateChanged { space, snapshot } => {
+                SubscriptionSignal::LocalState { space, snapshot }
+            }
+            _ => SubscriptionSignal::Changed,
+        };
+        if tx.send(signal).is_err() {
             break;
         }
     }
@@ -227,6 +265,71 @@ mod tests {
             card_id: Some(7),
             column_id: Some(3),
         }
+    }
+
+    fn local(space: Option<&str>, snapshot: bool) -> SubscriptionSignal {
+        SubscriptionSignal::LocalState {
+            space: space.map(str::to_string),
+            snapshot,
+        }
+    }
+
+    #[test]
+    fn a_local_state_event_is_forwarded_with_its_space_and_flag_not_as_a_board_change() {
+        let (tx, rx) = mpsc::channel();
+        let events = vec![
+            Event::LocalStateChanged {
+                space: Some("wA".into()),
+                snapshot: true,
+            },
+            changed_event(),
+            Event::LocalStateChanged {
+                space: None,
+                snapshot: false,
+            },
+        ];
+        forward_events(Box::new(events.into_iter()), &tx);
+        drop(tx);
+        assert_eq!(
+            rx.iter().collect::<Vec<_>>(),
+            vec![
+                local(Some("wA"), true),
+                SubscriptionSignal::Changed,
+                local(None, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_coalescer_keeps_each_space_once_and_whether_any_of_its_events_carried_the_flag() {
+        let batch = coalesce([
+            local(Some("wA"), false),
+            local(Some("wA"), false),
+            local(Some("wA"), false),
+            local(Some("wB"), true),
+            local(Some("wB"), false),
+        ]);
+        assert!(!batch.changed && !batch.reconnected);
+        let mut expected = LocalStateSignals::default();
+        expected.add(Some("wA".into()), false);
+        expected.add(Some("wB".into()), true);
+        assert_eq!(batch.local, expected);
+        assert_eq!(batch.local.for_space("wA"), Some(false));
+        assert_eq!(batch.local.for_space("wB"), Some(true));
+        assert_eq!(batch.local.for_space("wC"), None);
+
+        let batch = coalesce([
+            SubscriptionSignal::Changed,
+            local(None, false),
+            SubscriptionSignal::Reconnected,
+        ]);
+        assert!(batch.changed && batch.reconnected);
+        assert_eq!(
+            batch.local.for_space("wC"),
+            Some(false),
+            "an any-space event concerns every space"
+        );
+        assert!(coalesce([]).local.is_empty());
     }
 
     #[test]

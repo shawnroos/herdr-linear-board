@@ -1,0 +1,462 @@
+{
+  "groups": [
+    {
+      "issues": [
+        "WEB-101",
+        "WEB-102",
+        "WEB-103",
+        "WEB-104"
+      ],
+      "key": "st-todo",
+      "kind": "unstarted",
+      "label": "Todo",
+      "lanes": [
+        {
+          "issues": [
+            "WEB-101",
+            "WEB-102",
+            "WEB-103"
+          ],
+          "key": "ln-alpha",
+          "label": "Alpha"
+        },
+        {
+          "issues": [
+            "WEB-104"
+          ],
+          "key": "ln-beta",
+          "label": "Beta"
+        }
+      ]
+    },
+    {
+      "issues": [
+        "WEB-105",
+        "WEB-106"
+      ],
+      "key": "st-prog",
+      "kind": "started",
+      "label": "In Progress",
+      "lanes": [
+        {
+          "issues": [
+            "WEB-105"
+          ],
+          "key": "ln-alpha",
+          "label": "Alpha"
+        },
+        {
+          "issues": [
+            "WEB-106"
+          ],
+          "key": "ln-beta",
+          "label": "Beta"
+        }
+      ]
+    },
+    {
+      "issues": [
+        "WEB-107"
+      ],
+      "key": "st-review",
+      "kind": "started",
+      "label": "In Review",
+      "lanes": [
+        {
+          "issues": [],
+          "key": "ln-alpha",
+          "label": "Alpha"
+        },
+        {
+          "issues": [
+            "WEB-107"
+          ],
+          "key": "ln-beta",
+          "label": "Beta"
+        }
+      ]
+    },
+    {
+      "issues": [
+        "WEB-108"
+      ],
+      "key": "st-done",
+      "kind": "completed",
+      "label": "Done",
+      "lanes": [
+        {
+          "issues": [
+            "WEB-108"
+          ],
+          "key": "ln-alpha",
+          "label": "Alpha"
+        },
+        {
+          "issues": [],
+          "key": "ln-beta",
+          "label": "Beta"
+        }
+      ]
+    }
+  ],
+  "herdr": {
+    "status": "ok",
+    "version": "0.9.0"
+  },
+  "issues": {
+    "WEB-101": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000000-0000-4000-8000-000000000000",
+      "identifier": "WEB-101",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: the export dialog forgets its last folder",
+      "url": "https://linear.app/example/issue/web-101/x"
+    },
+    "WEB-102": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000001-0000-4000-8000-000000000001",
+      "identifier": "WEB-102",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: a toolbar icon is blurry on a wide screen",
+      "url": "https://linear.app/example/issue/web-102/x"
+    },
+    "WEB-103": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000002-0000-4000-8000-000000000002",
+      "identifier": "WEB-103",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: the undo stack drops a rename",
+      "url": "https://linear.app/example/issue/web-103/x"
+    },
+    "WEB-104": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000003-0000-4000-8000-000000000003",
+      "identifier": "WEB-104",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: a long list scrolls past its last row",
+      "url": "https://linear.app/example/issue/web-104/x"
+    },
+    "WEB-105": {
+      "assignee": null,
+      "bindings": [
+        {
+          "panes": [
+            "wA:p1"
+          ],
+          "state": "bound",
+          "tab": {
+            "id": "wA:t1",
+            "label": "web-105"
+          },
+          "worktree_path": "$SANDBOX/worktrees/web-105"
+        }
+      ],
+      "id": "20000004-0000-4000-8000-000000000004",
+      "identifier": "WEB-105",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-prog",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "title": "Example issue: a saved filter loses its sort order",
+      "url": "https://linear.app/example/issue/web-105/x"
+    },
+    "WEB-106": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000005-0000-4000-8000-000000000005",
+      "identifier": "WEB-106",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-prog",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "title": "Example issue: the preview pane flickers on resize",
+      "url": "https://linear.app/example/issue/web-106/x"
+    },
+    "WEB-107": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000006-0000-4000-8000-000000000006",
+      "identifier": "WEB-107",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-review",
+        "name": "In Review",
+        "type": "started"
+      },
+      "title": "Example issue: a shared link opens the wrong page",
+      "url": "https://linear.app/example/issue/web-107/x"
+    },
+    "WEB-108": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000007-0000-4000-8000-000000000007",
+      "identifier": "WEB-108",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-done",
+        "name": "Done",
+        "type": "completed"
+      },
+      "title": "Example issue: the settings page loads twice",
+      "url": "https://linear.app/example/issue/web-108/x"
+    },
+    "WEB-201": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000008-0000-4000-8000-000000000008",
+      "identifier": "WEB-201",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-todo",
+        "name": "Todo",
+        "type": "unstarted"
+      },
+      "title": "Example issue: the sync job retries without a limit",
+      "url": "https://linear.app/example/issue/web-201/x"
+    },
+    "WEB-202": {
+      "assignee": null,
+      "bindings": [],
+      "id": "20000009-0000-4000-8000-000000000009",
+      "identifier": "WEB-202",
+      "labels": [],
+      "priority": 3,
+      "stale": false,
+      "state": {
+        "id": "st-prog",
+        "name": "In Progress",
+        "type": "started"
+      },
+      "title": "Example issue: a webhook payload drops its timestamp",
+      "url": "https://linear.app/example/issue/web-202/x"
+    }
+  },
+  "linear": {
+    "cache_age_seconds": null,
+    "status": "ok",
+    "truncated": false
+  },
+  "mapping": {
+    "pane": "session",
+    "source": "default",
+    "space": "project",
+    "status": "ok",
+    "tab": "work"
+  },
+  "project": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "name": "Frame Effects",
+    "team_key": "WEB",
+    "url": "https://linear.app/example/project/frame-effects"
+  },
+  "record": {
+    "project_id": "44444444-4444-4444-8444-444444444444",
+    "state": "bound",
+    "status": "ok"
+  },
+  "schema": 1,
+  "tabs": [
+    {
+      "groups": [
+        {
+          "issues": [
+            "WEB-101",
+            "WEB-102",
+            "WEB-103",
+            "WEB-104"
+          ],
+          "key": "st-todo",
+          "kind": "unstarted",
+          "label": "Todo",
+          "lanes": [
+            {
+              "issues": [
+                "WEB-101",
+                "WEB-102",
+                "WEB-103"
+              ],
+              "key": "ln-alpha",
+              "label": "Alpha"
+            },
+            {
+              "issues": [
+                "WEB-104"
+              ],
+              "key": "ln-beta",
+              "label": "Beta"
+            }
+          ]
+        },
+        {
+          "issues": [
+            "WEB-105",
+            "WEB-106"
+          ],
+          "key": "st-prog",
+          "kind": "started",
+          "label": "In Progress",
+          "lanes": [
+            {
+              "issues": [
+                "WEB-105"
+              ],
+              "key": "ln-alpha",
+              "label": "Alpha"
+            },
+            {
+              "issues": [
+                "WEB-106"
+              ],
+              "key": "ln-beta",
+              "label": "Beta"
+            }
+          ]
+        },
+        {
+          "issues": [
+            "WEB-107"
+          ],
+          "key": "st-review",
+          "kind": "started",
+          "label": "In Review",
+          "lanes": [
+            {
+              "issues": [],
+              "key": "ln-alpha",
+              "label": "Alpha"
+            },
+            {
+              "issues": [
+                "WEB-107"
+              ],
+              "key": "ln-beta",
+              "label": "Beta"
+            }
+          ]
+        },
+        {
+          "issues": [
+            "WEB-108"
+          ],
+          "key": "st-done",
+          "kind": "completed",
+          "label": "Done",
+          "lanes": [
+            {
+              "issues": [
+                "WEB-108"
+              ],
+              "key": "ln-alpha",
+              "label": "Alpha"
+            },
+            {
+              "issues": [],
+              "key": "ln-beta",
+              "label": "Beta"
+            }
+          ]
+        }
+      ],
+      "key": "ms-frontend",
+      "label": "Frontend"
+    },
+    {
+      "groups": [
+        {
+          "issues": [
+            "WEB-201"
+          ],
+          "key": "st-todo",
+          "kind": "unstarted",
+          "label": "Todo",
+          "lanes": [
+            {
+              "issues": [
+                "WEB-201"
+              ],
+              "key": "ln-gamma",
+              "label": "Gamma"
+            }
+          ]
+        },
+        {
+          "issues": [
+            "WEB-202"
+          ],
+          "key": "st-prog",
+          "kind": "started",
+          "label": "In Progress",
+          "lanes": [
+            {
+              "issues": [
+                "WEB-202"
+              ],
+              "key": "ln-gamma",
+              "label": "Gamma"
+            }
+          ]
+        }
+      ],
+      "key": "ms-backend",
+      "label": "Backend"
+    }
+  ],
+  "unmapped": [],
+  "view": {
+    "id": null,
+    "layout": null,
+    "name": null,
+    "status": "none"
+  },
+  "workspace": {
+    "id": "wA",
+    "label": "Plugins",
+    "live": true
+  }
+}

@@ -35,11 +35,6 @@ pub mod text;
 
 pub use engine::ValidationError;
 
-/// The oldest work-plugin release whose snapshot and list contracts this board
-/// reads. It lives here so the daemon that enforces it and the tests that build
-/// a fake plugin move together.
-pub const PLUGIN_VERSION_FLOOR: &str = "0.5.0";
-
 /// Crate-wide error type. `anyhow` is used at the process edges (CLI/daemon);
 /// this `thiserror` enum carries the structured cases the daemon maps onto the
 /// protocol's numeric error codes.
@@ -73,15 +68,14 @@ pub enum Error {
     #[error("herdr unavailable: {0}")]
     HerdrUnavailable(String),
 
-    /// The work plugin's snapshot script cannot be run or gave no document
-    /// (protocol code 6).
+    /// The work plugin's scripts could not answer (protocol code 6). The
+    /// daemon no longer runs them; the code stays so its meaning is stable.
     #[error("plugin unavailable: {0}")]
     PluginUnavailable(String),
 
-    /// The installed work plugin does not ship the script an op needs
-    /// (protocol code 7). Separate from `PluginUnavailable` because the two
-    /// have opposite remedies: this one is "update the plugin", and a reader
-    /// that offers a retry for it retries forever.
+    /// The installed work plugin did not ship the script an op needed
+    /// (protocol code 7). No longer produced; kept so an older daemon's code 7
+    /// still reads as "update the plugin" rather than a retryable failure.
     #[error("plugin op unsupported: {0}")]
     PluginOpUnsupported(String),
 

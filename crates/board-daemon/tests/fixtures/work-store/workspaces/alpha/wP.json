@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "worktree_path": "workspace:wP",
+  "state": "proposed",
+  "issue_identifier": "",
+  "proposal": {
+    "identifier": "project-2",
+    "nonce": "n-4",
+    "presented_at": "2026-09-07T00:00:00Z"
+  },
+  "updated_at": "2026-09-07T00:00:00Z"
+}

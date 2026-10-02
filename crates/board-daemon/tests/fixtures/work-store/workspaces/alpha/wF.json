@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "worktree_path": "workspace:wF",
+  "state": "bound",
+  "issue_identifier": "project-session",
+  "display_name": "Session project",
+  "team_ids": [
+    "team-1"
+  ],
+  "view": {
+    "id": "view-2",
+    "name": "Board",
+    "layout": "board",
+    "fetched_at": "2026-09-05T00:00:00Z"
+  },
+  "consent": null,
+  "updated_at": "2026-09-05T00:00:00Z"
+}

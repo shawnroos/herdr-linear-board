@@ -104,8 +104,16 @@ pub enum Effect {
     ReloadPickers,
     Quit,
     /// Linear mode: fetch `linear.snapshot` for the space (worker thread in
-    /// production, synchronous against the fake).
-    LinearSnapshot,
+    /// production, synchronous against the fake). `force` asks the daemon to
+    /// skip its read cache (`R`).
+    LinearSnapshot {
+        force: bool,
+    },
+    /// Linear mode: fetch `linear.state.get` for the space. The reducer marks
+    /// the read in flight before emitting it.
+    LinearStateGet,
+    /// Session pane: fetch `linear.session.get` for the agent it is beside.
+    LinearSessionGet,
     /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
     /// project id). The reducer marks the read in flight before emitting it.
     LinearList {
@@ -121,15 +129,34 @@ pub enum Effect {
         /// indistinguishable on arrival, and the older one can land last.
         generation: u64,
     },
-    /// Linear mode: `linear.bind_handoff` on the origin session. Ids and a
-    /// directory only: a name never reaches the bind line. The reducer marks
-    /// the handoff in flight before emitting it.
-    BindHandoff {
+    /// Linear mode: `linear.space.bind` of `space` to a project, and to one
+    /// of its views when `view` is set.
+    LinearSpaceBind {
         space: String,
         project: String,
         view: Option<String>,
-        issue: Option<String>,
-        working_directory: Option<String>,
+    },
+    /// Linear mode: `linear.mark.clear {ids}` in one request. `on_open` when
+    /// opening a card sent it: a failed clear then says nothing.
+    LinearMarkClear {
+        ids: Vec<i64>,
+        on_open: bool,
+    },
+    /// Linear mode: `linear.show.accept`; `issue` is the request's target,
+    /// selected once the daemon confirms.
+    LinearShowAccept {
+        id: i64,
+        issue: String,
+    },
+    LinearShowDismiss {
+        id: i64,
+    },
+    /// Linear mode: `linear.bind` of `cwd`'s worktree to `issue`: accepting
+    /// the suggestion mark `mark`, or `b` on the issue page (no mark).
+    LinearBind {
+        mark: Option<i64>,
+        issue: String,
+        cwd: String,
     },
     /// Linear mode: `pane.focus` on the origin session.
     FocusPane(String),

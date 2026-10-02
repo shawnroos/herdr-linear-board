@@ -16,13 +16,13 @@ use crate::envelope::{Request, Response};
 use crate::error::{diagnostic_protocol_code, HerdrError, Result};
 use crate::params::{
     AgentPromptParams, AgentStartParams, AgentWaitParams, PaneRenameParams, PaneSplitParams,
-    TabCreateParams, TabRenameParams, WorkspaceCreateParams,
+    PluginPaneOpenParams, TabCreateParams, TabRenameParams, WorkspaceCreateParams,
 };
 use crate::transport::{self, connect_with_deadline, SocketDeadlines};
 use crate::types::{
     AgentInfo, AgentStarted, Layout, NotificationShown, NotificationSound, PaneInfo,
-    PaneReadResult, Pong, ReadSource, SessionSnapshot, TabCreated, TabInfo, WorkspaceCreated,
-    WorkspaceInfo,
+    PaneReadResult, PluginPaneInfo, Pong, ReadSource, SessionSnapshot, TabCreated, TabInfo,
+    WorkspaceCreated, WorkspaceInfo,
 };
 
 fn error_category(error: &HerdrError) -> &'static str {
@@ -63,6 +63,8 @@ fn diagnostic_method(method: &str) -> &'static str {
         "pane.layout" => "pane.layout",
         "notification.show" => "notification.show",
         "session.snapshot" => "session.snapshot",
+        "plugin.pane.open" => "plugin.pane.open",
+        "plugin.pane.close" => "plugin.pane.close",
         _ => "<unknown>",
     }
 }
@@ -433,6 +435,19 @@ impl HerdrClient {
         )
     }
 
+    // -- plugin pane ---------------------------------------------------------
+
+    pub fn plugin_pane_open(&mut self, p: &PluginPaneOpenParams) -> Result<PluginPaneInfo> {
+        self.call_field("plugin.pane.open", serde_json::to_value(p)?, "plugin_pane")
+    }
+
+    /// The `plugin_pane_closed` payload only echoes the pane id, so it is
+    /// not decoded.
+    pub fn plugin_pane_close(&mut self, pane_id: &str) -> Result<()> {
+        self.call("plugin.pane.close", json!({ "pane_id": pane_id }))?;
+        Ok(())
+    }
+
     // -- session -------------------------------------------------------------
 
     pub fn session_snapshot(&mut self) -> Result<SessionSnapshot> {
@@ -447,4 +462,15 @@ fn is_supported_release(version: &str) -> bool {
         || version
             .strip_prefix(crate::SUPPORTED_HERDR_VERSION)
             .is_some_and(|rest| rest.starts_with("-preview."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diagnostic_method;
+
+    #[test]
+    fn plugin_pane_methods_are_labelled_in_diagnostics() {
+        assert_eq!(diagnostic_method("plugin.pane.open"), "plugin.pane.open");
+        assert_eq!(diagnostic_method("plugin.pane.close"), "plugin.pane.close");
+    }
 }

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "worktree_path": "/tmp/hb-import/wt-b",
+  "state": "misplaced",
+  "issue_identifier": "WEB-102",
+  "branch_at_confirmation": "feature/web-102",
+  "tab": "WEB-102",
+  "view": {
+    "id": "view-1",
+    "name": "Mine",
+    "layout": "board",
+    "fetched_at": "2026-09-02T00:00:00Z"
+  },
+  "updated_at": "2026-09-02T00:00:00Z"
+}

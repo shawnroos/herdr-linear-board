@@ -4,8 +4,8 @@ expression: "rows.join(\"\\n\")"
 ---
  Linear  Frame Effects · view: Canva
  Enter detail · r refresh · ? help ·
-┌ Backlog (1) · 1/5 ───────────────┐
-│WEB-3308  P0                      │
+┌ Backlog (1) ─────────────────────┐
+│  WEB-3308  P0                    │
 │Example issue: the panel stays    │
 │blank while a long list of items …│
 │@Example User                     │

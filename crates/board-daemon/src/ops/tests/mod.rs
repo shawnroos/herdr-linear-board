@@ -717,13 +717,14 @@ fn fake_rescue_herdr(faults: RescueFakeFaults) -> RescueFake {
     }
 }
 
-mod bind_handoff;
 mod boards;
 mod cards;
 mod comments;
 mod discovery;
+mod import;
 mod lifecycle;
-mod linear;
+mod linear_native;
+mod linear_state;
 mod panes;
 mod parity;
 mod rollback;

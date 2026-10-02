@@ -28,8 +28,9 @@ use crate::editor::{EditorLauncher, RealEditor};
 use crate::OriginContext;
 
 /// What the CLI hands the TUI to start in Linear mode: the herdr space id
-/// (`space_identity`), the invoking context, and the two versions the R25
-/// screen shows when the daemon predates `linear.snapshot`.
+/// (`space_identity`), the invoking context, the two versions the stale-daemon
+/// screen shows when the daemon predates `linear.snapshot`, and what an
+/// agent-opened board lands on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinearStart {
     pub workspace_id: String,
@@ -37,6 +38,7 @@ pub struct LinearStart {
     pub board_version: String,
     pub daemon_version: Option<String>,
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub show: crate::ShowContext,
 }
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
@@ -83,18 +85,59 @@ impl Driver {
         start: LinearStart,
         defer_snapshots: bool,
     ) -> Driver {
-        let (tx, rx) = linear::arrival_channel();
         let mut state = LinearState::new(
             start.workspace_id,
             start.board_version,
             start.daemon_version,
         );
         state.herdr_keys = start.herdr_keys;
+        state.landing = Some(start.show);
+        let app = App::linear(state, start.origin.clone());
+        Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
+    }
+
+    /// The session side pane beside the agent `identity` names. Its first
+    /// reads leave in this constructor, like the Linear board's.
+    pub fn session(
+        client: Box<dyn BoardClient>,
+        platform: Box<dyn PlatformActions>,
+        start: LinearStart,
+        identity: crate::SessionIdentity,
+    ) -> Driver {
+        let state = LinearState::new(
+            start.workspace_id,
+            start.board_version,
+            start.daemon_version,
+        );
+        let app = App::session(
+            state,
+            crate::app::SessionState::new(identity),
+            start.origin.clone(),
+        );
+        Driver::start_linear(
+            app,
+            client,
+            Box::new(RealEditor),
+            platform,
+            start.origin,
+            false,
+        )
+    }
+
+    fn start_linear(
+        app: App,
+        client: Box<dyn BoardClient>,
+        editor: Box<dyn EditorLauncher>,
+        platform: Box<dyn PlatformActions>,
+        origin: OriginContext,
+        defer_snapshots: bool,
+    ) -> Driver {
+        let (tx, rx) = linear::arrival_channel();
         let mut driver = Driver {
-            app: App::linear(state, start.origin.clone()),
+            app,
             client,
             editor,
-            origin: start.origin,
+            origin,
             needs_full_redraw: false,
             platform,
             linear_tx: Some(tx),

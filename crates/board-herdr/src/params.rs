@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::types::{AgentStatus, SplitDirection};
+use crate::types::{AgentStatus, PluginPanePlacement, SplitDirection};
 
 /// Params for `workspace.create`.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -108,4 +108,21 @@ pub struct TabRenameParams {
 pub struct PaneRenameParams {
     pub pane_id: String,
     pub label: String,
+}
+
+/// Params for `plugin.pane.open`. `cwd`, `direction`, `width` and `height`
+/// are left out: the board never sets them.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PluginPaneOpenParams {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<PluginPanePlacement>,
+    pub focus: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }

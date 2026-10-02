@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use board_herdr::{
     AgentPromptParams, AgentStartParams, AgentStatus, AgentWaitParams, HerdrClient, HerdrError,
-    HerdrEvent, HerdrEvents, PaneRenameParams, PaneSplitParams, ReadSource, SocketDeadlines,
-    SplitDirection, Subscription, TabRenameParams, WorkspaceCreateParams, SUPPORTED_HERDR_PROTOCOL,
-    SUPPORTED_HERDR_VERSION,
+    HerdrEvent, HerdrEvents, PaneRenameParams, PaneSplitParams, PluginPaneOpenParams,
+    PluginPanePlacement, ReadSource, SocketDeadlines, SplitDirection, Subscription,
+    TabRenameParams, WorkspaceCreateParams, SUPPORTED_HERDR_PROTOCOL, SUPPORTED_HERDR_VERSION,
 };
 use serde_json::Value;
 
@@ -480,6 +480,62 @@ fn pane_rename_serializes_typed_params_and_parses_pane_info() {
         .unwrap();
     assert_eq!(pane.pane_id, "w1:p2");
     assert_eq!(pane.revision, 2);
+}
+
+#[test]
+fn plugin_pane_open_sends_the_schema_params_and_decodes_the_opened_pane() {
+    // docs/herdr-0.9.0-schema.json: `plugin.pane.open` takes PluginPaneOpenParams
+    // {plugin_id, entrypoint, placement?, focus, target_pane_id?, workspace_id?,
+    // env, cwd?, direction?, width?, height?}; success is
+    // {"type":"plugin_pane_opened","plugin_pane":{plugin_id, entrypoint, pane: PaneInfo}}.
+    let path = serve_calls(|req| {
+        assert_eq!(req["method"], "plugin.pane.open");
+        assert_eq!(
+            req["params"],
+            serde_json::json!({
+                "plugin_id": "herdr-board",
+                "entrypoint": "board",
+                "placement": "split",
+                "focus": false,
+                "target_pane_id": "w1:p2",
+                "env": {"BOARD_SOCKET": "/tmp/b.sock"}
+            })
+        );
+        reply_for(
+            req,
+            r#"{"type":"plugin_pane_opened","plugin_pane":{"plugin_id":"herdr-board","entrypoint":"board","pane":{"pane_id":"w1:p3","terminal_id":"term-3","workspace_id":"w1","tab_id":"w1:t1","focused":false,"revision":0,"agent_status":"unknown"}}}"#,
+        )
+    });
+
+    let mut c = HerdrClient::connect(&path).unwrap();
+    let opened = c
+        .plugin_pane_open(&PluginPaneOpenParams {
+            plugin_id: "herdr-board".into(),
+            entrypoint: "board".into(),
+            placement: Some(PluginPanePlacement::Split),
+            focus: false,
+            target_pane_id: Some("w1:p2".into()),
+            workspace_id: None,
+            env: [("BOARD_SOCKET".to_string(), "/tmp/b.sock".to_string())]
+                .into_iter()
+                .collect(),
+        })
+        .unwrap();
+    assert_eq!(opened.plugin_id, "herdr-board");
+    assert_eq!(opened.entrypoint, "board");
+    assert_eq!(opened.pane.pane_id, "w1:p3");
+}
+
+#[test]
+fn plugin_pane_close_sends_the_pane_id() {
+    // Schema: PluginPaneCloseParams {pane_id}; success {"type":"plugin_pane_closed","pane_id"}.
+    let path = serve_calls(|req| {
+        assert_eq!(req["method"], "plugin.pane.close");
+        assert_eq!(req["params"], serde_json::json!({"pane_id": "w1:p3"}));
+        reply_for(req, r#"{"type":"plugin_pane_closed","pane_id":"w1:p3"}"#)
+    });
+    let mut c = HerdrClient::connect(&path).unwrap();
+    c.plugin_pane_close("w1:p3").unwrap();
 }
 
 #[test]

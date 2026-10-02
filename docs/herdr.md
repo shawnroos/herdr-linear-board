@@ -28,7 +28,7 @@ command, flag, or JSON shape from memory — verify against `api schema` /
 ## Compatibility gate: Herdr 0.9.0 / socket protocol 22
 
 The supported matrix is exact: **Herdr 0.9.0**, **socket protocol 22**, board protocol
-v1, and SQLite schema v15. `board-herdr` rejects a different Herdr version or
+v1, and SQLite schema v16. `board-herdr` rejects a different Herdr version or
 protocol before the daemon performs workspace discovery, pane placement, an agent
 launch, a configured runner action, or a notification mutation. This is a policy
 gate, not a protocol-negotiation fallback. A preview build of the pinned release
@@ -357,43 +357,84 @@ never used as a space identity.
 | neither | uses the default `~/.config/herdr/herdr.sock` |
 
 `--session` is a top-level flag only (`herdr --session x api snapshot`, never
-`herdr api --session x`). Because the CLI honours `HERDR_SOCKET_PATH`, the board
-daemon selects the origin session for the plugin's snapshot script by forwarding the
-origin socket path as `HERDR_SOCKET_PATH` in the child environment; the plugin needs
-no session setting of its own.
+`herdr api --session x`). In Linear mode the board daemon reads the caller's session by
+connecting to the `origin_socket` the client sends, so the board needs no session setting of
+its own.
 
-## Linear bind handoff: the command travels in `agent.start` argv
+## Linear bind handoff (retired)
 
-`linear.bind_handoff` starts the work plugin's bind skill in a new tab. It does not
-follow the managed launch contract above, and it does not use `agent.prompt`. The
-daemon creates one unfocused tab labelled `bind` with `tab.create` (cwd set, empty
-environment), then calls `agent.start` on that tab's root pane with `kind:"claude"`,
-a name derived from the tab id, and one argument: the bind line
-`/work:bind --space <space> --project <project>`, plus `--view <view>` or
-`--issue <issue>`. Claude Code takes a positional first argument as the first turn of
-a normal interactive conversation, so the slash command runs as a turn the person can
-see and answer.
+Earlier releases bound a space by starting the work plugin's `/work:bind` skill: the daemon
+opened an unfocused `bind` tab and passed the slash command as the first argument of
+`agent.start` (`kind:"claude"`), because a plain `claude` start can open Claude Code's agent
+view, which refuses a slash command sent with `agent.prompt`. That method,
+`linear.bind_handoff`, is retired. The board now binds a space with `linear.space.bind`, a
+SQLite write that makes no herdr call and starts no agent.
 
-`agent.prompt` is not used for three reasons:
+## Opening a plugin pane by API (observed 2026-09-30)
 
-1. A plain `claude` start can open Claude Code's agent view, and the agent view
-   refuses a slash command delivered as a prompt.
-2. The readiness signal the card launch waits on, a non-empty `agent_session`, comes
-   from herdr's Claude integration, which is optional. Without it there is no
-   reliable moment to send a prompt, and a prompt sent before the session settles can
-   be dropped.
-3. An argument cannot be dropped that way: it is part of the process start.
+Observed on Herdr 0.9.0 / protocol 22 in the sandbox, against an ephemeral `hb-e2e-*` session with a
+throwaway plugin whose manifest declares `placement = "overlay"`. This grounds the "open a board"
+design in [board-owns-the-store.md](board-owns-the-store.md).
 
-The agent is addressed by pane id only, never by name, because herdr can drop the
-agent name after its startup timeout while Claude keeps running. The name is still
-unique per tab, because herdr refuses a name an open agent holds.
+- **A request-time placement overrides the manifest.** `plugin.pane.open` with `placement: "tab"`
+  opened a new tab (`w1:t2`); `placement: "split"` with `target_pane_id: "w1:p2"` split that pane
+  in its own tab (`split_0_root`, direction `right`, ratio 0.5). Neither opened an overlay.
+- **`focus: false` holds.** After both calls the session's focused workspace, tab and pane were
+  unchanged (`w1:t1`, `w1:p1`). The split's tab records `w1:p2` as its own focused pane, which does
+  not move the person's view.
+- **The pane knows its space.** Both panes got `HERDR_WORKSPACE_ID`, `HERDR_PANE_ID`,
+  `HERDR_TAB_ID`, `HERDR_SOCKET_PATH`, `HERDR_SESSION` and `HERDR_PLUGIN_CONTEXT_JSON`, whose
+  `invocation_source` is `"api"` and whose `workspace_id` is set.
+- **`env` reaches the pane command.** A `PROBE_ENV` value passed in `env` was present in each pane's
+  environment.
+- The pane's working directory is the plugin root, as for a manifest-launched pane.
+- The call returns `plugin_pane_opened {plugin_pane: {plugin_id, entrypoint, pane: PaneInfo}}`.
 
-A fresh tab's login shell can take much longer to accept `agent.start` than a split
-of a warm tab: one measured case took about 60 s under heavy load, answering
-`agent_pane_busy` until then. The handoff therefore retries `agent.start` on the same
-pane for up to 90 s (250 ms first wait, doubling to 5 s a step), where a card run
-gives up after about 3 s. Any failure after the tab exists closes its pane with
-`pane.close`, which closes the tab; `pane_not_found` counts as closed.
+## Claude Code hooks and stdio MCP servers (observed 2026-09-30)
+
+Observed on the host with headless `claude -p`, a throwaway stdio MCP server and throwaway
+PreToolUse and PostToolUse hooks, all started from a shell that set `HERDR_PANE_ID` and
+`HERDR_SOCKET_PATH`.
+
+- **Both inherit the session's environment.** The MCP server and both hooks saw the values the
+  Claude session was started with.
+- **A PreToolUse hook can rewrite an MCP tool's input.** Returning
+  `hookSpecificOutput {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: {...}}`
+  changed the arguments the MCP server received.
+- **The PostToolUse payload** carries `session_id`, `transcript_path`, `cwd`, `permission_mode`,
+  `hook_event_name`, `tool_name` (`mcp__<server>__<tool>`), `tool_input`, `tool_response`,
+  `tool_use_id`, `duration_ms` and `mcp_server {name, source}`. For an MCP tool, `tool_response` is the
+  MCP content array, `[{"type": "text", "text": "..."}]`.
+- **Linear MCP `save_issue`** (the claude.ai connector, `mcp__claude_ai_Linear__save_issue`) returns
+  the same object for a create and an update, as that content array's text: `id` is the human
+  identifier (`TEAM-123`), `uuid` is Linear's id, and `createdAt == updatedAt` on a create. The
+  `mcp__linear__` server's shape was not observed; parse it defensively.
+
+## Status line identity and pane-id lifetime (observed 2026-09-30)
+
+Observed on the host (herdr 0.9.3, Claude Code 2.1.286) in a disposable workspace (`hb-spike-u1`),
+with an interactive `claude --settings <file>` whose `statusLine` command logged its stdin and
+environment. Nothing was sent to a model.
+
+- **The status-line command inherits the pane's herdr environment.** It saw `HERDR_PANE_ID`,
+  `HERDR_SOCKET_PATH`, `HERDR_WORKSPACE_ID` and `HERDR_TAB_ID` for the pane Claude ran in.
+- **Its stdin is one JSON object** with `session_id`, `transcript_path`, `cwd`,
+  `workspace {current_dir, project_dir, added_dirs}`, `model {id, display_name}`, `version`, `cost`,
+  `context_window` and `rate_limits`. It runs on UI events, not on a timer: an idle session ran it
+  once.
+- **A new pane gets its own `HERDR_PANE_ID`**, even when split from an agent's pane.
+- **A process started inside a pane inherits that pane's id**, and a Claude background-job session
+  has been seen carrying an unrelated session's pane id (2026-09-11). A pane id alone therefore does
+  not identify a Claude session. Every Claude session exports its own `CLAUDE_CODE_SESSION_ID` to
+  child processes, and the status line receives the same value as `session_id`.
+- **Pane ids are not reused within a running session.** After closing `w2:p2`, the next splits were
+  `w2:p3` and `w2:p4`. Reuse across a herdr server restart was not observed: restarting the host's
+  server would have touched the user's session.
+
+Linear's GraphQL `CustomView` exposes its board grouping through `viewPreferencesValues`
+(`issueGrouping`, `issueSubGrouping`, `issueNesting`, `layout`, `hiddenColumns`, `hiddenRows`,
+`columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
+schema, 2026-09-29).
 
 ## Version drift
 
@@ -403,7 +444,7 @@ DTOs are not part of this crate's public surface; repository isolation belongs i
 The checked-in schema fixture is regenerated from the installed Herdr contract and
 is not rewritten during unrelated API cleanup. The board fixture and typed client
 are currently pinned to **Herdr 0.9.0 / protocol 22**; board protocol v1 and DB
-schema v15 remain independent and unchanged.
+schema v16 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

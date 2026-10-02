@@ -4,10 +4,11 @@
 //! socket server. Started by `board daemon`; talks to herdr (or a local child
 //! spawner) to launch agents.
 
-mod cancel;
 mod dispatch;
 mod herdr_conn;
 mod herdr_snapshot;
+mod import;
+pub mod linear;
 mod logging;
 mod ops;
 mod recovery;
@@ -84,6 +85,9 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
     // daemon settings' legacy parser turn malformed TOML into defaults.
     let root = RootConfig::load()?;
     let settings = DaemonSettings::from_root(&root, &ProcessEnv)?;
+    if let Some(warning) = settings.retired_warning() {
+        tracing::warn!("{warning}");
+    }
     let mut config: Config = root.board;
     // Resolve the Pi agent dir for live model discovery unless the user pinned
     // it in config.toml. Tests construct Config directly (pi_agent_dir stays
@@ -169,6 +173,7 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
     }
     let retention = tokio::spawn(logging::retention_task(daemon.shutdown_rx()));
     tokio::spawn(watchers::timeout_ticker(daemon.clone()));
+    tokio::spawn(watchers::show_request_sweeper(daemon.clone()));
     tokio::spawn(watchers::local_liveness_poller(daemon.clone()));
     if matches!(daemon.settings.spawner, SpawnerKind::Herdr) {
         // The supervisor is independent of the startup best-effort client: a

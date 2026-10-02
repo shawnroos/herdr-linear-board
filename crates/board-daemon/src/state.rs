@@ -174,6 +174,7 @@ pub struct Daemon {
     pub dispatch_pass: AsyncMutex<()>,
     pub sched: Mutex<Sched>,
     pub watch: Mutex<WatchState>,
+    pub linear: crate::linear::LinearService,
     shutdown_tx: watch::Sender<bool>,
     stopping: AtomicBool,
     #[cfg(test)]
@@ -210,6 +211,7 @@ impl Daemon {
             dispatch_pass: AsyncMutex::new(()),
             sched: Mutex::new(Sched::default()),
             watch: Mutex::new(WatchState::default()),
+            linear: crate::linear::LinearService::default(),
             shutdown_tx,
             stopping: AtomicBool::new(false),
             #[cfg(test)]
@@ -227,6 +229,7 @@ impl Daemon {
         self.record_effect(match &ev {
             Event::RunEnded { .. } => "run_ended",
             Event::BoardChanged { .. } => "board_changed",
+            Event::LocalStateChanged { .. } => "local_state_changed",
         });
         let _ = self.events_tx.send(ev);
     }

@@ -5,6 +5,7 @@ mod commands;
 mod context;
 mod daemon;
 mod helpers;
+mod mcp;
 mod render;
 mod scope;
 
@@ -20,6 +21,7 @@ use commands::board::cmd_board;
 use commands::card::{cmd_card, cmd_move};
 use commands::column::cmd_column;
 use commands::discovery::{cmd_harness, cmd_linear, cmd_session, cmd_space, cmd_status};
+use commands::import::cmd_import;
 use commands::project::cmd_project;
 use commands::run::{cmd_card_run, cmd_comment, cmd_pane_exited};
 use commands::template::cmd_template;
@@ -99,8 +101,29 @@ fn dispatch(cli: Cli) -> Result<()> {
             None if stop => stop_daemon(cli.json),
             None => run_daemon(foreground),
         },
-        Cmd::Tui => {
-            let herdr_workspace_id = std::env::var("HERDR_WORKSPACE_ID").ok();
+        Cmd::Tui { session: true } => {
+            let identity = board_tui::SessionIdentity::from_environment().ok_or_else(|| {
+                anyhow!("board tui --session needs BOARD_SESSION_WORKSPACE or HERDR_WORKSPACE_ID")
+            })?;
+            let mut client = ctx.into_client()?;
+            let daemon_version = client.daemon_status().ok().map(|status| status.version);
+            board_tui::run_session(
+                Box::new(client),
+                board_tui::LinearStart {
+                    workspace_id: identity.space.clone(),
+                    origin: board_tui::OriginContext::from_environment(),
+                    board_version: env!("CARGO_PKG_VERSION").to_string(),
+                    daemon_version,
+                    herdr_keys: Vec::new(),
+                    show: board_tui::ShowContext::default(),
+                },
+                identity,
+            )
+        }
+        Cmd::Tui { session: false } => {
+            let show = board_tui::ShowContext::from_environment();
+            let herdr_workspace_id =
+                show.workspace(std::env::var("HERDR_WORKSPACE_ID").ok().as_deref());
             let plugin_context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok();
             match scope::tui_mode(herdr_workspace_id.as_deref(), plugin_context.as_deref()) {
                 scope::TuiMode::Linear { workspace_id } => {
@@ -117,6 +140,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                             board_version: env!("CARGO_PKG_VERSION").to_string(),
                             daemon_version,
                             herdr_keys: board_tui::herdr_keys::from_environment(),
+                            show,
                         },
                     )
                 }
@@ -129,6 +153,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         }
         Cmd::Version => cmd_version(cli.json),
         Cmd::Skill => print_skill(),
+        Cmd::Mcp => mcp::run(),
         Cmd::Board { sub } => cmd_board(sub, &mut ctx),
         Cmd::Project { sub } => cmd_project(sub, &mut ctx),
         Cmd::Template { sub } => cmd_template(sub, &mut ctx),
@@ -138,6 +163,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Space { sub } => cmd_space(sub, &mut ctx),
         Cmd::Session { sub } => cmd_session(sub, &mut ctx),
         Cmd::Linear { sub } => cmd_linear(sub, &mut ctx),
+        Cmd::Import { sub } => cmd_import(sub, &mut ctx),
         // Legacy top-level spellings. They only reshape their arguments and
         // then re-enter the canonical nested handler, so there is one
         // implementation per operation.

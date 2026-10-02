@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 
-use super::linear::linear_allows;
+use super::linear::{linear_allows, session_allows};
 use crate::app::{CardFilter, CommentHistoryView, Effect, Mode, Msg, Screen};
 use crate::view::pane_title;
 use crate::Driver;
@@ -64,6 +64,11 @@ impl Driver {
         // request.
         if self.app.mode == Mode::Linear && !linear_allows(&eff) {
             self.app.set_toast("not available in Linear mode", true);
+            return;
+        }
+        if self.app.mode == Mode::Session && !session_allows(&eff) {
+            self.app
+                .set_toast("not available in the session pane", true);
             return;
         }
         match eff {
@@ -273,22 +278,20 @@ impl Driver {
             Effect::SetPaneTitle(filter) => self.set_pane_title(filter),
             Effect::SetLinearPaneTitle(title) => self.send_pane_title(&title),
             Effect::Quit => self.app.should_quit = true,
-            Effect::LinearSnapshot => self.fetch_linear_snapshot(),
+            Effect::LinearSnapshot { force } => self.fetch_linear_snapshot(force),
+            Effect::LinearStateGet => self.fetch_linear_state(),
+            Effect::LinearSessionGet => self.fetch_session(),
             Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
             Effect::LinearIssue { issue, generation } => self.fetch_linear_issue(issue, generation),
-            Effect::BindHandoff {
+            Effect::LinearSpaceBind {
                 space,
                 project,
                 view,
-                issue,
-                working_directory,
-            } => self.start_bind_handoff(crate::app::BindTarget {
-                space,
-                project,
-                view,
-                issue,
-                working_directory,
-            }),
+            } => self.bind_space(space, project, view),
+            Effect::LinearMarkClear { ids, on_open } => self.clear_marks(ids, on_open),
+            Effect::LinearShowAccept { id, issue } => self.accept_show(id, issue),
+            Effect::LinearShowDismiss { id } => self.dismiss_show(id),
+            Effect::LinearBind { mark, issue, cwd } => self.bind_worktree(mark, issue, cwd),
             Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
             Effect::OpenIssueUrl(url) => self.open_issue_url(url),
             Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),

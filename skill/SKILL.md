@@ -4,9 +4,12 @@ description: >-
   Interact with the herdr-board kanban from inside an agent run or an
   interactive session. Use whenever you need to report progress on a board
   card, close out a run, add or edit a comment, move/cancel/retry a card,
-  inspect cards or columns, or create new work on the board. Triggers on
-  mentions of the board, cards, columns, kanban, board comment/done/move, or
-  $BOARD_CARD_ID.
+  inspect cards or columns, or create new work on the board. Also use in
+  Linear mode: to bind your worktree to a Linear issue, mark a card, notify
+  the person, ask them to look at an issue, or open a board beside your pane
+  (Linear writes themselves go through Linear's MCP server). Triggers on
+  mentions of the board, cards, columns, kanban, board comment/done/move,
+  board mcp, Linear mode, or $BOARD_CARD_ID.
 ---
 
 # herdr-board
@@ -261,53 +264,111 @@ override.
 
 ```bash
 board linear snapshot [WORKSPACE_ID] [--json]
+board linear issue <ID> [--json]
 board linear space list [--json]
 board linear project list [--json]
 board linear view list <PROJECT_ID> [--json]
+board linear session [WORKSPACE_ID] [--json]
+board linear status-line [--json]
+board linear report                    # for a Claude Code hook; reads stdin
+board import work-store [--dry-run]
 ```
 
-- Inside a herdr pane whose space the `work` plugin has bound to a Linear project
-  (`HERDR_WORKSPACE_ID`, or the plugin context's `workspace_id`, is set), `board tui` opens a
-  Linear board for that space instead of the kanban: columns are the recorded Linear
-  view's groups (or the team's workflow states when no view is chosen), cards are the project's
-  issues, and each card lists its worktree bindings, recorded tabs and live pane status. It writes
-  nothing to Linear, the plugin's records or SQLite. Its herdr writes are its pane title
-  (`Linear: <project or space>`), focusing an existing pane (`o`), and, when the person chooses a
-  space's project, a view (`v`) or `b` on a card, one new `bind` tab running Claude with the
-  plugin's `/work:bind` skill. `r` refreshes; `u` opens the issue; `y` copies the worktree path.
-  Card-owning verbs are refused with a toast. Outside herdr the kanban is unchanged.
-- `board linear snapshot [WORKSPACE_ID]` is the same read as JSON; with no positional it reads
-  `$HERDR_WORKSPACE_ID`, and fails without contacting the daemon when that is unset: the daemon runs the plugin's
-  `bin/work-snapshot.sh` for that space and attaches a `pane_status` map (`working`, `idle`,
-  `blocked`, `done`, `unknown`). Every section carries its own `status` (`ok`, `unavailable`,
-  `unknown`, `missing`); exit 0 means a document came back, not that every source was reachable.
-- The daemon finds the plugin through `BOARD_WORK_PLUGIN_ROOT` (yours first, sent with the request,
-  then the daemon's), then `[daemon] work_plugin_root` in the board config, then the installed
-  `work@shrimpshack` plugin; it needs plugin `0.4.0` or newer. A missing or too-old plugin is
-  protocol code 6 (`work plugin unavailable`), exit 6, for the snapshot and the three list verbs. All of these are read on every request, so a
-  change takes effect without restarting the daemon. The error never includes the script's stderr;
-  it names the command to run by hand to see it.
-- `board linear space list`, `project list` and `view list <PROJECT_ID>` run the plugin's
-  `bin/work-spaces.sh`, `bin/work-projects.sh` and `bin/work-views.sh`. `--json` prints the
-  plugin's envelope `{"status": ..., "message": ..., "rows": [...]}`, with `status` one of `ok`,
-  `unavailable`, `partial` or `unknown` and `message` a string or `null`. Rows are
-  `{id, label, live, state, project_id, project_name}` for spaces (every space, bound or not),
-  `{id, name, team_key}` for projects (the projects you are a member of) and `{id, name}` for
-  views. The text form prints a `status:` line first when the status is not `ok`, then a table.
-  Like the snapshot, exit 0 means a list came back, not that every source was reachable. A project
-  id must be 1 to 64 ASCII letters, digits, `_` or `-`, starting with a letter or digit.
-- Focusing a pane (`o` in the Linear board) has no CLI verb on purpose: it moves the person's view
-  in herdr, which an agent has no reason to do. An agent that needs a pane's state reads
-  `pane_status` from `board linear snapshot`.
-- Starting a bind from the board (a strip space's project, `v`, or `b` on a card) has no CLI verb on
-  purpose: it opens a new herdr tab and starts a Claude session for a person to confirm in, which an
-  agent has no reason to do. An agent that needs a bind runs the plugin's `/work:bind` skill itself,
-  with the ids the list verbs print.
+- **Linear writes go through Linear's MCP server, never through the board.** Create and update
+  tickets, comments and states with the Linear MCP tools. The board reads Linear itself,
+  read-only, and learns about your writes from a PostToolUse hook that runs
+  `board linear report` (setup: `docs/install.md` → Linear mode and agent tools). When you save an
+  issue from a session the board knows and that is not yet bound, the board binds your worktree
+  to it; otherwise it leaves a suggestion (`◇`) on the card for the person to accept. Either way
+  the card moves on screen without a refresh.
+- Inside a herdr pane whose space is bound to a Linear project (`HERDR_WORKSPACE_ID`, or the
+  plugin context's `workspace_id`, is set), `board tui` opens a Linear board for that space
+  instead of the kanban: tabs, columns and swimlane rows grouped by the configured grouping (or
+  the bound Linear view's grouping, or the team's workflow states), and each card lists its
+  worktree bindings, recorded tabs and live pane status. Cards show the marks agents set (`!`
+  needs you, `?` question, `◇` suggestion, `✓` done) and pending show-requests (`◉`). The person
+  answers them: `Enter` on a card clears the `!`, `?` and `✓` marks it showed, `a` accepts a
+  suggestion or the oldest show-request, and `x` rejects one. The person binds a space to a
+  project or view from the board's pickers. `r` refreshes; `R` reads Linear again; `u` opens the
+  issue; `y` copies the worktree path. Card-owning verbs are refused with a toast. Outside herdr
+  the kanban is unchanged.
+- `board linear snapshot [WORKSPACE_ID]` is the board's read as JSON; with no positional it reads
+  `$HERDR_WORKSPACE_ID`, and fails without contacting the daemon when that is unset. It carries
+  a `pane_status` map (`working`, `idle`, `blocked`, `done`, `unknown`), and every section carries
+  its own `status` (`ok`, `unavailable`, `unknown`, `missing`); exit 0 means a document came
+  back, not that every source was reachable. When Linear cannot be read, the last good read comes
+  back with `linear.status: "unavailable"` and every issue `stale: true`. `linear.status:
+  "not_imported"` means the person has not run `board import work-store` yet.
+- `board linear issue <ID>` reads one issue whole (description, sub-issues, relations, comments,
+  history) in one Linear call. A failure is a document with `status: "unavailable"`, not an error.
+- `board linear space list`, `project list` and `view list <PROJECT_ID>` print
+  `{"status": ..., "message": ..., "rows": [...]}` with `--json`, `status` one of `ok`,
+  `unavailable`, `partial` or `unknown`. Rows are `{id, label, live, state, project_id,
+  project_name}` for spaces (every space, bound or not), `{id, name, team_key}` for projects (the
+  projects the key's owner is a member of) and `{id, name}` for views. The text form prints a
+  `status:` line first when the status is not `ok`, then a table. A project id must be 1 to 64
+  ASCII letters, digits, `_` or `-`, starting with a letter or digit.
+- `board linear session [WORKSPACE_ID]` prints what the board knows about this agent session:
+  `{space, space_bound, binding, column, marks, pending_requests}`. The space defaults to
+  `$HERDR_WORKSPACE_ID`, the session to `$HERDR_SOCKET_PATH`, and the worktree to the current
+  directory. It never starts the daemon; when boardd is down it fails with the socket path.
+- `board linear status-line` prints one line for Claude Code's status line, for example
+  `ENG-148 · In progress · 12m · !? · ◉1`: the bound issue, its column, how long the worktree
+  has been bound, the issue's mark glyphs, and the space's pending show-requests. Other outputs:
+  `board: not bound`, `board: daemon down`, `board: no answer` (no reply within 200 ms), and
+  nothing at all outside herdr (no `HERDR_WORKSPACE_ID` or `HERDR_SOCKET_PATH`). It reads the
+  Claude session id and working directory from the JSON Claude Code pipes on stdin, never starts
+  the daemon, and always exits 0. `--json` prints `{"line": ...}`. To use it, add this to your
+  Claude Code settings:
+
+  ```json
+  {"statusLine": {"type": "command", "command": "board linear status-line"}}
+  ```
+
+- `board linear report` is for the PostToolUse hook, not for you to call by hand. It reads the
+  hook's JSON on stdin, prints nothing, and always exits 0.
+- `board import work-store [--dry-run]` copies the work plugin's store (`~/.claude/work`) into
+  the board. It only reads the store and never overwrites a row the board holds. It is the
+  person's step; do not run it unless asked.
+- Focusing a pane (`o` in the Linear board) has no CLI verb or tool on purpose: it moves the
+  person's view in herdr, which an agent has no reason to do. An agent that needs a pane's state
+  reads `pane_status` from `board linear snapshot`.
+- Binding a space to a Linear project has no agent tool: the person does it from the board. Bind
+  your own worktree to an issue with `board mcp`'s `bind` tool (or let the hook link it when you
+  save the issue), and undo it with `unbind`.
+
+### Agent tools (`board mcp`)
+
+`board mcp` is a stdio MCP server, installed once by the user
+(`claude mcp add --scope user board -- board mcp`). Each tool forwards to boardd, starting it when
+it is not running. Use these tools for links, marks, notes, notifications, show-requests and
+boards; use Linear's MCP server for anything that changes Linear. Ownership comes
+from the server's environment: `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `CLAUDE_CODE_SESSION_ID`.
+A call with none of them owns nothing, and only the person can clear what it writes.
+
+| Tool | Does |
+|---|---|
+| `state` | Read a space: bindings, marks (`kind`, `yours`), notes, pending show-requests (`expires_at`, `yours`), and `your_resolved_requests` with each `outcome` (accepted, rejected, withdrawn, expired). |
+| `panes_for_issue` | Read the herdr panes that recorded Linear activity on an issue. |
+| `bind` / `unbind` | Bind this worktree to an issue, or remove the binding. |
+| `mark {issue, kind, text?}` | Set `needs_you`, `question` or `done` on a card. A second mark of the same kind replaces your own; other agents' marks stay. Any other kind is refused. |
+| `unmark {issue, kind?}` | Clear your own marks on a card, of one kind or all kinds. |
+| `note {issue, body}` | Attach a short note; it replaces your earlier note. |
+| `notify {title, body?}` | Send a herdr notification. |
+| `ask_to_show {issue, reason?}` | Ask the person to look at an issue. Asking again refreshes your request. It expires if nobody acts on it. |
+| `withdraw_show {issue}` | Withdraw your own pending request. |
+| `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. With `session: true`, open or close this session's side pane instead: your bound issue, your lane, or the bind hint. |
+
+Agents point; the person moves the view. No tool focuses a pane, moves the selection, or accepts a
+request. The view moves to an issue only when the person accepts its request. An agent cannot set a
+suggestion mark (only the board sets one, from a reported Linear write), clear another agent's
+marks, withdraw another agent's request, or set a request's expiry. To learn whether the person
+accepted or rejected a request, read `state` and look in `your_resolved_requests`.
 
 ### TUI, daemon, version, skill
 
 ```bash
-board tui
+board tui [--session]
 board daemon start [--foreground]
 board daemon stop [--json]
 board daemon status [--json]
@@ -315,7 +376,9 @@ board version [--json]
 board skill
 ```
 
-- `board tui` opens the kanban TUI, auto-starting boardd. `daemon start` runs boardd in this
+- `board tui` opens the kanban TUI, auto-starting boardd. `board tui --session` is the session
+  side pane `open_board` with `session: true` starts; it reads its agent's identity from the
+  `BOARD_SESSION_*` variables the daemon sets and writes nothing. `daemon start` runs boardd in this
   process; `--foreground` additionally logs to stderr and stays attached. Bare `board daemon` (no
   subcommand) is unchanged, and the historical `board daemon --foreground` / `board daemon --stop`
   flags still work but are hidden from `--help`.
@@ -331,8 +394,8 @@ board skill
 Successful `--json` output goes to stdout. JSON errors go to stderr, leave stdout empty, and use the
 stable envelope `{"error":{"code":N,"kind":"...","message":"...","details":...}}`; `kind` and
 `details` are additive and may be absent. An error the **daemon** raised carries its protocol code —
-1 bad request, 2 not found, 3 invalid state, 4 Herdr unavailable, 5 internal, 6 work plugin
-unavailable. An error the **CLI**
+1 bad request, 2 not found, 3 invalid state, 4 Herdr unavailable, 5 internal. Codes 6 and 7
+come only from an older daemon that ran the work plugin's scripts. An error the **CLI**
 itself raised carries `{"code":64,"kind":"cli"}`.
 
 Bad enum values are one shape everywhere: `invalid <kind> '<value>' (expected: a, b, c)`.
@@ -344,9 +407,9 @@ Scripted agents should branch on `$?`, not on stderr text.
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1`–`6` | The daemon's protocol code, passed straight through (see above). |
+| `1`–`7` | The daemon's protocol code, passed straight through (see above). |
 | `64` | The CLI itself refused: a clap usage/parse error, a declined confirmation prompt, a bad enum value, a column name that resolves to nothing client-side, or a missing `$BOARD_CARD_ID`. `EX_USAGE`. |
-| `70` | The daemon reported a protocol code outside `1..=6`. Clamped, because an exit status is taken mod 256. `EX_SOFTWARE`. |
+| `70` | The daemon reported a protocol code outside `1..=7`. Clamped, because an exit status is taken mod 256. `EX_SOFTWARE`. |
 
 ```bash
 board done --outcome ok || case $? in

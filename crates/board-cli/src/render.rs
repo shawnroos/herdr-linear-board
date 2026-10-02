@@ -11,8 +11,9 @@ use anyhow::Result;
 use board_core::capability::HarnessCapabilities;
 use board_core::model::{Board, Card, Column, Comment, CommentHistory, CommentRecord};
 use board_core::protocol::{
-    BoardSnapshot, CardDetail, DaemonStatus, LinearListEnvelope, LinearListResult,
-    LinearListStatus, ProjectDetail, ProjectListResult, ProjectOpenResult, SessionListResult,
+    BoardSnapshot, CardDetail, DaemonStatus, LinearImportItem, LinearImportKind,
+    LinearImportResult, LinearListEnvelope, LinearListResult, LinearListStatus,
+    LinearSessionGetResult, ProjectDetail, ProjectListResult, ProjectOpenResult, SessionListResult,
     SpaceListResult,
 };
 use board_core::text::strip_control_and_format;
@@ -514,6 +515,54 @@ impl Render for SessionListResult {
     }
 }
 
+impl Render for LinearSessionGetResult {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        let clean = |text: &str| strip_control_and_format(text);
+        let binding = self.binding.as_ref();
+        let marks: Vec<String> = self
+            .marks
+            .iter()
+            .map(|mark| match &mark.text {
+                Some(text) => format!("{} ({})", mark.kind.as_str(), clean(text)),
+                None => mark.kind.as_str().to_string(),
+            })
+            .collect();
+        let rows = [
+            ("space", clean(&self.space)),
+            (
+                "space bound",
+                if self.space_bound { "yes" } else { "no" }.to_string(),
+            ),
+            (
+                "issue",
+                binding.map(|b| clean(&b.issue)).unwrap_or_default(),
+            ),
+            (
+                "worktree",
+                binding.map(|b| clean(&b.worktree_path)).unwrap_or_default(),
+            ),
+            (
+                "bound at",
+                binding
+                    .and_then(|b| b.bound_at.as_deref())
+                    .map(clean)
+                    .unwrap_or_default(),
+            ),
+            (
+                "column",
+                self.column.as_deref().map(clean).unwrap_or_default(),
+            ),
+            ("marks", marks.join(", ")),
+            ("pending requests", self.pending_requests.to_string()),
+        ];
+        let rows: Vec<Vec<String>> = rows
+            .into_iter()
+            .map(|(key, value)| vec![key.to_string(), value])
+            .collect();
+        table(out, &rows)
+    }
+}
+
 // -- Linear lists -------------------------------------------------------------
 
 impl Render for LinearListResult {
@@ -572,6 +621,76 @@ fn linear_list<R>(
         })
         .collect();
     table(out, &rows)
+}
+
+// -- work-store import ---------------------------------------------------------
+
+impl Render for LinearImportResult {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        let store = strip_control_and_format(&self.store_dir);
+        if !self.present {
+            return writeln!(out, "nothing to import: no work store at {store}");
+        }
+        let verb = if self.dry_run {
+            "would import"
+        } else {
+            "imported"
+        };
+        writeln!(
+            out,
+            "{verb} {}, skipped {}, ignored {} from {store}",
+            self.imported.len(),
+            self.skipped.len(),
+            self.ignored.len()
+        )?;
+        let imported: Vec<Vec<String>> = self
+            .imported
+            .iter()
+            .map(|item| {
+                let dropped = if item.dropped.is_empty() {
+                    String::new()
+                } else {
+                    format!("dropped {}", item.dropped.join(", "))
+                };
+                import_row(verb, item, dropped)
+            })
+            .collect();
+        let skipped: Vec<Vec<String>> = self
+            .skipped
+            .iter()
+            .map(|item| import_row("skipped", item, item.reason.clone().unwrap_or_default()))
+            .collect();
+        let ignored: Vec<Vec<String>> = self
+            .ignored
+            .iter()
+            .map(|entry| {
+                vec![
+                    "ignored".to_string(),
+                    String::new(),
+                    strip_control_and_format(&entry.path),
+                    strip_control_and_format(&entry.reason),
+                ]
+            })
+            .collect();
+        let rows: Vec<Vec<String>> = imported.into_iter().chain(skipped).chain(ignored).collect();
+        table(out, &rows)
+    }
+}
+
+fn import_row(outcome: &str, item: &LinearImportItem, note: String) -> Vec<String> {
+    let kind = match item.kind {
+        LinearImportKind::Grouping => "grouping",
+        LinearImportKind::SpaceBinding => "space",
+        LinearImportKind::WorktreeBinding => "worktree",
+        LinearImportKind::SessionScope => "session",
+        LinearImportKind::ScopeRepo => "repository",
+    };
+    vec![
+        outcome.to_string(),
+        kind.to_string(),
+        strip_control_and_format(&item.key),
+        strip_control_and_format(&note),
+    ]
 }
 
 #[cfg(test)]

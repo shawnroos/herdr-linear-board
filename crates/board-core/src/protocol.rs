@@ -351,6 +351,22 @@ pub enum Event {
         run_id: i64,
         outcome: RunOutcome,
     },
+    /// Linear-mode local state changed. A variant rather than a
+    /// `BoardChangedReason`: an old client skips an unknown event line but
+    /// drops a whole `board_changed` line whose reason it cannot parse.
+    /// `space` absent means any space.
+    LocalStateChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        space: Option<String>,
+        /// The daemon refetched the space's snapshot: a reader answers
+        /// with one cached `linear.snapshot`, not a forced one.
+        #[serde(
+            default,
+            skip_serializing_if = "is_false",
+            deserialize_with = "null_as_default"
+        )]
+        snapshot: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,30 +1054,103 @@ pub struct PaneFocusResult {
     pub gone: bool,
 }
 
+/// What an agent-opened board shows: a space, an issue, a card, or a mix.
+/// The daemon shape-checks every field and requires at least one. `session`
+/// asks for the session side pane of the calling agent instead.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub session: bool,
+}
+
+/// `board.pane.open` params. `placement` is text so the daemon can name its
+/// refusal of `overlay`, `popup` and `zoomed`; only `tab` and `split` open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneOpenParams {
+    pub context: BoardPaneContext,
+    pub placement: String,
+    pub origin_socket: String,
+    pub origin_pane: String,
+    /// The agent's working directory and Claude session id, which a session
+    /// pane reads `linear.session.get` with; the pane itself runs elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneOpenResult {
+    pub pane_id: String,
+    pub tab_id: String,
+    pub workspace_id: String,
+    pub placement: BoardPanePlacement,
+    pub reused: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneCloseParams {
+    pub context: BoardPaneContext,
+    pub origin_socket: String,
+    /// Required with a session context: each agent's session pane is its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_pane: Option<String>,
+}
+
+/// `board.pane.close` result. `gone` means the recorded pane had already
+/// closed; its row is cleared and no `plugin.pane.close` is sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardPaneCloseResult {
+    pub pane_id: String,
+    pub closed: bool,
+    pub gone: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardNotifyParams {
+    pub origin_socket: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardNotifyResult {
+    pub shown: bool,
+}
+
 // ---------------------------------------------------------------------------
-// linear methods (the work plugin's space snapshot)
+// linear methods (the board's read of Linear)
 // ---------------------------------------------------------------------------
 
 /// `linear.snapshot` params. `origin_socket` is the caller's herdr socket;
-/// absent means the script runs against the plugin's own default resolution
-/// and every pane status is `unknown`.
+/// absent means every pane status is `unknown`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearSnapshotParams {
     pub workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
+    /// Skip the daemon's read cache. An older daemon ignores it.
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "null_as_default"
+    )]
+    pub force: bool,
 }
 
 /// How long a client waits for a `linear.snapshot` answer. Longer than the
-/// daemon's script deadline plus its stop grace, so a slow run is answered by
-/// the daemon; only a daemon that never answers reaches it.
+/// daemon's paged Linear read, so a slow read is answered by the daemon; only
+/// a daemon that never answers reaches it.
 pub const LINEAR_SNAPSHOT_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
-/// How long a client waits for a `linear.list` answer: longer than the
-/// daemon's list deadline plus its stop grace, as for the snapshot.
+/// How long a client waits for a `linear.list` answer, as for the snapshot.
 pub const LINEAR_LIST_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 
 /// `linear.issue` params: one issue, read whole for the issue page.
@@ -1071,9 +1160,6 @@ pub struct LinearIssueParams {
     pub issue: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    /// The caller's `BOARD_WORK_PLUGIN_ROOT`, preferred over the daemon's own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
 }
 
 /// How long a client waits for a `linear.issue` answer. Shorter than the
@@ -1081,7 +1167,7 @@ pub struct LinearIssueParams {
 /// issue page.
 pub const LINEAR_ISSUE_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The document `bin/work-issue.sh` prints. Every field the plugin can print as
+/// The `linear.issue` document. Every field that can arrive as
 /// `null` is an `Option`, and every connection defaults to empty, because an
 /// explicit null from another process is not the same as an absent key to
 /// serde (`docs/solutions/integration-issues/serde-default-rejects-explicit-null.md`).
@@ -1235,8 +1321,8 @@ pub struct LinearHistoryEvent {
     pub removed_labels: Vec<String>,
 }
 
-/// Which plugin list `linear.list` runs: `bin/work-spaces.sh`,
-/// `bin/work-projects.sh` or `bin/work-views.sh`.
+/// Which list `linear.list` reads: herdr spaces, Linear projects, or one
+/// project's views.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinearListKind {
@@ -1247,7 +1333,7 @@ pub enum LinearListKind {
 }
 
 /// `linear.list` params. `id` is the one argument a kind needs (the project
-/// id for `views`); `origin_socket` and `plugin_root` mean what they mean for
+/// id for `views`); `origin_socket` means what it means for
 /// [`LinearSnapshotParams`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearListParams {
@@ -1256,8 +1342,6 @@ pub struct LinearListParams {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_socket: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_root: Option<String>,
 }
 
 /// A closed vocabulary, unlike the snapshot's string statuses: a picker must
@@ -1289,8 +1373,20 @@ pub type LinearSpacesList = LinearListEnvelope<LinearSpaceRow>;
 pub type LinearProjectsList = LinearListEnvelope<LinearProjectRow>;
 pub type LinearViewsList = LinearListEnvelope<LinearViewRow>;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
+fn null_as_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1356,37 +1452,412 @@ impl LinearListResult {
     }
 }
 
-/// How long a client waits for a `linear.bind_handoff` answer: longer than the
-/// daemon's busy retry on a slow new pane plus the herdr calls around it.
-pub const LINEAR_BIND_HANDOFF_CLIENT_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(300);
+// ---------------------------------------------------------------------------
+// linear local-state methods (boardd owns the rows; schema v16)
+// ---------------------------------------------------------------------------
 
-/// `linear.bind_handoff` params: ids and a directory only, never names. The
-/// daemon validates every field before any herdr call.
+pub use crate::db::{
+    Activity, ActivityClaims, BoardPanePlacement, GroupingConfig, LinearOwner, Mark, MarkKind,
+    Note, ResolvedGrouping, ShowOutcome, ShowRequest, SpaceBinding, WorktreeBinding,
+};
+
+/// What one write changed: the row before and after. `None` on one side
+/// means the row did not exist then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearChange<T> {
+    pub before: Option<T>,
+    pub after: Option<T>,
+}
+
+/// A set that replaces the rows it supersedes: `before` lists every row it
+/// removed, `after` is the row it wrote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearReplace<T> {
+    pub before: Vec<T>,
+    pub after: T,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinearBindHandoffParams {
+pub struct LinearStateGetParams {
+    pub space: String,
+    /// The reader's herdr socket: local state is kept per herdr session,
+    /// and a read without one sees the `default` session's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
+}
+
+/// One space's local state. Worktree bindings are not keyed by space, so
+/// every binding is listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearState {
+    pub space: String,
+    #[serde(default)]
+    pub space_bindings: Vec<SpaceBinding>,
+    #[serde(default)]
+    pub worktree_bindings: Vec<WorktreeBinding>,
+    #[serde(default)]
+    pub grouping: Option<ResolvedGrouping>,
+    #[serde(default)]
+    pub marks: Vec<Mark>,
+    #[serde(default)]
+    pub notes: Vec<Note>,
+    #[serde(default)]
+    pub show_requests: Vec<ShowRequest>,
+    /// The space's most recently answered, withdrawn or expired requests,
+    /// newest first, so an agent can read its own request's outcome.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_show_requests: Vec<ShowRequest>,
+}
+
+/// `linear.bind`: bind the git worktree containing `cwd` to `issue`.
+/// `space` (else `claims.herdr_workspace_id`) names the space the change is
+/// announced for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearBindParams {
+    pub cwd: String,
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+/// `linear.space.bind`: bind herdr space `space` to Linear project `project`,
+/// and to one of its custom views when `view` is set. The herdr session is
+/// the one `claims.herdr_socket` names, else `default`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSpaceBindParams {
     pub space: String,
     pub project: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearUnbindParams {
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGroupingGetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearGroupingGetResult {
+    pub config: Option<GroupingConfig>,
+    #[serde(default)]
+    pub resolved: Option<ResolvedGrouping>,
+}
+
+/// `linear.grouping.set` / `preview`. `text` is raw JSON so the daemon can
+/// refuse a duplicate key, which a parsed request object has already lost.
+/// Without `space` it is a whole config; with `space` it is that space's
+/// mapping, and `text: null` removes the space's override.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGroupingSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMarkSetParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default = "attention")]
+    pub kind: MarkKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub owner: LinearOwner,
+}
+
+fn attention() -> MarkKind {
+    MarkKind::Attention
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearIdParams {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearNoteSetParams {
+    pub space: String,
+    pub issue: String,
+    pub body: String,
+    pub author: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub owner: LinearOwner,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearShowRequestParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub owner: LinearOwner,
+}
+
+/// `linear.bind`'s answer: the binding change, plus every suggestion mark
+/// the bind cleared because it named the bound worktree. Those marks can
+/// sit in any space, so each one's space needs its own announcement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearBound {
+    #[serde(flatten)]
+    pub change: LinearChange<WorktreeBinding>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_default"
+    )]
+    pub cleared_suggestions: Vec<Mark>,
+}
+
+/// `linear.mark.clear`: one `id` answers a [`LinearChange`]; `ids` answers
+/// a [`LinearRemoved`] and skips ids already gone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMarkClearParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<i64>>,
+}
+
+/// What a valid [`LinearMarkClearParams`] clears.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkClearTarget {
+    One(i64),
+    Many(Vec<i64>),
+}
+
+impl LinearMarkClearParams {
+    pub fn target(self) -> crate::Result<MarkClearTarget> {
+        match (self.id, self.ids) {
+            (Some(id), None) => Ok(MarkClearTarget::One(id)),
+            (None, Some(ids)) => Ok(MarkClearTarget::Many(ids)),
+            _ => Err(crate::Error::BadRequest(
+                "linear.mark.clear takes exactly one of `id` or `ids`".into(),
+            )),
+        }
+    }
+}
+
+/// Rows a write removed; empty when there was nothing to remove.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub struct LinearRemoved<T> {
+    #[serde(default = "Vec::new", deserialize_with = "null_as_default")]
+    pub removed: Vec<T>,
+}
+
+/// `linear.mark.unmark`: remove the caller's own marks on the issue, of
+/// `kind` or of every kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearMarkUnmarkParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MarkKind>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub owner: LinearOwner,
+}
+
+/// `linear.show.withdraw`: close the caller's own pending request for the
+/// issue as `withdrawn`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearShowWithdrawParams {
+    pub space: String,
+    pub issue: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub owner: LinearOwner,
+}
+
+/// `linear.session.get`: what the status line and side pane show for one
+/// agent session. `cwd` is any path inside the agent's worktree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSessionGetParams {
+    pub space: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSessionBinding {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub worktree_path: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub issue: String,
+    /// When the worktree was bound to the issue: the run time's start.
+    #[serde(default)]
+    pub bound_at: Option<String>,
+}
+
+/// `space_bound` false (an unknown socket, or a space with no board) means
+/// there is nothing to show; every other field is then empty. `column` is
+/// the daemon's, from its cached snapshot, and absent on a cold cache.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearSessionGetResult {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub space: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub space_bound: bool,
+    #[serde(default)]
+    pub binding: Option<LinearSessionBinding>,
+    #[serde(default)]
+    pub column: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub marks: Vec<Mark>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub pending_requests: u32,
+}
+
+/// `linear.activity.record`: one Linear MCP write an agent made. `space`
+/// falls back to `claims.herdr_workspace_id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearActivityRecordParams {
+    pub tool_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub working_directory: Option<String>,
-    pub origin_socket: String,
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub claims: ActivityClaims,
 }
 
-/// The unfocused `bind` tab the handoff created and the pane running Claude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearActivityOutcome {
+    /// The calling session was bound to the issue.
+    Linked,
+    /// A suggestion mark was written instead of a binding.
+    Suggested,
+    /// Only the activity row was written.
+    Recorded,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinearActivityRecordResult {
+    pub activity: Activity,
+    pub outcome: LinearActivityOutcome,
+    #[serde(default)]
+    pub binding: Option<LinearChange<WorktreeBinding>>,
+    #[serde(default)]
+    pub mark: Option<LinearReplace<Mark>>,
+    /// The suggestions a `linked` outcome's bind cleared; see [`LinearBound`].
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "null_as_default"
+    )]
+    pub cleared_suggestions: Vec<Mark>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinearBindHandoffResult {
-    pub tab_id: String,
-    pub pane_id: String,
+pub struct LinearActivityListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// As in [`LinearStateGetParams`]: a read without one sees the
+    /// `default` session's activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
 }
 
-/// The document `bin/work-snapshot.sh` prints, plus the daemon-attached
-/// `pane_status`. Mirrors `plugins/work/docs/snapshot.md`. Every section
-/// defaults so a partial document still parses; statuses stay strings because
-/// the plugin may add values the board does not know.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearActivityListResult {
+    #[serde(default)]
+    pub activity: Vec<Activity>,
+}
+
+/// `linear.import`: copy the work plugin's `~/.claude/work` store into local
+/// state. boardd reads the store from its own environment; the request names
+/// no path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportParams {
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearImportKind {
+    Grouping,
+    SpaceBinding,
+    WorktreeBinding,
+    SessionScope,
+    ScopeRepo,
+}
+
+/// One store record. `key` is the row's natural key when the record got far
+/// enough to have one, else its path in the store. `dropped` names retiring
+/// plugin fields the record carried with a value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportItem {
+    pub kind: LinearImportKind,
+    pub key: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<String>,
+}
+
+/// A store entry the import does not read, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportIgnored {
+    pub path: String,
+    pub reason: String,
+}
+
+/// With `dry_run`, `imported` lists what a real run would insert and nothing
+/// is written. `present: false` means there was no store to import.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearImportResult {
+    pub store_dir: String,
+    pub present: bool,
+    pub dry_run: bool,
+    #[serde(default)]
+    pub imported: Vec<LinearImportItem>,
+    #[serde(default)]
+    pub skipped: Vec<LinearImportItem>,
+    #[serde(default)]
+    pub ignored: Vec<LinearImportIgnored>,
+}
+
+/// The `linear.snapshot` document, plus `pane_status`. Every section defaults
+/// so a partial document still parses; statuses stay strings so an older client
+/// can read a newer daemon's values.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LinearSnapshot {
     #[serde(default)]
@@ -1405,8 +1876,11 @@ pub struct LinearSnapshot {
     pub linear: LinearSource,
     #[serde(default)]
     pub herdr: LinearHerdr,
+    /// `tabs[0].groups`, kept for clients that predate `tabs`.
     #[serde(default)]
     pub groups: Vec<LinearGroup>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub tabs: Vec<LinearTab>,
     #[serde(default)]
     pub issues: std::collections::BTreeMap<String, LinearIssue>,
     #[serde(default)]
@@ -1493,6 +1967,9 @@ pub struct LinearSource {
     pub cache_age_seconds: Option<i64>,
     #[serde(default)]
     pub truncated: bool,
+    /// Why `status` is not `ok`, for a reader to show beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1514,6 +1991,31 @@ pub struct LinearGroup {
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
+    pub issues: Vec<String>,
+    /// Swimlanes across this column; empty when the board has no row level.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lanes: Vec<LinearLane>,
+}
+
+/// One tab of the board strip. A key is the Linear id the tab groups by, or
+/// empty for a "No <field>" or ungrouped tab.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearTab {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub key: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub label: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub groups: Vec<LinearGroup>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearLane {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub key: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub label: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub issues: Vec<String>,
 }
 

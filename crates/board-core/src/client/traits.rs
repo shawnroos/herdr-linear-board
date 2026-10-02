@@ -7,19 +7,27 @@ use crate::model::{Card, Column, Comment, CommentHistory, CommentRecord};
 
 use crate::protocol::{
     BoardArchiveParams, BoardCreateParams, BoardGetParams, BoardListParams, BoardListResult,
-    BoardOpenParams, BoardRenameParams, BoardSelectParams, BoardSnapshot, CardArchiveParams,
-    CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams, CardVisibility,
-    ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
-    CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DaemonStatus, DeletedResult, Event, HarnessCapabilitiesParams,
-    HarnessListResult, LinearBindHandoffParams, LinearBindHandoffResult, LinearIssueDocument,
-    LinearIssueParams, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
+    BoardNotifyParams, BoardNotifyResult, BoardOpenParams, BoardPaneCloseParams,
+    BoardPaneCloseResult, BoardPaneOpenParams, BoardPaneOpenResult, BoardRenameParams,
+    BoardSelectParams, BoardSnapshot, CardArchiveParams, CardCreateParams, CardDetail,
+    CardListParams, CardMoveParams, CardUpdateParams, CardVisibility, ColumnCreateParams,
+    ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams, CommentAddParams,
+    CommentDeleteParams, CommentGetParams, CommentHistoryParams, CommentUpdateParams, DaemonStatus,
+    DeletedResult, Event, GroupingConfig, HarnessCapabilitiesParams, HarnessListResult,
+    LinearActivityListParams, LinearActivityListResult, LinearActivityRecordParams,
+    LinearActivityRecordResult, LinearBindParams, LinearChange, LinearGroupingGetParams,
+    LinearGroupingGetResult, LinearGroupingSetParams, LinearIdParams, LinearImportParams,
+    LinearImportResult, LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
+    LinearMarkClearParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
+    LinearRemoved, LinearReplace, LinearSessionGetParams, LinearSessionGetResult,
+    LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams,
+    LinearSpaceBindParams, LinearState, LinearStateGetParams, LinearUnbindParams, Mark, Note,
     PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
     ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
     ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
     RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
-    RunPaneExitedParams, SessionListResult, SpaceListParams, SpaceListResult, StopResult,
-    TemplateApplyParams, Visibility,
+    RunPaneExitedParams, SessionListResult, ShowRequest, SpaceBinding, SpaceListParams,
+    SpaceListResult, StopResult, TemplateApplyParams, Visibility, WorktreeBinding,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -515,6 +523,27 @@ pub trait BoardClient {
         )?)
     }
 
+    fn board_pane_open(&mut self, p: &BoardPaneOpenParams) -> anyhow::Result<BoardPaneOpenResult> {
+        Ok(serde_json::from_value(
+            self.call("board.pane.open", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn board_pane_close(
+        &mut self,
+        p: &BoardPaneCloseParams,
+    ) -> anyhow::Result<BoardPaneCloseResult> {
+        Ok(serde_json::from_value(
+            self.call("board.pane.close", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn board_notify(&mut self, p: &BoardNotifyParams) -> anyhow::Result<BoardNotifyResult> {
+        Ok(serde_json::from_value(
+            self.call("board.notify", serde_json::to_value(p)?)?,
+        )?)
+    }
+
     fn linear_snapshot(&mut self, p: &LinearSnapshotParams) -> anyhow::Result<LinearSnapshot> {
         Ok(serde_json::from_value(
             self.call("linear.snapshot", serde_json::to_value(p)?)?,
@@ -532,12 +561,175 @@ pub trait BoardClient {
         )?)
     }
 
-    fn linear_bind_handoff(
-        &mut self,
-        p: &LinearBindHandoffParams,
-    ) -> anyhow::Result<LinearBindHandoffResult> {
+    fn linear_state_get(&mut self, p: &LinearStateGetParams) -> anyhow::Result<LinearState> {
         Ok(serde_json::from_value(
-            self.call("linear.bind_handoff", serde_json::to_value(p)?)?,
+            self.call("linear.state.get", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_bind(
+        &mut self,
+        p: &LinearBindParams,
+    ) -> anyhow::Result<LinearChange<WorktreeBinding>> {
+        Ok(serde_json::from_value(
+            self.call("linear.bind", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_space_bind(
+        &mut self,
+        p: &LinearSpaceBindParams,
+    ) -> anyhow::Result<LinearChange<SpaceBinding>> {
+        Ok(serde_json::from_value(
+            self.call("linear.space.bind", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_unbind(
+        &mut self,
+        p: &LinearUnbindParams,
+    ) -> anyhow::Result<LinearChange<WorktreeBinding>> {
+        Ok(serde_json::from_value(
+            self.call("linear.unbind", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_grouping_get(
+        &mut self,
+        p: &LinearGroupingGetParams,
+    ) -> anyhow::Result<LinearGroupingGetResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.grouping.get", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_grouping_set(
+        &mut self,
+        p: &LinearGroupingSetParams,
+    ) -> anyhow::Result<LinearChange<GroupingConfig>> {
+        Ok(serde_json::from_value(
+            self.call("linear.grouping.set", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_grouping_preview(
+        &mut self,
+        p: &LinearGroupingSetParams,
+    ) -> anyhow::Result<LinearChange<GroupingConfig>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.grouping.preview",
+            serde_json::to_value(p)?,
+        )?)?)
+    }
+
+    fn linear_mark_set(&mut self, p: &LinearMarkSetParams) -> anyhow::Result<LinearReplace<Mark>> {
+        Ok(serde_json::from_value(
+            self.call("linear.mark.set", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_mark_clear(&mut self, id: i64) -> anyhow::Result<LinearChange<Mark>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.mark.clear",
+            serde_json::to_value(LinearIdParams { id })?,
+        )?)?)
+    }
+
+    fn linear_mark_clear_ids(&mut self, ids: &[i64]) -> anyhow::Result<LinearRemoved<Mark>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.mark.clear",
+            serde_json::to_value(LinearMarkClearParams {
+                id: None,
+                ids: Some(ids.to_vec()),
+            })?,
+        )?)?)
+    }
+
+    fn linear_mark_unmark(
+        &mut self,
+        p: &LinearMarkUnmarkParams,
+    ) -> anyhow::Result<LinearRemoved<Mark>> {
+        Ok(serde_json::from_value(
+            self.call("linear.mark.unmark", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_note_set(&mut self, p: &LinearNoteSetParams) -> anyhow::Result<LinearReplace<Note>> {
+        Ok(serde_json::from_value(
+            self.call("linear.note.set", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_note_clear(&mut self, id: i64) -> anyhow::Result<LinearChange<Note>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.note.clear",
+            serde_json::to_value(LinearIdParams { id })?,
+        )?)?)
+    }
+
+    fn linear_show_request(
+        &mut self,
+        p: &LinearShowRequestParams,
+    ) -> anyhow::Result<LinearChange<ShowRequest>> {
+        Ok(serde_json::from_value(
+            self.call("linear.show.request", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_show_accept(&mut self, id: i64) -> anyhow::Result<LinearChange<ShowRequest>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.show.accept",
+            serde_json::to_value(LinearIdParams { id })?,
+        )?)?)
+    }
+
+    fn linear_show_dismiss(&mut self, id: i64) -> anyhow::Result<LinearChange<ShowRequest>> {
+        Ok(serde_json::from_value(self.call(
+            "linear.show.dismiss",
+            serde_json::to_value(LinearIdParams { id })?,
+        )?)?)
+    }
+
+    fn linear_show_withdraw(
+        &mut self,
+        p: &LinearShowWithdrawParams,
+    ) -> anyhow::Result<LinearChange<ShowRequest>> {
+        Ok(serde_json::from_value(
+            self.call("linear.show.withdraw", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_session_get(
+        &mut self,
+        p: &LinearSessionGetParams,
+    ) -> anyhow::Result<LinearSessionGetResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.session.get", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_activity_record(
+        &mut self,
+        p: &LinearActivityRecordParams,
+    ) -> anyhow::Result<LinearActivityRecordResult> {
+        Ok(serde_json::from_value(self.call(
+            "linear.activity.record",
+            serde_json::to_value(p)?,
+        )?)?)
+    }
+
+    fn linear_activity_list(
+        &mut self,
+        p: &LinearActivityListParams,
+    ) -> anyhow::Result<LinearActivityListResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.activity.list", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_import(&mut self, p: &LinearImportParams) -> anyhow::Result<LinearImportResult> {
+        Ok(serde_json::from_value(
+            self.call("linear.import", serde_json::to_value(p)?)?,
         )?)
     }
 }

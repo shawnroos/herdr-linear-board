@@ -18,13 +18,21 @@ spawner = "herdr"          # herdr = agent panes (default); local = child proces
 timeout_unit_secs = 60      # seconds per column timeout_minutes unit
 tick_ms = 1000              # timeout/idle watcher interval
 local_poll_ms = 2000        # local-spawner liveness interval
-# work_plugin_root = "/path/to/shrimpshack/plugins/work"  # Linear mode: the work plugin checkout,
-#                                                         # after BOARD_WORK_PLUGIN_ROOT, before installed_plugins.json
+
+[linear]
+show_request_ttl_secs = 1800  # how long an agent's request to show an issue waits for you before it expires
 
 [harness.myharness]
 argv = ["mytool", "--model", "{model}"]
 resume = false             # can this harness resume a recorded conversation? default false
 ```
+
+`[linear] show_request_ttl_secs` applies to every show-request an agent makes (`board mcp`'s
+`ask_to_show`). When it runs out, the request leaves the board's pinned line and its outcome
+becomes `expired`. An agent cannot set its own expiry. Values below 1 count as 1.
+
+`[daemon] work_plugin_root` is retired. Linear mode no longer runs the work plugin's scripts, so
+the daemon accepts the key, ignores it, and logs one warning at start.
 
 Custom harness prompts are delivered through `$BOARD_PROMPT`. The placeholders `{model}`, `{effort}`,
 and `{permission_mode}` are available in `argv`. Optional keys `models`, `efforts`, and
@@ -153,9 +161,10 @@ override values also prevent daemon startup.
 | `BOARD_SOCKET` | Daemon socket. Default: `~/.local/share/herdr-board/boardd.sock`. |
 | `BOARD_LOG_DIR` | Structured diagnostic log directory. Default: `~/.local/share/herdr-board/logs`. |
 | `HERDR_BOARD_CONFIG` | Configuration path override. |
-| `BOARD_WORK_PLUGIN_ROOT` | Linear mode: the work plugin checkout the daemon runs `bin/work-snapshot.sh`, `bin/work-spaces.sh`, `bin/work-projects.sh` and `bin/work-views.sh` from (plugin `0.5.0` or newer); first in the root resolution order, before `[daemon] work_plugin_root`. The CLI and TUI send their own value with each request, and the daemon's own value is the fallback; both, and the config key, are read per request, so no daemon restart is needed. |
-| `HERDR_LINEAR_PROJECTS_ROOT` | Linear mode: the work plugin's projects root, read from the daemon's environment. A bind handoff's working directory must resolve inside this root or `HERDR_LINEAR_WORKTREES_ROOT`, and a handoff with no working directory opens its `bind` tab here. Default: `~/projects`. The deprecated `HERDR_LINEAR_SLATE_ROOT` is read when this is unset or empty. Every `HERDR_LINEAR_*` variable is also forwarded to the plugin scripts. |
-| `HERDR_LINEAR_WORKTREES_ROOT` | Linear mode: the work plugin's worktrees root, read from the daemon's environment; the second root a bind handoff's working directory may resolve inside. Default: `~/worktrees`. |
+| `BOARD_WORK_PLUGIN_ROOT` | Retired. Linear mode no longer runs the work plugin's scripts; a non-blank value is accepted, ignored, and named in one warning at daemon start. |
+| `HERDR_LINEAR_STORE_DIR` | Linear mode: the work plugin's store that `board import work-store` reads, taken from the daemon's environment. Default: `~/.claude/work`. The import only reads it. |
+| `LINEAR_API_KEY` | Linear mode: the Linear API key, read from the daemon's own startup environment when the macOS Keychain item (account `linear-api-key`, service `work-linear`) is absent; `~/.secrets` is tried last. The first client to start boardd decides that environment; boardd logs which source it used, never the key. |
+| `BOARD_LINEAR_API_URL` | Linear mode: the GraphQL endpoint boardd reads. Default: `https://api.linear.app/graphql`. Plain `http://` is accepted only for a loopback host; tests point it at a local fake. |
 | `BOARD_SCOPE_PATH` | Canonicalizable scope override for CLI/TUI automation; when no selection exists yet it selects the project at CLI/TUI startup (the selected project otherwise prevails over the current directory). |
 | `BOARD_SPAWNER` | `herdr` or `local`; overrides `[daemon] spawner`. |
 | `BOARD_CARD_ID` / `BOARD_RUN_ID` | Injected into runs; `comment`/`done` use them by default. |

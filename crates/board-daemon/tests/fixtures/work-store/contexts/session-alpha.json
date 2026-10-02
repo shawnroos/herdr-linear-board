@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "worktree_path": "session:alpha",
+  "state": "bound",
+  "issue_identifier": "team-1",
+  "display_name": "WEB",
+  "consent_proposal": {
+    "team": "team-1",
+    "project": "",
+    "nonce": "n-5",
+    "presented_at": "2026-09-08T00:00:00Z"
+  },
+  "updated_at": "2026-09-08T00:00:00Z"
+}

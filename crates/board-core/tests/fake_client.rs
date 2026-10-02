@@ -517,3 +517,248 @@ fn fake_card_move_transfers_across_boards() {
         .unwrap_err();
     assert!(err.to_string().contains("belongs to board"));
 }
+
+mod linear_local_state {
+    use board_core::client::{BoardClient, FakeBoardClient, FAKE_CLIENT_METHODS};
+    use board_core::db::SpaceBinding;
+    use board_core::protocol::{
+        parse_timestamp, LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams,
+        LinearOwner, LinearSessionGetParams, LinearShowRequestParams, LinearShowWithdrawParams,
+        LinearStateGetParams, MarkKind, ShowOutcome,
+    };
+    use serde_json::json;
+
+    const SPACE: &str = "ws-1";
+    const SOCKET: &str = "/tmp/hb/sessions/main/herdr.sock";
+
+    fn now() -> i64 {
+        parse_timestamp("2026-09-30 12:00:00").unwrap()
+    }
+
+    fn owner(pane: &str) -> LinearOwner {
+        LinearOwner {
+            herdr_socket: Some(SOCKET.into()),
+            herdr_pane_id: Some(pane.into()),
+            claude_session_id: Some(format!("claude-{pane}")),
+        }
+    }
+
+    fn client() -> FakeBoardClient {
+        let client = FakeBoardClient::new().unwrap().with_now(now());
+        client
+            .db()
+            .set_space_binding(&SpaceBinding {
+                herdr_session: "main".into(),
+                space: SPACE.into(),
+                project_id: "proj-1".into(),
+                display_name: None,
+                team_ids: Vec::new(),
+                view: None,
+            })
+            .unwrap();
+        client
+    }
+
+    fn worktree(dir: &tempfile::TempDir) -> String {
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        root.to_str().unwrap().to_string()
+    }
+
+    fn mark(client: &mut FakeBoardClient, who: &LinearOwner, kind: MarkKind) -> i64 {
+        client
+            .linear_mark_set(&LinearMarkSetParams {
+                space: SPACE.into(),
+                issue: "ENG-148".into(),
+                kind,
+                text: Some("t".into()),
+                created_by: None,
+                owner: who.clone(),
+            })
+            .unwrap()
+            .after
+            .id
+    }
+
+    fn ask(client: &mut FakeBoardClient, who: &LinearOwner) -> i64 {
+        client
+            .linear_show_request(&LinearShowRequestParams {
+                space: SPACE.into(),
+                issue: "ENG-160".into(),
+                owner: who.clone(),
+                ..LinearShowRequestParams::default()
+            })
+            .unwrap()
+            .after
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn the_fake_answers_every_new_local_state_method() {
+        for method in [
+            "linear.mark.unmark",
+            "linear.show.withdraw",
+            "linear.session.get",
+        ] {
+            assert!(FAKE_CLIENT_METHODS.contains(&method), "{method}");
+        }
+    }
+
+    #[test]
+    fn ae9_owners_keep_their_own_marks_through_the_fake() {
+        let mut client = client();
+        let dir = tempfile::tempdir().unwrap();
+        client
+            .linear_bind(&LinearBindParams {
+                cwd: worktree(&dir),
+                issue: "ENG-148".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        let (a, b) = (owner("p-a"), owner("p-b"));
+        mark(&mut client, &a, MarkKind::Attention);
+        mark(&mut client, &b, MarkKind::Attention);
+        assert!(client
+            .linear_mark_set(&LinearMarkSetParams {
+                space: SPACE.into(),
+                issue: "ENG-148".into(),
+                kind: MarkKind::Suggestion,
+                text: None,
+                created_by: None,
+                owner: a.clone(),
+            })
+            .is_err());
+        let removed = client
+            .linear_mark_unmark(&LinearMarkUnmarkParams {
+                space: SPACE.into(),
+                issue: "ENG-148".into(),
+                kind: None,
+                owner: a,
+            })
+            .unwrap()
+            .removed;
+        assert_eq!(removed.len(), 1);
+        let state = client
+            .linear_state_get(&LinearStateGetParams {
+                space: SPACE.into(),
+                herdr_socket: Some(SOCKET.into()),
+            })
+            .unwrap();
+        assert_eq!(state.marks.len(), 1);
+        assert_eq!(state.marks[0].owner(), b);
+    }
+
+    #[test]
+    fn bulk_and_single_mark_clear_share_one_method() {
+        let mut client = client();
+        let dir = tempfile::tempdir().unwrap();
+        client
+            .linear_bind(&LinearBindParams {
+                cwd: worktree(&dir),
+                issue: "ENG-148".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        let one = mark(&mut client, &owner("p-a"), MarkKind::Attention);
+        let two = mark(&mut client, &owner("p-a"), MarkKind::Question);
+        let three = mark(&mut client, &owner("p-a"), MarkKind::Done);
+        let single = client.linear_mark_clear(one).unwrap();
+        assert_eq!(single.before.map(|m| m.id), Some(one));
+        let bulk = client.linear_mark_clear_ids(&[one, two]).unwrap();
+        assert_eq!(
+            bulk.removed.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![two]
+        );
+        assert!(client
+            .call("linear.mark.clear", json!({"id": three, "ids": [three]}))
+            .is_err());
+    }
+
+    #[test]
+    fn ae11_and_ae5_requests_dedupe_withdraw_and_expire_on_the_fake_clock() {
+        let mut client = client();
+        let dir = tempfile::tempdir().unwrap();
+        client
+            .linear_bind(&LinearBindParams {
+                cwd: worktree(&dir),
+                issue: "ENG-160".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        let a = owner("p-a");
+        let first = ask(&mut client, &a);
+        client.set_now(now() + 60);
+        assert_eq!(ask(&mut client, &a), first);
+        let get = LinearStateGetParams {
+            space: SPACE.into(),
+            herdr_socket: Some(SOCKET.into()),
+        };
+        assert_eq!(
+            client.linear_state_get(&get).unwrap().show_requests.len(),
+            1
+        );
+        assert!(client
+            .linear_show_withdraw(&LinearShowWithdrawParams {
+                space: SPACE.into(),
+                issue: "ENG-160".into(),
+                owner: owner("p-b"),
+            })
+            .is_err());
+        let withdrawn = client
+            .linear_show_withdraw(&LinearShowWithdrawParams {
+                space: SPACE.into(),
+                issue: "ENG-160".into(),
+                owner: a.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            withdrawn.after.unwrap().outcome,
+            Some(ShowOutcome::Withdrawn)
+        );
+
+        let second = ask(&mut client, &a);
+        assert_ne!(second, first);
+        client.set_now(now() + 60 + 30 * 60);
+        assert!(client
+            .linear_state_get(&get)
+            .unwrap()
+            .show_requests
+            .is_empty());
+        assert!(client.linear_show_accept(second).is_err());
+    }
+
+    #[test]
+    fn session_read_through_the_fake_matches_the_store() {
+        let mut client = client();
+        let dir = tempfile::tempdir().unwrap();
+        let wt = worktree(&dir);
+        client
+            .linear_bind(&LinearBindParams {
+                cwd: wt.clone(),
+                issue: "ENG-148".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        mark(&mut client, &owner("p-a"), MarkKind::Question);
+        let params = LinearSessionGetParams {
+            space: SPACE.into(),
+            herdr_socket: Some(SOCKET.into()),
+            herdr_pane_id: Some("p-a".into()),
+            claude_session_id: Some("claude-p-a".into()),
+            cwd: Some(format!("{wt}/sub")),
+        };
+        let read = client.linear_session_get(&params).unwrap();
+        assert!(read.space_bound);
+        assert_eq!(read.binding.unwrap().issue, "ENG-148");
+        assert_eq!(read.marks.len(), 1);
+        let stranger = client
+            .linear_session_get(&LinearSessionGetParams {
+                herdr_socket: Some("/tmp/hb/sessions/other/herdr.sock".into()),
+                ..params
+            })
+            .unwrap();
+        assert!(!stranger.space_bound && stranger.binding.is_none());
+    }
+}

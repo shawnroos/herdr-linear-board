@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 42-linear-issue.sh — `board linear issue` runs the work plugin's per-issue read and returns the
-# document the issue page draws from; a plugin that ships no issue script is refused with protocol
-# code 7, which is a DIFFERENT remedy from the code 6 everything else on the plugin path returns,
-# and the rest of Linear mode keeps working while it is missing.
+# 42-linear-issue.sh — `board linear issue` returns the whole issue the issue page draws from
+# (description, sub-issues, parent, relations both ways, comments and history) in ONE GraphQL call
+# to the scenario's own fake Linear (e2e/fake-linear.py). An issue Linear cannot read is a document
+# with status `unavailable`, not an error code, and a refused id stops before any call.
 set -euo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/lib.sh"
 
@@ -11,127 +11,84 @@ e2e_init
 e2e_build
 e2e_isolate
 
-# The document is the vendored fixture: the work plugin's own output against its fake Linear
-# (crates/board-core/tests/fixtures/linear-issue/, pinned by sha256 in VERSION). Using it here
-# means this scenario and the plugin's own suite are reading one contract rather than two.
-FIXTURES="$REPO_ROOT/crates/board-core/tests/fixtures/linear-issue"
-PLUGIN_ROOT="$E2E_TMP/work-plugin"
-mkdir -p "$PLUGIN_ROOT/.claude-plugin" "$PLUGIN_ROOT/bin"
-# The floor comes from the source of truth, not a literal: a bump would
-# otherwise leave this scenario asserting against a version the board refuses.
-printf '{"name":"work","version":"%s"}\n' "$E2E_PLUGIN_VERSION_FLOOR" \
-    >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
-
-# The snapshot script, so this scenario can prove ONE missing script does not take the rest of
-# Linear mode down with it.
-cat >"$PLUGIN_ROOT/bin/work-snapshot.sh" <<SCRIPT
-#!/usr/bin/env bash
-set -u
-case "\${1:-}" in ''|*[!A-Za-z0-9_:-]*) exit 2 ;; esac
-cat "$REPO_ROOT/crates/board-core/tests/fixtures/linear-snapshot/unbound.json"
-SCRIPT
-chmod +x "$PLUGIN_ROOT/bin/work-snapshot.sh"
-
-write_issue_script() {  # write_issue_script <fixture file>
-    cat >"$PLUGIN_ROOT/bin/work-issue.sh" <<SCRIPT
-#!/usr/bin/env bash
-set -u
-case "\${1:-}" in ''|*[!A-Za-z0-9_-]*) exit 2 ;; esac
-printf '%s\n' "\$1" >>"$E2E_TMP/issue-args"
-cat "$FIXTURES/$1"
-SCRIPT
-    chmod +x "$PLUGIN_ROOT/bin/work-issue.sh"
+FIXTURE="$E2E_TMP/linear-fixture.json"
+python3 - "$FIXTURE" <<'PY'
+import json,sys
+def state(name, kind):
+    return {"id": "s-" + kind, "name": name, "type": kind}
+def linked(identifier, title):
+    return {"id": "id-" + identifier, "identifier": identifier, "title": title,
+            "state": state("Todo", "unstarted")}
+def page(nodes):
+    return {"nodes": nodes, "pageInfo": {"hasNextPage": False}}
+issue = {
+    "id": "id-E2E-7", "identifier": "E2E-7", "title": "Read the whole issue",
+    "url": None, "branchName": "e2e-7", "updatedAt": "2026-10-01T00:00:00Z", "priority": 2,
+    "state": state("In Progress", "started"),
+    "parent": dict(linked("E2E-1", "Parent work"), state=state("In Progress", "started")),
+    "project": {"id": "p-e2e", "name": "E2E Project"},
+    "projectMilestone": {"id": "m-1", "name": "Beta"}, "cycle": {"id": "c-1", "number": 4, "name": None},
+    "team": {"id": "team-e2e", "key": "E2E", "name": "E2E"}, "assignee": {"id": "u-1", "name": "Ada"},
+    "labels": {"nodes": [{"id": "l-1", "name": "Bug", "parent": None}]},
+    "description": "Why this matters", "dueDate": "2026-10-31", "estimate": 3,
+    "children": page([linked("E2E-8", "A sub-issue")]),
+    "relations": page([{"id": "r-1", "type": "blocks", "relatedIssue": linked("E2E-9", "Blocked work")}]),
+    "inverseRelations": page([{"id": "r-2", "type": "blocks", "issue": linked("E2E-3", "Blocking work")}]),
+    "comments": page([{"id": "cm-1", "body": "Looks right", "createdAt": "2026-09-30T00:00:00Z",
+                       "user": {"id": "u-1", "name": "Ada"}, "parent": None}]),
+    "history": page([{"id": "h-1", "createdAt": "2026-09-29T00:00:00Z", "actor": {"id": "u-1", "name": "Ada"},
+                      "fromState": {"name": "Todo"}, "toState": {"name": "In Progress"},
+                      "fromAssignee": None, "toAssignee": None, "fromPriority": 2, "toPriority": 2,
+                      "addedLabels": [], "removedLabels": []}]),
 }
-
-export BOARD_WORK_PLUGIN_ROOT="$PLUGIN_ROOT"
+fixture = [
+    ["E2E-404", {"data": {"issue": None}}],
+    ["issue(id", {"data": {"issue": issue}}],
+]
+json.dump(fixture, open(sys.argv[1], "w"))
+PY
+e2e_fake_linear_start "$FIXTURE"
 e2e_daemon_start
 
-step "A full read returns every section the issue page draws"
-write_issue_script full.json
-DOC="$("$BOARD_BIN" linear issue WEB-3318 --json)"
+step "One issue read returns every section the issue page draws, in one GraphQL call"
+DOC="$("$BOARD_BIN" linear issue E2E-7 --json)"
 printf '%s' "$DOC" >"$E2E_TMP/full-doc.json"
-# The document goes through a FILE, not a heredoc: `python3 - <<PY` makes the
-# heredoc stdin, so a piped document never reaches json.load and the check
-# fails for a reason that has nothing to do with the document.
 python3 - "$E2E_TMP/full-doc.json" <<'PY' || fail "the document did not carry every section: $DOC"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["schema"] == 1, d
-assert d["status"] == "ok", d
-assert d["truncated"] == [], d
-i = d["issue"]
-for key in ("description", "children", "relations", "comments", "history",
-            "milestone", "cycle", "estimate", "due_date", "parent"):
-    assert key in i, f"missing {key}"
-assert i["identifier"] == "WEB-3318", i
-assert len(i["children"]) >= 1, i
-# R9: every linked row can open its own page from the row alone.
-linked = [i["parent"]] + i["children"] + [r["issue"] for r in i["relations"]]
-for row in linked:
-    assert row["identifier"] and row["title"] and (row.get("state") or {}).get("name"), row
-# Both ends of a relation, which is what separates blocks from blocked by.
-directions = {r["direction"] for r in i["relations"]}
-assert directions == {"inward", "outward"}, directions
+import json,sys
+d=json.load(open(sys.argv[1]))
+i=d["issue"] or {}
+linked=[i.get("parent") or {}] + i.get("children", []) + [r["issue"] for r in i.get("relations", [])]
+checks=[
+    d["schema"] == 1, d["status"] == "ok", d["truncated"] == [],
+    i.get("identifier") == "E2E-7", i.get("description") == "Why this matters",
+    len(i.get("children", [])) == 1, len(i.get("comments", [])) == 1, len(i.get("history", [])) == 1,
+    (i.get("milestone") or {}).get("name") == "Beta",
+    {r["direction"] for r in i.get("relations", [])} == {"inward", "outward"},
+    all(row.get("identifier") and row.get("title") and (row.get("state") or {}).get("name") for row in linked),
+]
+raise SystemExit(0 if all(checks) else 1)
 PY
-[ "$(cat "$E2E_TMP/issue-args")" = "WEB-3318" ] || fail "the script was not given the issue id"
-ok "full read"
+[ "$(linear_requests)" -eq 1 ] || fail "the issue read made $(linear_requests) GraphQL calls, not one"
+[ "$(linear_requests 'issue(id')" -eq 1 ] || fail "the one call was not the issue query"
+ok "full issue in one call"
 
-step "A read that stopped at its page cap is partial and names what it cut"
-write_issue_script truncated.json
-DOC="$("$BOARD_BIN" linear issue WEB-3318 --json)"
-printf '%s' "$DOC" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-assert d["status"] == "partial", d
-assert d["truncated"], d
-assert d["issue"] is not None, "a partial read still carries the issue"
-' || fail "a truncated read was not reported as partial: $DOC"
-ok "partial read names what was cut"
+step "An issue Linear cannot read is an unavailable document, not an error"
+DOC="$("$BOARD_BIN" linear issue E2E-404 --json)"
+printf '%s' "$DOC" >"$E2E_TMP/missing-doc.json"
+python3 - "$E2E_TMP/missing-doc.json" <<'PY' || fail "a missing issue did not arrive as a document: $DOC"
+import json,sys
+d=json.load(open(sys.argv[1]))
+raise SystemExit(0 if d["status"] == "unavailable" and d["issue"] is None and d["message"] else 1)
+PY
+ok "unavailable document"
 
-step "Linear being unreachable is a DOCUMENT, not an error code"
-write_issue_script unavailable.json
-DOC="$("$BOARD_BIN" linear issue WEB-3318 --json)"
-printf '%s' "$DOC" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-assert d["status"] == "unavailable", d
-assert d["issue"] is None, d
-assert d["message"], d
-' || fail "an unreachable Linear did not arrive as a document: $DOC"
-ok "unavailable read is a document the page can keep its fields under"
-
-step "A refused issue id stops before the script runs"
-: >"$E2E_TMP/issue-args"
+step "A refused issue id stops before any GraphQL call"
+BEFORE="$(linear_requests)"
 set +e
 ERR="$("$BOARD_BIN" linear issue 'bad id' --json 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "expected exit 1 for a refused issue id, got $rc: $ERR"
-[ ! -s "$E2E_TMP/issue-args" ] || fail "a refused id still ran the script"
-ok "refused id -> code 1, nothing ran"
-
-step "AE3: a plugin with no issue script is code 7, and the rest of Linear mode keeps working"
-rm -f "$PLUGIN_ROOT/bin/work-issue.sh"
-set +e
-ERR="$("$BOARD_BIN" linear issue WEB-3318 --json 2>&1 >/dev/null)"; rc=$?
-set -e
-[ "$rc" -eq 7 ] || fail "expected exit 7 for a plugin with no issue script, got $rc: $ERR"
-printf '%s' "$ERR" | python3 -c 'import json,sys; e=json.load(sys.stdin)["error"]; assert e["code"]==7, e' \
-  || fail "error envelope did not carry code 7: $ERR"
-printf '%s' "$ERR" | grep -q 'work-issue.sh' || fail "the error did not name the missing script: $ERR"
-# The distinction that matters: 7 is "update the plugin", 6 is worth retrying.
-"$BOARD_BIN" linear snapshot wA --json >/dev/null \
-  || fail "one missing script took the rest of Linear mode down with it"
-ok "missing script -> code 7; the snapshot still works"
-
-step "A plugin below the version floor is still code 6, not code 7"
-write_issue_script full.json
-# Deliberately a literal, and deliberately far below any floor this board will
-# ever carry: the point of the step is a plugin the version check refuses.
-printf '{"name":"work","version":"0.1.0"}\n' >"$PLUGIN_ROOT/.claude-plugin/plugin.json"
-set +e
-ERR="$("$BOARD_BIN" linear issue WEB-3318 --json 2>&1 >/dev/null)"; rc=$?
-set -e
-[ "$rc" -eq 6 ] || fail "expected exit 6 for an old plugin, got $rc: $ERR"
-ok "version floor is code 6; a missing script is code 7"
+[ "$(linear_requests)" -eq "$BEFORE" ] || fail "a refused id still called Linear"
+ok "refused id -> code 1, no call"
 
 echo; echo "42-linear-issue: PASS"

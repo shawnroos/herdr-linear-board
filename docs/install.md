@@ -1,19 +1,19 @@
 # Install and optional setup
 
 The install steps the [root README](../README.md) summarizes, plus everything optional around
-them: a custom CLI directory, a Herdr keybinding, the harness integration, the agent skill, and
-named Herdr sessions.
+them: a custom CLI directory, a Herdr keybinding, the harness integration, the agent skill, Linear
+mode's agent tools and hook, and named Herdr sessions.
 
 Requires exactly **Herdr 0.9.0 (socket protocol 22)**, Git, and a Rust toolchain with `cargo`; Linux
 and macOS are supported. The board-side compatibility contract remains board protocol v1 and
-SQLite schema v15. See the README for the one-line install command itself.
+SQLite schema v16. See the README for the one-line install command itself.
 
 | Component | Required support level | How to verify |
 |---|---|---|
 | Herdr binary | 0.9.0 | `herdr --version` → `herdr 0.9.0` |
  | Herdr socket | protocol 22 | `herdr api schema --json` → top-level `protocol: 22`; a running session's `herdr api snapshot` also reports `version` and `protocol` |
 | Board socket | v1 | `docs/protocol.md` and `board-core::protocol` |
-| SQLite | schema v15 | `schema.sql` and `board-core::db` migrations |
+| SQLite | schema v16 | `schema.sql` and `board-core::db` migrations |
 | Pi integration | v8 for precise Pi lifecycle/session signals | `herdr integration status` |
 | Claude integration | v7 for precise Claude lifecycle/session signals | `herdr integration status` |
 | Antigravity CLI integration | v1 for the `agy` conversation-id capture (resume/retry/rescue) | `herdr integration status` |
@@ -95,6 +95,77 @@ dispatches and `board done` still works, but the mint completes with no recorded
 [`skill/SKILL.md`](../skill/SKILL.md) teaches interactive or dispatched agents to comment, call
 `board done`, and queue work. GitHub plugin installation does not copy the skill; the
 local-development installer below can do so.
+
+## Linear mode and agent tools
+
+Linear mode needs three things: a Linear API key the daemon can read, the `board mcp` server for
+your agents, and a hook that tells the board about Linear writes. Agents create and update
+tickets through Linear's own MCP server; the board never writes Linear.
+
+1. Store your Linear API key in the macOS Keychain, where the daemon looks first:
+
+   ```bash
+   security add-generic-password -a linear-api-key -s work-linear -w
+   ```
+
+   Without the Keychain item the daemon uses `LINEAR_API_KEY` from its own startup environment,
+   then `~/.secrets`. The work plugin uses the same item, so a plugin user already has it.
+
+2. Add the board's MCP server for every Claude Code session, once:
+
+   ```bash
+   claude mcp add --scope user board -- board mcp
+   ```
+
+   The server is the `board` binary itself. It forwards each tool call to the daemon and starts
+   the daemon when it is not running. The tools are listed in the skill's "Agent tools" section
+   (`board skill`).
+
+3. Report Linear writes to the board. The work plugin ships this hook. Without the plugin, add it
+   to your Claude Code `settings.json`:
+
+   ```json
+   {
+     "hooks": {
+       "PostToolUse": [
+         {
+           "matcher": "mcp__.*[Ll][Ii][Nn][Ee][Aa][Rr].*__.*",
+           "hooks": [{ "type": "command", "command": "board linear report" }]
+         }
+       ]
+     }
+   }
+   ```
+
+   The matcher catches every MCP server whose name contains "linear", whatever your install calls
+   it. `board linear report` reads the hook's JSON on stdin, ignores reads, records each write,
+   and refreshes the open boards for that space. When an agent in a known, unbound session saves
+   an issue, the board links that session's worktree to it; otherwise the board puts a suggestion
+   mark on the card for you to accept. The command prints nothing and always exits 0, so a board
+   problem never blocks the agent.
+
+4. Optional: show the agent's bound issue in Claude Code's status line with
+   `{"statusLine": {"type": "command", "command": "board linear status-line"}}`.
+
+### Moving from the work plugin
+
+The board keeps its own copy of the work plugin's bindings and grouping config.
+`board import work-store` copies them from `~/.claude/work` (or `HERDR_LINEAR_STORE_DIR` in the
+daemon's environment). It only reads the store, and it never overwrites a row the board already
+holds, so you can run it as often as you like. `--dry-run` lists what it would import and skip
+without writing anything.
+
+Switch over in this order, so no write is lost:
+
+1. Upgrade the board, then run `board import work-store` straight away. Until you do, an unbound
+   space says the store was never imported and names the command.
+2. Update the work plugin to the release whose skills and hooks call `board`. That release stops
+   writing `~/.claude/work` and stops running its own herdr sync scripts.
+3. End or restart running Claude sessions. A session keeps the old plugin's hooks until it
+   restarts.
+4. Run `board import work-store` again. It adds only what the old plugin wrote in between.
+
+After the second import, no file in `~/.claude/work` should be newer than the import.
 
 ## Use named Herdr sessions
 

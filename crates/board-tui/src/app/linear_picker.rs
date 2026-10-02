@@ -2,9 +2,7 @@
 //! filter keys, and applying a list read when it lands. The row data is the
 //! plugin's list envelope, sanitised on arrival.
 
-use board_core::protocol::{
-    LinearBindHandoffResult, LinearListKind, LinearListResult, LinearListStatus,
-};
+use board_core::protocol::{LinearListKind, LinearListResult, LinearListStatus};
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::linear::{sanitise_list, LinearFailure, SpaceList};
@@ -176,28 +174,21 @@ pub(super) fn linear_picker_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
                 .and_then(|s| s.bind_space.as_ref())
                 .map(|row| row.id.clone());
             if let (LinearListKind::Projects, Some(space)) = (kind, space) {
-                return start_bind_handoff(
-                    app,
-                    BindTarget {
-                        space,
-                        project: id,
-                        ..BindTarget::default()
-                    },
-                );
+                return vec![Effect::LinearSpaceBind {
+                    space,
+                    project: id,
+                    view: None,
+                }];
             }
             if let (LinearListKind::Views, Some(project)) = (kind, picker.list_id.clone()) {
                 let Some(space) = app.linear.as_ref().map(|s| s.workspace_id.clone()) else {
                     return vec![];
                 };
-                return start_bind_handoff(
-                    app,
-                    BindTarget {
-                        space,
-                        project,
-                        view: Some(id),
-                        ..BindTarget::default()
-                    },
-                );
+                return vec![Effect::LinearSpaceBind {
+                    space,
+                    project,
+                    view: Some(id),
+                }];
             }
             let list_id = picker.list_id.clone();
             let return_to = picker.return_to;
@@ -236,83 +227,25 @@ fn edit_filter(picker: &mut Picker, edit: impl FnOnce(&mut String)) {
     picker.reselect(keep.as_deref());
 }
 
-/// What a bind handoff opens with: ids and a directory, never a name.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct BindTarget {
-    pub space: String,
-    pub project: String,
-    pub view: Option<String>,
-    pub issue: Option<String>,
-    pub working_directory: Option<String>,
-}
-
-/// Mark a handoff in flight and emit it, or send nothing while one is already
-/// on the way.
-pub fn start_bind_handoff(app: &mut App, target: BindTarget) -> Vec<Effect> {
-    let origin = match (&app.picker, app.screen) {
-        (Some(picker), Screen::LinearPicker) => match picker.purpose {
-            PickerPurpose::LinearList(kind) => Some((kind, picker.list_id.clone())),
-            _ => None,
-        },
-        _ => None,
-    };
+/// A space bind landed: the picker that chose it closes, and the board and
+/// the strip's space list are read again so the space shows bound.
+pub(super) fn space_bound(app: &mut App, space: &str) -> Vec<Effect> {
+    let closes = app.screen == Screen::LinearPicker
+        && app.picker.as_ref().is_some_and(|p| {
+            matches!(
+                p.purpose,
+                PickerPurpose::LinearList(LinearListKind::Projects | LinearListKind::Views)
+            )
+        });
+    if closes {
+        if let Some(picker) = app.picker.take() {
+            app.screen = picker.return_to;
+        }
+    }
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
-    if state.handoff_in_flight {
-        return vec![];
-    }
-    state.handoff_in_flight = true;
-    state.handoff_picker = origin;
-    vec![Effect::BindHandoff {
-        space: target.space,
-        project: target.project,
-        view: target.view,
-        issue: target.issue,
-        working_directory: target.working_directory,
-    }]
-}
-
-pub(super) fn handoff_arrived(
-    app: &mut App,
-    result: Result<LinearBindHandoffResult, LinearFailure>,
-) -> Vec<Effect> {
-    let Some(state) = app.linear.as_mut() else {
-        return vec![];
-    };
-    state.handoff_in_flight = false;
-    let origin = state.handoff_picker.take();
-    match result {
-        Ok(opened) => {
-            state.bind_space = None;
-            state.bind_note = Some("bind started in a new tab · r refresh when it finishes".into());
-            if let Some((kind, list_id)) = origin {
-                if is_open_for(app, kind, &list_id) {
-                    if let Some(picker) = app.picker.take() {
-                        app.screen = picker.return_to;
-                    }
-                }
-            }
-            vec![Effect::FocusPane(opened.pane_id)]
-        }
-        Err(failure) => {
-            let text = match failure {
-                LinearFailure::MethodNotFound => {
-                    "the daemon is older than the board and has no linear.bind_handoff".to_string()
-                }
-                LinearFailure::OpUnsupported(_) => {
-                    "binding needs a newer work plugin; update it".to_string()
-                }
-                // `r` refreshes the snapshot, not the bind, and the tab may
-                // have opened after the limit, so a retry could open a second.
-                LinearFailure::TimedOut(limit) => format!(
-                    "the bind did not start within {}s; look for a bind tab before trying again",
-                    limit.as_secs()
-                ),
-                LinearFailure::Failed(text) => super::sanitise(&text),
-            };
-            app.set_toast(format!("bind failed: {text}"), true);
-            vec![]
-        }
-    }
+    state.bind_space = None;
+    app.set_toast(format!("bound space {}", super::sanitise(space)), false);
+    super::linear::request_or_queue(app)
 }

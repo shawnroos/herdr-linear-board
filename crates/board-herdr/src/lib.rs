@@ -37,11 +37,12 @@ pub use events::{
 };
 pub use params::{
     AgentPromptParams, AgentPromptWaitOptions, AgentStartParams, AgentWaitParams, PaneRenameParams,
-    PaneSplitParams, TabCreateParams, TabRenameParams, WorkspaceCreateParams,
+    PaneSplitParams, PluginPaneOpenParams, TabCreateParams, TabRenameParams, WorkspaceCreateParams,
 };
 pub use transport::{default_socket_path, SocketDeadlines};
 pub use types::{
     AgentInfo, AgentSession, AgentStarted, AgentStatus, Layout, LayoutPane, LayoutSplit,
-    NotificationShown, NotificationSound, PaneInfo, PaneReadResult, Pong, ReadSource, Rect,
-    SessionSnapshot, SplitDirection, TabCreated, TabInfo, WorkspaceCreated, WorkspaceInfo,
+    NotificationShown, NotificationSound, PaneInfo, PaneReadResult, PluginPaneInfo,
+    PluginPanePlacement, Pong, ReadSource, Rect, SessionSnapshot, SplitDirection, TabCreated,
+    TabInfo, WorkspaceCreated, WorkspaceInfo,
 };

@@ -328,6 +328,54 @@ fn the_three_linear_list_verbs_parse() {
 }
 
 #[test]
+fn linear_report_parses_and_takes_no_arguments() {
+    assert!(matches!(
+        parse(&["board", "linear", "report"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Report
+        }
+    ));
+    assert_eq!(
+        reject(&["board", "linear", "report", "WEB-1"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
+}
+
+#[test]
+fn linear_session_and_status_line_parse() {
+    assert!(matches!(
+        parse(&["board", "linear", "status-line"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::StatusLine
+        }
+    ));
+    assert!(matches!(
+        parse(&["board", "linear", "session"]).cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Session { workspace_id: None }
+        }
+    ));
+    match parse(&["board", "linear", "session", "wA"]).cmd {
+        Cmd::Linear {
+            sub: LinearCmd::Session { workspace_id },
+        } => assert_eq!(workspace_id.as_deref(), Some("wA")),
+        _ => panic!("expected linear session"),
+    }
+}
+
+#[test]
+fn tui_takes_an_optional_session_flag() {
+    assert!(matches!(
+        parse(&["board", "tui"]).cmd,
+        Cmd::Tui { session: false }
+    ));
+    assert!(matches!(
+        parse(&["board", "tui", "--session"]).cmd,
+        Cmd::Tui { session: true }
+    ));
+}
+
+#[test]
 fn linear_list_arguments_are_checked_at_parse_time() {
     assert_eq!(
         reject(&["board", "linear", "view", "list"]).kind(),
@@ -368,4 +416,30 @@ fn bind_is_not_a_verb_anywhere() {
             "{args:?}"
         );
     }
+}
+
+// -- import -------------------------------------------------------------------
+
+#[test]
+fn import_work_store_parses_with_and_without_dry_run() {
+    assert!(matches!(
+        parse(&["board", "import", "work-store"]).cmd,
+        Cmd::Import {
+            sub: ImportCmd::WorkStore { dry_run: false }
+        }
+    ));
+    assert!(matches!(
+        parse(&["board", "import", "work-store", "--dry-run", "--json"]),
+        Cli {
+            json: true,
+            cmd: Cmd::Import {
+                sub: ImportCmd::WorkStore { dry_run: true }
+            },
+            ..
+        }
+    ));
+    assert_eq!(
+        reject(&["board", "import", "work-store", "/some/path"]).kind(),
+        clap::error::ErrorKind::UnknownArgument
+    );
 }

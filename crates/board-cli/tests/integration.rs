@@ -20,14 +20,20 @@ mod events;
 mod exit_codes;
 #[path = "integration/harness.rs"]
 mod harness;
+#[path = "integration/import.rs"]
+mod import;
 #[path = "integration/lifecycle.rs"]
 mod lifecycle;
 #[path = "integration/linear.rs"]
 mod linear;
+#[path = "integration/mcp.rs"]
+mod mcp;
 #[path = "integration/meta.rs"]
 mod meta;
 #[path = "integration/projects.rs"]
 mod projects;
+#[path = "integration/report.rs"]
+mod report;
 #[path = "integration/runs.rs"]
 mod runs;
 #[path = "integration/scope.rs"]

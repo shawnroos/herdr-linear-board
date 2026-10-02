@@ -105,8 +105,13 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "--", "-- linear mode --"),
     (Screen::LinearBoard, "←/→ h/l", "focus column"),
     (Screen::LinearBoard, "↑/↓ k/j", "focus card"),
-    (Screen::LinearBoard, "Enter", "card detail"),
-    (Screen::LinearBoard, "r / R", "refresh snapshot"),
+    (Screen::LinearBoard, "[ / ]", "previous / next tab"),
+    (Screen::LinearBoard, "< / >", "prev / next column page"),
+    (Screen::LinearBoard, "Enter", "detail; clears its marks"),
+    (Screen::LinearBoard, "a", "accept: ◇ bind, else show"),
+    (Screen::LinearBoard, "x", "dismiss: ◇, else request"),
+    (Screen::LinearBoard, "n / N", "next / prev marked card"),
+    (Screen::LinearBoard, "r / R", "refresh; R skips cache"),
     (Screen::LinearBoard, "?", "this help (any screen)"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "q / Esc", "quit"),
@@ -129,7 +134,7 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearDetail, "u", "open issue in Linear"),
     (Screen::LinearDetail, "y", "copy worktree path"),
     (Screen::LinearDetail, "b", "bind selected worktree"),
-    (Screen::LinearDetail, "r / R", "refresh snapshot"),
+    (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
     (Screen::LinearDetail, "q / Esc", "back to board"),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
@@ -142,7 +147,7 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearNotBound, "r / R", "refresh after a bind"),
     (Screen::LinearNotBound, "Esc", "strip: unfocus, else quit"),
     (Screen::LinearNotBound, "q", "quit"),
-    (Screen::LinearError, "r / R", "retry the snapshot"),
+    (Screen::LinearError, "r / R", "retry; R skips cache"),
     (Screen::LinearError, "Esc", "dismiss, keep last good"),
     (Screen::LinearError, "q", "quit"),
     (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
@@ -156,14 +161,19 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearPicker, "↑/↓ Enter", "move / choose"),
     (Screen::LinearPicker, "Esc", "clear filter, then close"),
     (Screen::LinearPicker, "click", "choose that row"),
+    (Screen::SessionPane, "--", "-- session pane --"),
+    (Screen::SessionPane, "Tab", "issue / lane list"),
+    (Screen::SessionPane, "↑/↓ k/j", "move / scroll"),
+    (Screen::SessionPane, "?", "this help"),
+    (Screen::SessionPane, "q / Esc", "close the pane"),
 ];
 
 #[test]
 fn contract_freezes_the_exact_72_row_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        129,
-        "the interaction contract must stay at exactly 129 bindings (87 upstream + 42 Linear mode)"
+        139,
+        "the interaction contract must stay at exactly 139 bindings (87 upstream + 47 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

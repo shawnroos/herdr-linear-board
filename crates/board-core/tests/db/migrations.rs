@@ -1,5 +1,5 @@
 use super::{create_file_db, enqueue, mem};
-use board_core::db::{Db, EnqueueRun, FinalizeRun, BOARD_ID};
+use board_core::db::{Db, EnqueueRun, FinalizeRun, MarkKind, ShowOutcome, BOARD_ID};
 use board_core::protocol::{
     AwaitingReason, CardCreateParams, CardStatus, ColumnCreateParams, Effort, RunOutcome,
     SpaceKind, Trigger,
@@ -43,7 +43,7 @@ fn scheduler_index_sql(conn: &Connection, name: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn fresh_schema_stamps_v15_with_nullable_archive_columns() {
+fn fresh_schema_stamps_current_version_with_nullable_archive_columns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.db");
     drop(Db::open(&path).unwrap());
@@ -51,7 +51,7 @@ fn fresh_schema_stamps_v15_with_nullable_archive_columns() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        16
     );
     for table in ["projects", "boards"] {
         let shape: (String, String, i64, Option<String>) = conn
@@ -137,7 +137,7 @@ fn v14_to_v15_migration_preserves_all_project_and_board_data() {
         // Reopen twice: the upgrade must be stable across reopen.
         for reopen in 0..2 {
             let db = Db::open(&path).unwrap();
-            assert_eq!(db.user_version().unwrap(), 15, "reopen {reopen}");
+            assert_eq!(db.user_version().unwrap(), 16, "reopen {reopen}");
             assert_eq!(
                 db.get_project(project.id).unwrap().archived_at,
                 None,
@@ -243,7 +243,7 @@ fn v15_migration_replay_and_failure_are_stable() {
         .execute_batch("PRAGMA user_version = 14;")
         .unwrap();
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     drop(db);
 
     // Failure: `projects` cannot take a column (a view), so the upgrade
@@ -274,10 +274,580 @@ fn v15_migration_replay_and_failure_are_stable() {
     }
 }
 
+const V16_TABLES: [&str; 10] = [
+    "linear_space_bindings",
+    "linear_worktree_bindings",
+    "linear_session_scopes",
+    "linear_scope_repos",
+    "linear_grouping",
+    "linear_marks",
+    "linear_notes",
+    "linear_show_requests",
+    "linear_activity",
+    "linear_board_panes",
+];
+
+type ColumnShape = (String, String, i64, Option<String>, i64);
+type IndexShape = (String, i64, Option<String>, Vec<String>);
+
+/// Compared through pragmas, not `sqlite_master.sql`: SQLite keeps the CREATE
+/// text verbatim, so whitespace differences would fail an equal shape.
+fn schema_shape(conn: &Connection) -> Vec<(String, Vec<ColumnShape>, Vec<IndexShape>)> {
+    let tables: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let columns: Vec<ColumnShape> = conn
+                .prepare(&format!(
+                    "SELECT name,type,\"notnull\",dflt_value,pk FROM pragma_table_info('{table}')
+                     ORDER BY cid"
+                ))
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            let mut indexes: Vec<IndexShape> = conn
+                .prepare(&format!(
+                    "SELECT l.name, l.\"unique\", m.sql FROM pragma_index_list('{table}') l
+                     LEFT JOIN sqlite_master m ON m.type='index' AND m.name=l.name"
+                ))
+                .unwrap()
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+                .into_iter()
+                .map(|(name, unique, sql)| {
+                    let cols: Vec<String> = conn
+                        .prepare(&format!(
+                            "SELECT coalesce(name, '<expr>') FROM pragma_index_xinfo('{name}')
+                             WHERE key=1 ORDER BY seqno"
+                        ))
+                        .unwrap()
+                        .query_map([], |r| r.get(0))
+                        .unwrap()
+                        .collect::<rusqlite::Result<_>>()
+                        .unwrap();
+                    let partial = sql.map(|s| {
+                        s.split_once(" WHERE ")
+                            .map(|(_, w)| w.split_whitespace().collect::<Vec<_>>().join(" "))
+                            .unwrap_or_default()
+                    });
+                    (name, unique, partial, cols)
+                })
+                .collect();
+            indexes.sort();
+            (table, columns, indexes)
+        })
+        .collect()
+}
+
+fn rewind_to_v15(path: &std::path::Path) {
+    let conn = Connection::open(path).unwrap();
+    for table in V16_TABLES {
+        conn.execute_batch(&format!("DROP TABLE {table};")).unwrap();
+    }
+    conn.execute_batch("PRAGMA user_version = 15;").unwrap();
+}
+
+#[test]
+fn fresh_and_upgraded_v15_databases_share_the_v16_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let upgraded = dir.path().join("upgraded.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&upgraded).unwrap());
+    rewind_to_v15(&upgraded);
+    {
+        let conn = Connection::open(&upgraded).unwrap();
+        let tables: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'linear_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "the v15 fixture must not hold any v16 table");
+    }
+    for reopen in 0..2 {
+        let db = Db::open(&upgraded).unwrap();
+        assert_eq!(db.user_version().unwrap(), 16, "reopen {reopen}");
+    }
+    let fresh_shape = schema_shape(&Connection::open(&fresh).unwrap());
+    let upgraded_shape = schema_shape(&Connection::open(&upgraded).unwrap());
+    for table in V16_TABLES {
+        assert!(
+            fresh_shape.iter().any(|(name, _, _)| name == table),
+            "fresh schema lacks {table}"
+        );
+    }
+    assert_eq!(fresh_shape, upgraded_shape);
+}
+
+#[test]
+fn v16_migration_keeps_v15_rows_and_replays_over_a_stale_stamp() {
+    let (_dir, path, card) = create_file_db("kept across v16");
+    rewind_to_v15(&path);
+    let before = {
+        let conn = Connection::open(&path).unwrap();
+        (raw_rows(&conn, "cards"), raw_rows(&conn, "columns"))
+    };
+    drop(Db::open(&path).unwrap());
+    {
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            (raw_rows(&conn, "cards"), raw_rows(&conn, "columns")),
+            before,
+            "v16 must not rewrite a v15 row"
+        );
+        conn.execute(
+            "INSERT INTO linear_notes (space, issue_identifier, body, author)
+             VALUES ('ws-1', 'WEB-1', 'kept note', 'user')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA user_version = 15;").unwrap();
+    }
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    assert_eq!(
+        db.get_card(card.id).unwrap().unwrap().title,
+        "kept across v16"
+    );
+    drop(db);
+    let conn = Connection::open(&path).unwrap();
+    let body: String = conn
+        .query_row("SELECT body FROM linear_notes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        body, "kept note",
+        "a replayed v16 step must not recreate a table"
+    );
+}
+
+const PRE_OWNER_V16_SQL: &str = "
+DROP TABLE linear_marks;
+DROP TABLE linear_notes;
+DROP TABLE linear_show_requests;
+CREATE TABLE linear_marks (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('attention','suggestion')),
+  text             TEXT,
+  detail_json      TEXT,
+  created_by       TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE linear_notes (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  body             TEXT NOT NULL,
+  author           TEXT NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE linear_show_requests (
+  id               INTEGER PRIMARY KEY,
+  space            TEXT NOT NULL,
+  issue_identifier TEXT NOT NULL,
+  reason           TEXT,
+  requested_by     TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged_at  TEXT
+);
+CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);
+CREATE INDEX idx_linear_notes_space ON linear_notes(space, issue_identifier);
+CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
+PRAGMA user_version = 16;
+";
+
+const OWNER_COLUMNS: [&str; 3] = [
+    "owner_herdr_socket",
+    "owner_herdr_pane_id",
+    "owner_claude_session_id",
+];
+
+fn rewind_to_pre_owner_v16(path: &std::path::Path) {
+    Connection::open(path)
+        .unwrap()
+        .execute_batch(PRE_OWNER_V16_SQL)
+        .unwrap();
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
+        [column],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+fn selected(conn: &Connection, table: &str, columns: &str) -> Vec<Vec<Value>> {
+    let mut statement = conn
+        .prepare(&format!("SELECT {columns} FROM {table} ORDER BY id"))
+        .unwrap();
+    let width = statement.column_count();
+    statement
+        .query_map([], |row| {
+            (0..width)
+                .map(|c| row.get(c))
+                .collect::<rusqlite::Result<Vec<Value>>>()
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn fresh_and_pre_owner_v16_databases_share_the_amended_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let amended = dir.path().join("amended.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&amended).unwrap());
+    rewind_to_pre_owner_v16(&amended);
+    let db = Db::open(&amended).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    let fresh_conn = Connection::open(&fresh).unwrap();
+    for table in ["linear_marks", "linear_notes", "linear_show_requests"] {
+        for column in OWNER_COLUMNS {
+            assert!(
+                has_column(&fresh_conn, table, column),
+                "fresh schema lacks {table}.{column}"
+            );
+        }
+    }
+    for column in ["expires_at", "outcome"] {
+        assert!(has_column(&fresh_conn, "linear_show_requests", column));
+    }
+    assert_eq!(
+        schema_shape(&fresh_conn),
+        schema_shape(&Connection::open(&amended).unwrap())
+    );
+}
+
+#[test]
+fn upgraded_v15_database_lands_on_the_amended_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let upgraded = dir.path().join("upgraded.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&upgraded).unwrap());
+    rewind_to_v15(&upgraded);
+    drop(Db::open(&upgraded).unwrap());
+    let conn = Connection::open(&upgraded).unwrap();
+    assert!(has_column(&conn, "linear_show_requests", "outcome"));
+    assert_eq!(
+        schema_shape(&Connection::open(&fresh).unwrap()),
+        schema_shape(&conn)
+    );
+}
+
+#[test]
+fn pre_owner_v16_rows_survive_with_no_owner_and_a_pending_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    let before = {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO linear_marks (space, issue_identifier, kind, text, detail_json, created_by)
+               VALUES ('ws-1', 'WEB-1', 'attention', 'look', '{\"a\":1}', 'agent');
+             INSERT INTO linear_marks (space, issue_identifier, kind)
+               VALUES ('ws-1', 'WEB-2', 'suggestion');
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'a note', 'user');
+             INSERT INTO linear_show_requests (space, issue_identifier, reason, requested_by)
+               VALUES ('ws-1', 'WEB-1', 'ready', 'agent');",
+        )
+        .unwrap();
+        (
+            raw_rows(&conn, "linear_marks"),
+            raw_rows(&conn, "linear_notes"),
+            raw_rows(&conn, "linear_show_requests"),
+        )
+    };
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_marks",
+            "id, space, issue_identifier, kind, text, detail_json, created_by, created_at"
+        ),
+        before.0
+    );
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_notes",
+            "id, space, issue_identifier, body, author, created_at"
+        ),
+        before.1
+    );
+    assert_eq!(
+        selected(
+            &conn,
+            "linear_show_requests",
+            "id, space, issue_identifier, reason, requested_by, created_at, acknowledged_at"
+        ),
+        before.2
+    );
+    let owners = OWNER_COLUMNS.join(", ");
+    for table in ["linear_marks", "linear_notes"] {
+        for row in selected(&conn, table, &owners) {
+            assert!(row.iter().all(|v| *v == Value::Null), "{table}: {row:?}");
+        }
+    }
+    for row in selected(
+        &conn,
+        "linear_show_requests",
+        &format!("{owners}, expires_at, outcome"),
+    ) {
+        assert!(
+            row.iter().all(|v| *v == Value::Null),
+            "a pre-amendment request must come out ownerless and pending: {row:?}"
+        );
+    }
+}
+
+#[test]
+fn amended_checks_admit_four_mark_kinds_and_four_outcomes_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("kinds.db");
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    for kind in ["attention", "question", "done", "suggestion"] {
+        conn.execute(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', ?1)",
+            [kind],
+        )
+        .unwrap_or_else(|e| panic!("kind {kind} refused: {e}"));
+    }
+    for outcome in ["accepted", "rejected", "withdrawn", "expired"] {
+        conn.execute(
+            "INSERT INTO linear_show_requests (space, issue_identifier, outcome)
+             VALUES ('ws-1', 'WEB-1', ?1)",
+            [outcome],
+        )
+        .unwrap_or_else(|e| panic!("outcome {outcome} refused: {e}"));
+    }
+    let refused = conn
+        .execute(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'urgent')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("CHECK"), "{refused}");
+    let refused = conn
+        .execute(
+            "INSERT INTO linear_show_requests (space, issue_identifier, outcome)
+             VALUES ('ws-1', 'WEB-1', 'ignored')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("CHECK"), "{refused}");
+}
+
+#[test]
+fn owned_rows_round_trip_through_the_row_structs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owned.db");
+    drop(Db::open(&path).unwrap());
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO linear_marks
+               (id, space, issue_identifier, kind, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+               VALUES (1, 'ws-1', 'WEB-1', 'question', '/tmp/h.sock', 'p-1', 'sess-1');
+             INSERT INTO linear_marks (id, space, issue_identifier, kind)
+               VALUES (2, 'ws-1', 'WEB-1', 'done');
+             INSERT INTO linear_notes
+               (id, space, issue_identifier, body, author, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+               VALUES (1, 'ws-1', 'WEB-1', 'n', 'agent', '/tmp/h.sock', 'p-2', 'sess-2');
+             INSERT INTO linear_show_requests
+               (id, space, issue_identifier, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id, expires_at, outcome)
+               VALUES (1, 'ws-1', 'WEB-1', '/tmp/h.sock', 'p-3', 'sess-3', '2026-09-30 12:30:00', 'withdrawn');",
+        )
+        .unwrap();
+    let db = Db::open(&path).unwrap();
+    let mark = db.mark(1).unwrap().unwrap();
+    assert_eq!(mark.kind, MarkKind::Question);
+    assert_eq!(
+        (
+            mark.owner_herdr_socket.as_deref(),
+            mark.owner_herdr_pane_id.as_deref(),
+            mark.owner_claude_session_id.as_deref()
+        ),
+        (Some("/tmp/h.sock"), Some("p-1"), Some("sess-1"))
+    );
+    let unowned = db.mark(2).unwrap().unwrap();
+    assert_eq!(unowned.kind, MarkKind::Done);
+    assert_eq!(unowned.owner_herdr_pane_id, None);
+    let note = db.note(1).unwrap().unwrap();
+    assert_eq!(note.owner_claude_session_id.as_deref(), Some("sess-2"));
+    let request = db.show_request(1).unwrap().unwrap();
+    assert_eq!(request.owner_herdr_pane_id.as_deref(), Some("p-3"));
+    assert_eq!(request.expires_at.as_deref(), Some("2026-09-30 12:30:00"));
+    assert_eq!(request.outcome, Some(ShowOutcome::Withdrawn));
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["outcome"], "withdrawn");
+    assert_eq!(
+        serde_json::from_value::<board_core::db::ShowRequest>(wire).unwrap(),
+        request
+    );
+}
+
+#[test]
+fn pre_owner_v16_rebuild_runs_once_then_reopen_is_a_no_op() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("once.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    drop(Db::open(&path).unwrap());
+    {
+        let conn = Connection::open(&path).unwrap();
+        assert!(has_column(&conn, "linear_marks", "owner_claude_session_id"));
+        conn.execute(
+            "INSERT INTO linear_marks
+               (space, issue_identifier, kind, owner_herdr_socket, owner_herdr_pane_id, owner_claude_session_id)
+             VALUES ('ws-1', 'WEB-1', 'question', '/tmp/h.sock', 'p-1', 'sess-1')",
+            [],
+        )
+        .unwrap();
+    }
+    let before = raw_rows(&Connection::open(&path).unwrap(), "linear_marks");
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    assert_eq!(
+        raw_rows(&Connection::open(&path).unwrap(), "linear_marks"),
+        before,
+        "a second open must not rebuild again"
+    );
+}
+
+#[test]
+fn failed_pre_owner_rebuild_rolls_back_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollback.db");
+    drop(Db::open(&path).unwrap());
+    rewind_to_pre_owner_v16(&path);
+    {
+        let conn = Connection::open(&path).unwrap();
+        // The amended CHECK refuses `bogus`, so the marks copy fails after the
+        // notes step already ran in the same transaction.
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'kept', 'user');
+             INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'bogus');
+             INSERT INTO linear_show_requests (space, issue_identifier) VALUES ('ws-1', 'WEB-1');",
+        )
+        .unwrap();
+    }
+    let snapshot = |conn: &Connection| {
+        (
+            schema_shape(conn),
+            raw_rows(conn, "linear_marks"),
+            raw_rows(conn, "linear_notes"),
+            raw_rows(conn, "linear_show_requests"),
+        )
+    };
+    let before = snapshot(&Connection::open(&path).unwrap());
+    for attempt in 0..2 {
+        assert!(
+            Db::open(&path).is_err(),
+            "attempt {attempt}: a failing rebuild must abort the open"
+        );
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            snapshot(&conn),
+            before,
+            "attempt {attempt}: the pre-amendment shape and rows must be intact"
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            16
+        );
+    }
+}
+
+const SESSION_TABLES: [&str; 4] = [
+    "linear_marks",
+    "linear_notes",
+    "linear_show_requests",
+    "linear_activity",
+];
+
+#[test]
+fn a_v16_database_without_herdr_session_gains_it_and_old_rows_read_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh.db");
+    let path = dir.path().join("sessionless.db");
+    drop(Db::open(&fresh).unwrap());
+    drop(Db::open(&path).unwrap());
+    {
+        let conn = Connection::open(&path).unwrap();
+        for table in SESSION_TABLES {
+            conn.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN herdr_session"))
+                .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO linear_marks (space, issue_identifier, kind) VALUES ('ws-1', 'WEB-1', 'done');
+             INSERT INTO linear_notes (space, issue_identifier, body, author)
+               VALUES ('ws-1', 'WEB-1', 'n', 'agent');
+             INSERT INTO linear_show_requests (space, issue_identifier) VALUES ('ws-1', 'WEB-1');
+             INSERT INTO linear_activity (space, tool_name) VALUES ('ws-1', 'save_issue');",
+        )
+        .unwrap();
+    }
+    let db = Db::open(&path).unwrap();
+    assert_eq!(db.user_version().unwrap(), 16);
+    drop(db);
+    let conn = Connection::open(&path).unwrap();
+    for table in SESSION_TABLES {
+        assert_eq!(
+            selected(&conn, table, "herdr_session"),
+            vec![vec![Value::Text("default".into())]],
+            "{table}"
+        );
+    }
+    assert_eq!(
+        schema_shape(&Connection::open(&fresh).unwrap()),
+        schema_shape(&conn)
+    );
+}
+
 #[test]
 fn migration_seeds_board_and_todo_column() {
     let db = mem();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let board = db.get_board(BOARD_ID).unwrap();
     // The Global project keeps the legacy board id 1, renamed `main` by v14;
     // the Global identity now lives on the project itself.
@@ -359,7 +929,7 @@ fn v11_rows_gain_nullable_anchor_column_without_backfill() {
         .unwrap();
     }
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     assert_eq!(db.list_runs(1).unwrap()[0].herdr_anchor_pane_id, None);
 }
 
@@ -374,7 +944,7 @@ fn migration_idempotent_on_reopen() {
     // Reopen: must not re-seed (still exactly one board, one column).
     {
         let db = Db::open(&path).unwrap();
-        assert_eq!(db.user_version().unwrap(), 15);
+        assert_eq!(db.user_version().unwrap(), 16);
         assert_eq!(db.list_columns(BOARD_ID).unwrap().len(), 1);
         assert_eq!(db.get_board(BOARD_ID).unwrap().name, "main");
     }
@@ -464,7 +1034,7 @@ fn migration_v2_upgrades_v1_database() {
     }
     // Open via Db → runs the v2 through v14 migrations.
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let cards = db.list_cards(BOARD_ID).unwrap();
     assert_eq!(cards.len(), 2);
     for c in &cards {
@@ -607,7 +1177,7 @@ fn migration_v4_preserves_claude_cards_and_accepts_pi_efforts() {
     }
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let existing = db.list_cards(BOARD_ID).unwrap();
     assert_eq!(existing[0].harness, "claude");
     assert_eq!(db.list_comments(existing[0].id).unwrap().len(), 1);
@@ -635,7 +1205,7 @@ fn migration_does_not_downgrade_future_schema_version() {
     let path = tmp.path().to_path_buf();
     let card_id = {
         let db = Db::open(&path).unwrap();
-        assert_eq!(db.user_version().unwrap(), 15);
+        assert_eq!(db.user_version().unwrap(), 16);
         db.create_card(&CardCreateParams {
             title: "written by a newer board".into(),
             ..Default::default()
@@ -698,14 +1268,14 @@ fn migration_replay_from_a_past_version_stamp_is_a_no_op() {
     let path = tmp.path().to_path_buf();
     {
         let db = Db::open(&path).unwrap();
-        assert_eq!(db.user_version().unwrap(), 15);
+        assert_eq!(db.user_version().unwrap(), 16);
     }
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch("PRAGMA user_version = 8;").unwrap();
     }
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     assert_eq!(db.list_columns(BOARD_ID).unwrap().len(), 1);
     assert_eq!(db.get_board(BOARD_ID).unwrap().name, "main");
 }
@@ -733,7 +1303,7 @@ fn migration_v3_adds_archived_at_to_v2_database() {
         .unwrap();
     }
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let cards = db.list_cards(BOARD_ID).unwrap();
     assert_eq!(cards.len(), 1);
     assert!(cards[0].archived_at.is_none());
@@ -833,7 +1403,7 @@ fn v6_to_v7_migration_preserves_legacy_queued_run_byte_for_byte() {
         .unwrap();
     }
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let run = &db.list_runs(1).unwrap()[0];
     assert_eq!(run.argv_json, argv);
     assert_eq!(run.prompt_snapshot, prompt);
@@ -886,7 +1456,7 @@ fn migration_v5_preserves_global_data_and_renames_it() {
 
     let db = Db::open(&path).unwrap();
     let global = db.get_board(BOARD_ID).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     // v5 still renames the legacy board to Global; v14 moves that identity
     // onto the Global project and renames the board itself back to `main`.
     assert_eq!(db.get_project(1).unwrap().name, "Global");
@@ -983,7 +1553,7 @@ fn migration_v6_rebuilds_cards_check_and_preserves_data() {
     }
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     let cards = db.list_cards(BOARD_ID).unwrap();
     assert_eq!(cards.len(), 2);
     let kept = &cards[0];
@@ -1186,7 +1756,7 @@ fn fresh_v12_has_exact_partial_scheduler_indexes_and_query_plans() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.db");
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     drop(db);
     let conn = Connection::open(path).unwrap();
     for (name, expected) in [
@@ -1260,7 +1830,7 @@ fn v9_file_fixture_upgrades_through_v14_without_changing_existing_bytes() {
     drop(conn);
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     // v14 rebuilds `boards` (id preserved, name becomes `main`); cards and
     // runs keep every byte.
     assert_eq!(db.get_board(BOARD_ID).unwrap().id, BOARD_ID);
@@ -1276,7 +1846,7 @@ fn v9_file_fixture_upgrades_through_v14_without_changing_existing_bytes() {
         assert_eq!(
             conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         assert_eq!(
             scheduler_index_sql(&conn, "idx_runs_queued_fifo").as_deref(),
@@ -1439,7 +2009,7 @@ fn v8_upgrade_retains_a_single_open_run_byte_for_byte() {
         .unwrap();
 
     let db = Db::open(&path).unwrap();
-    assert_eq!(db.user_version().unwrap(), 15);
+    assert_eq!(db.user_version().unwrap(), 16);
     assert_eq!(db.get_run(before.id).unwrap(), before);
 }
 
@@ -1457,7 +2027,7 @@ fn fresh_and_v7_upgrade_install_exact_partial_unique_index_sql() {
                 .unwrap();
         }
         let db = Db::open(&path).unwrap();
-        assert_eq!(db.user_version().unwrap(), 15);
+        assert_eq!(db.user_version().unwrap(), 16);
         drop(db);
         let sql: String = Connection::open(&path)
             .unwrap()

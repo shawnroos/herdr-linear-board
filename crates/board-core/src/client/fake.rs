@@ -11,13 +11,12 @@ use crate::protocol::{
     CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams,
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DeletedResult, Event, LinearBindHandoffParams, LinearBindHandoffResult,
-    LinearIssueDocument, LinearIssueParams, LinearListKind, LinearListParams, LinearListResult,
-    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
-    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
-    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
-    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
-    TemplateApplyParams, Trigger,
+    CommentUpdateParams, DeletedResult, Event, LinearIssueDocument, LinearIssueParams,
+    LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
+    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
+    RunFocusResult, TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -56,6 +55,9 @@ pub struct FakeBoardClient {
     /// the daemon answers (`run.focus`). Defaults mean built-ins only.
     config: crate::config::Config,
     linear: FakeLinear,
+    /// Unix seconds the local-state methods read as now; `None` is the wall
+    /// clock.
+    now: Option<i64>,
 }
 
 /// What the fake answers for the Linear-mode methods. There is no plugin
@@ -65,7 +67,6 @@ pub struct FakeLinear {
     pub snapshot: Result<LinearSnapshot, String>,
     pub focus: Result<PaneFocusResult, String>,
     pub lists: std::collections::BTreeMap<LinearListKind, Result<LinearListResult, String>>,
-    pub bind_handoff: Result<LinearBindHandoffResult, String>,
     /// Keyed by the issue asked for, so a test can seed several pages and prove
     /// a result is applied only to the issue still open.
     pub issues: std::collections::BTreeMap<String, Result<LinearIssueDocument, String>>,
@@ -83,7 +84,6 @@ impl Default for FakeLinear {
                 gone: false,
             }),
             lists: std::collections::BTreeMap::new(),
-            bind_handoff: Err("no linear bind handoff fixture configured".into()),
             issues: std::collections::BTreeMap::new(),
             issue_unsupported: false,
         }
@@ -143,6 +143,26 @@ impl FakeBoardClient {
             db: Db::open_in_memory()?,
             config: crate::config::Config::default(),
             linear: FakeLinear::default(),
+            now: None,
+        })
+    }
+
+    /// Pin the clock the local-state methods read, so request expiry is
+    /// deterministic; the time can be moved with `set_now`.
+    pub fn with_now(mut self, now: i64) -> FakeBoardClient {
+        self.now = Some(now);
+        self
+    }
+
+    pub fn set_now(&mut self, now: i64) {
+        self.now = Some(now);
+    }
+
+    fn now(&self) -> i64 {
+        self.now.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
         })
     }
 
@@ -213,18 +233,6 @@ impl FakeBoardClient {
         self
     }
 
-    pub fn with_linear_bind_handoff(mut self, result: LinearBindHandoffResult) -> FakeBoardClient {
-        self.linear.bind_handoff = Ok(result);
-        self
-    }
-
-    /// Make `linear.bind_handoff` fail with `message`; every failure after the
-    /// tab exists reports herdr unavailable (code 4).
-    pub fn with_linear_bind_handoff_error(mut self, message: &str) -> FakeBoardClient {
-        self.linear.bind_handoff = Err(message.to_string());
-        self
-    }
-
     /// Declare config-defined harnesses (`[harness.NAME]`) so tests can exercise
     /// the resume opt-in through the fake.
     pub fn with_config(mut self, config: crate::config::Config) -> FakeBoardClient {
@@ -246,7 +254,7 @@ impl FakeBoardClient {
 /// read (`db`, `config`, `linear`, `params`) are named at the invocation below so they
 /// keep ordinary call-site scoping.
 macro_rules! fake_methods {
-    ($db:ident, $config:ident, $linear:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
+    ($db:ident, $config:ident, $linear:ident, $now:ident, $params:ident, { $($method:literal => $arm:expr),* $(,)? }) => {
         /// Every board method [`FakeBoardClient`] implements.
         ///
         /// The whole board-tui test tier runs against this fake, so its surface
@@ -259,6 +267,7 @@ macro_rules! fake_methods {
                 let $config = self.config.clone();
                 let $db = &self.db;
                 let $linear = &self.linear;
+                let $now = self.now();
                 let v = match method {
                     $($method => $arm,)*
                     other => anyhow::bail!("FakeBoardClient: unsupported method {other}"),
@@ -308,7 +317,7 @@ fn project_open_result(
     })?)
 }
 
-fake_methods!(db, config, linear, params, {
+fake_methods!(db, config, linear, now, params, {
     "board.get" => {
         let p: BoardGetParams = serde_json::from_value(params)?;
         let board_id = p.board_id.unwrap_or(BOARD_ID);
@@ -871,14 +880,87 @@ fake_methods!(db, config, linear, params, {
             }
         }
     },
-    "linear.bind_handoff" => {
-        let _: LinearBindHandoffParams = serde_json::from_value(params)?;
-        match &linear.bind_handoff {
-            Ok(result) => serde_json::to_value(result.clone())?,
-            Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
+    "linear.state.get" => {
+        let p: crate::protocol::LinearStateGetParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_state(
+            &crate::db::herdr_session(p.herdr_socket.as_deref()),
+            &p.space,
+            now,
+        )?)?
+    },
+    "linear.bind" => serde_json::to_value(db.linear_bind(&serde_json::from_value(params)?)?)?,
+    "linear.space.bind" => {
+        serde_json::to_value(db.linear_space_bind(&serde_json::from_value(params)?)?)?
+    },
+    "linear.unbind" => serde_json::to_value(db.linear_unbind(&serde_json::from_value(params)?)?)?,
+    "linear.grouping.get" => {
+        serde_json::to_value(db.linear_grouping_get(&params_or_default(params)?)?)?
+    },
+    "linear.grouping.set" => {
+        serde_json::to_value(db.linear_grouping_change(&serde_json::from_value(params)?, true)?)?
+    },
+    "linear.grouping.preview" => {
+        serde_json::to_value(db.linear_grouping_change(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.mark.set" => {
+        serde_json::to_value(db.linear_mark_set(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.mark.clear" => {
+        let p: crate::protocol::LinearMarkClearParams = serde_json::from_value(params)?;
+        match p.target()? {
+            crate::protocol::MarkClearTarget::One(id) => {
+                serde_json::to_value(db.linear_mark_clear(id)?)?
+            }
+            crate::protocol::MarkClearTarget::Many(ids) => {
+                serde_json::to_value(db.linear_mark_clear_ids(&ids)?)?
+            }
         }
     },
+    "linear.mark.unmark" => {
+        serde_json::to_value(db.linear_mark_unmark(&serde_json::from_value(params)?)?)?
+    },
+    "linear.note.set" => {
+        serde_json::to_value(db.linear_note_set(&serde_json::from_value(params)?, false)?)?
+    },
+    "linear.note.clear" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_note_clear(p.id)?)?
+    },
+    "linear.show.request" => serde_json::to_value(db.linear_show_request(
+        &serde_json::from_value(params)?,
+        false,
+        now,
+        crate::db::SHOW_REQUEST_TTL_DEFAULT_SECS,
+    )?)?,
+    "linear.show.accept" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_show_accept(p.id, now)?)?
+    },
+    "linear.show.dismiss" => {
+        let p: crate::protocol::LinearIdParams = serde_json::from_value(params)?;
+        serde_json::to_value(db.linear_show_dismiss(p.id, now)?)?
+    },
+    "linear.show.withdraw" => {
+        serde_json::to_value(db.linear_show_withdraw(&serde_json::from_value(params)?, now)?)?
+    },
+    "linear.session.get" => {
+        serde_json::to_value(db.linear_session_get(&serde_json::from_value(params)?, now)?)?
+    },
+    "linear.activity.record" => {
+        serde_json::to_value(db.linear_activity_record(&serde_json::from_value(params)?)?)?
+    },
+    "linear.activity.list" => {
+        serde_json::to_value(db.linear_activity_list(&params_or_default(params)?)?)?
+    },
 });
+
+fn params_or_default<T: serde::de::DeserializeOwned + Default>(params: Value) -> anyhow::Result<T> {
+    if params.is_null() {
+        Ok(T::default())
+    } else {
+        Ok(serde_json::from_value(params)?)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1055,33 +1137,157 @@ mod tests {
     }
 
     #[test]
-    fn linear_bind_handoff_answers_the_configured_result_or_error() {
-        let params = LinearBindHandoffParams {
-            space: "space-one".into(),
-            project: "project-one".into(),
-            origin_socket: "/tmp/herdr.sock".into(),
-            ..LinearBindHandoffParams::default()
+    fn linear_space_bind_writes_the_binding_and_returns_before_and_after() {
+        use crate::protocol::{ActivityClaims, LinearSpaceBindParams, LinearStateGetParams};
+        let mut client = FakeBoardClient::new().unwrap();
+        let first = client
+            .linear_space_bind(&LinearSpaceBindParams {
+                space: "wA".into(),
+                project: "p1".into(),
+                view: None,
+                claims: ActivityClaims {
+                    herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+                    ..ActivityClaims::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(first.before, None);
+        let after = first.after.unwrap();
+        assert_eq!(after.project_id, "p1");
+        assert_eq!(after.view, None);
+
+        let second = client
+            .linear_space_bind(&LinearSpaceBindParams {
+                space: "wA".into(),
+                project: "p2".into(),
+                view: Some("v9".into()),
+                claims: ActivityClaims {
+                    herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+                    ..ActivityClaims::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(second.before.unwrap().project_id, "p1");
+        assert_eq!(
+            second.after.unwrap().view,
+            Some(serde_json::json!({"id": "v9"}))
+        );
+
+        let state = client
+            .linear_state_get(&LinearStateGetParams {
+                space: "wA".into(),
+                herdr_socket: Some("/tmp/herdr/sessions/work/herdr.sock".into()),
+            })
+            .unwrap();
+        assert_eq!(state.space_bindings.len(), 1);
+        assert_eq!(state.space_bindings[0].project_id, "p2");
+
+        let refused = client.linear_space_bind(&LinearSpaceBindParams {
+            space: "wA".into(),
+            project: "-rf".into(),
+            ..LinearSpaceBindParams::default()
+        });
+        assert!(refused.is_err(), "an option-shaped project id is refused");
+    }
+
+    #[test]
+    fn linear_local_state_writes_round_trip_through_the_fake() {
+        use crate::protocol::{
+            LinearActivityListParams, LinearActivityOutcome, LinearActivityRecordParams,
+            LinearBindParams, LinearGroupingGetParams, LinearGroupingSetParams,
+            LinearMarkSetParams, LinearNoteSetParams, LinearShowRequestParams,
+            LinearStateGetParams, LinearUnbindParams, MarkKind,
         };
-
-        let mut unconfigured = FakeBoardClient::new().unwrap();
-        assert!(unconfigured.linear_bind_handoff(&params).is_err());
-
-        let result = LinearBindHandoffResult {
-            tab_id: "tab-1".into(),
-            pane_id: "pane-1".into(),
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let cwd = root.to_str().unwrap().to_string();
+        let mut client = FakeBoardClient::new().unwrap();
+        let get = LinearStateGetParams {
+            space: "space-1".into(),
+            herdr_socket: None,
         };
-        let mut client = FakeBoardClient::new()
-            .unwrap()
-            .with_linear_bind_handoff(result.clone());
-        assert_eq!(client.linear_bind_handoff(&params).unwrap(), result);
+        let initial = client.linear_state_get(&get).unwrap();
 
-        let mut failing = FakeBoardClient::new()
+        let bound = client
+            .linear_bind(&LinearBindParams {
+                cwd: cwd.clone(),
+                issue: "WEB-1".into(),
+                ..LinearBindParams::default()
+            })
+            .unwrap();
+        assert_eq!(bound.before, None);
+        assert_eq!(bound.after.as_ref().unwrap().worktree_path, cwd);
+
+        let mark = client
+            .linear_mark_set(&LinearMarkSetParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                kind: MarkKind::Attention,
+                text: Some("look".into()),
+                created_by: None,
+                owner: Default::default(),
+            })
+            .unwrap();
+        client.linear_mark_clear(mark.after.id).unwrap();
+        let note = client
+            .linear_note_set(&LinearNoteSetParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                body: "b\u{1b}".into(),
+                author: "a".into(),
+                owner: Default::default(),
+            })
+            .unwrap();
+        assert_eq!(note.after.body, "b");
+        client.linear_note_clear(note.after.id).unwrap();
+        let show = client
+            .linear_show_request(&LinearShowRequestParams {
+                space: "space-1".into(),
+                issue: "WEB-1".into(),
+                ..LinearShowRequestParams::default()
+            })
+            .unwrap();
+        let id = show.after.unwrap().id;
+        client.linear_show_dismiss(id).unwrap();
+        assert!(client.linear_show_accept(id).is_err());
+        let recorded = client
+            .linear_activity_record(&LinearActivityRecordParams {
+                tool_name: "mcp__linear__save_comment".into(),
+                space: Some("space-1".into()),
+                ..LinearActivityRecordParams::default()
+            })
+            .unwrap();
+        assert_eq!(recorded.outcome, LinearActivityOutcome::Recorded);
+        let listed = client
+            .linear_activity_list(&LinearActivityListParams {
+                space: Some("space-1".into()),
+                ..LinearActivityListParams::default()
+            })
+            .unwrap();
+        assert_eq!(listed.activity.len(), 1);
+        let text = r#"{"global": {"levels": {"column": "state"}, "filter": {"team": "ENG"}}}"#;
+        let set = LinearGroupingSetParams {
+            space: None,
+            text: Some(text.into()),
+        };
+        assert_eq!(
+            client.linear_grouping_preview(&set).unwrap(),
+            client.linear_grouping_set(&set).unwrap()
+        );
+        assert!(client
+            .linear_grouping_get(&LinearGroupingGetParams::default())
             .unwrap()
-            .with_linear_bind_handoff_error("herdr is not running");
-        let err = failing.linear_bind_handoff(&params).unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<crate::Error>(),
-            Some(crate::Error::HerdrUnavailable(m)) if m == "herdr is not running"
-        ));
+            .config
+            .is_some());
+        client
+            .linear_unbind(&LinearUnbindParams {
+                cwd,
+                ..LinearUnbindParams::default()
+            })
+            .unwrap();
+        let after = client.linear_state_get(&get).unwrap();
+        assert_eq!(after.worktree_bindings, initial.worktree_bindings);
+        assert!(after.marks.is_empty() && after.notes.is_empty() && after.show_requests.is_empty());
     }
 }

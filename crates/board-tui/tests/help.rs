@@ -71,6 +71,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         "move_column.rs" => vec!["MoveColumn"],
         "reorder_card.rs" => vec!["ReorderCard"],
         "comment_history.rs" => vec!["CommentHistory"],
+        "session.rs" => vec!["SessionPane"],
         "linear.rs" => vec![
             "LinearBoard",
             "LinearDetail",
@@ -99,15 +100,16 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
             "LinearError",
             "LinearStaleDaemon",
             "LinearPicker",
+            "SessionPane",
         ],
         // `mouse.rs` *synthesizes* key events to reuse a screen's handler (for
         // example, the Card Detail comment `[ Edit ]` action replays `e`); it
         // binds nothing of its own, so its literals are documented wherever the
         // real handler lives.
         "mouse.rs" => return None,
-        // Pure state, effect, and drag-lifecycle modules: no key handling at
-        // all, so there is nothing here to document.
-        "state.rs" | "effect.rs" | "drag.rs" => return None,
+        // Pure state, effect, drag-lifecycle and Linear cursor modules: no key
+        // handling at all, so there is nothing here to document.
+        "state.rs" | "effect.rs" | "drag.rs" | "linear_cursor.rs" => return None,
         other => panic!(
             "src/app/{other} is a new key handler with no help section mapped — \
              add it to `sections_for` and give it rows in view::HELP_KEYS"

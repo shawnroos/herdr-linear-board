@@ -29,6 +29,17 @@ pub enum SplitDirection {
     Down,
 }
 
+/// `plugin.pane.open` placement, the full 0.9.0 vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPanePlacement {
+    Overlay,
+    Popup,
+    Split,
+    Tab,
+    Zoomed,
+}
+
 /// Where to read pane text from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,6 +118,14 @@ pub struct PaneInfo {
     pub cwd: Option<String>,
     pub focused: bool,
     pub revision: u64,
+}
+
+/// A plugin pane, as `plugin.pane.open` returns it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PluginPaneInfo {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub pane: PaneInfo,
 }
 
 /// An agent-session reference (the `AgentSessionInfo` object that

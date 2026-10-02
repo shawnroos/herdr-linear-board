@@ -2,7 +2,7 @@
 
 ![Rust](https://img.shields.io/badge/rust-edition%202021-orange.svg)
 ![herdr 0.9.0](https://img.shields.io/badge/herdr-0.9.0-8a2be2)
-![board protocol v1 · schema v15](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v15-blue.svg)
+![board protocol v1 · schema v16](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v16-blue.svg)
 ![platforms: linux, macOS](https://img.shields.io/badge/platforms-linux%2C%20macOS-informational)
 
 **Turn a kanban card into a real AI coding agent running in a visible Herdr pane.** Cards hold
@@ -91,13 +91,18 @@ interfaces that talk to it. The CLI also exposes `board skill`, which prints the
 dispatched agent is held to. All board state lives under `~/.local/share/herdr-board/`; Herdr's own
 state is never modified.
 
-Opened inside a herdr space that the work plugin has bound to a Linear project, `board tui` runs in
-**Linear mode**: it renders that project's issues, worktrees and live panes from the plugin's
-snapshot instead of a kanban, and writes nothing to Linear, the plugin's records or SQLite. It sets its own pane title and can start a bind in a new herdr tab. The daemon runs the plugin's `bin/work-snapshot.sh` and its three list scripts
-from the installed `work@shrimpshack` plugin; until a plugin release with that script is installed,
-point `BOARD_WORK_PLUGIN_ROOT` (or `[daemon] work_plugin_root` in the config) at a plugin checkout.
-`board linear snapshot <workspace-id> --json` prints the same document from the command line. See
-[`docs/design.md`](docs/design.md) section 13.
+Opened inside a herdr space bound to a Linear project, `board tui` runs in **Linear mode**: it
+shows that project's issues as tabs, columns and swimlanes, grouped the way you configured, with
+the worktrees and live panes that belong to each issue. The daemon reads Linear itself, read-only,
+with the key from your macOS Keychain, and keeps bindings, marks and notes in its own database.
+It never writes Linear: agents create and update tickets through Linear's own MCP server, and the
+board links that work to your sessions. Agents use `board mcp` to bind their worktree, mark cards,
+notify you, ask you to look at an issue, and open a board beside their own pane without taking
+focus; `a` / `x` answer them. Coming from the work plugin? Run `board import work-store` once to
+copy its bindings and grouping into the board. `board linear snapshot <workspace-id> --json`
+prints the board's read from the command line, and `board linear status-line` puts an agent's
+bound issue in Claude Code's status line. Setup: [`docs/install.md`](docs/install.md) → Linear mode
+and agent tools. Design: [`docs/design.md`](docs/design.md) section 13.
 
 ## Install
 
@@ -148,7 +153,7 @@ prefix is `ctrl+a`, it is `Ctrl+A Shift+K`). Do not reuse `prefix+k` — it is H
 - Requires exactly **Herdr 0.9.0 (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
   Linux and macOS are supported. The daemon rejects any other Herdr version or protocol before
   workspace discovery and pane launch.
-- Board protocol **v1**, SQLite schema **v15** (`schema.sql`; upgrades via `board-core::db`).
+- Board protocol **v1**, SQLite schema **v16** (`schema.sql`; upgrades via `board-core::db`).
 - The installer copies the `board` CLI to `~/.local/bin` — make sure that directory is on your
   `PATH` (`HERDR_BOARD_CLI_INSTALL_DIR` overrides it before installing).
 - Without the harness integration the board still dispatches and accepts `board done`, but runs in
@@ -270,7 +275,9 @@ selected/current board.
 | `board column` | `list`, `create`, `show`, `edit`, `reorder`, `delete` |
 | `board harness` | `list`, `models`, `efforts`, `permissions` |
 | `board space` / `board session` | `list` |
-| `board linear` | `snapshot [WORKSPACE_ID]`, `space list`, `project list`, `view list <PROJECT_ID>` |
+| `board linear` | `snapshot [WORKSPACE_ID]`, `issue <ID>`, `space list`, `project list`, `view list <PROJECT_ID>`, `session [WORKSPACE_ID]`, `status-line`, `report` |
+| `board import` | `work-store [--dry-run]` |
+| `board mcp` | the stdio MCP server for agents (see the skill) |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -304,13 +311,13 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1`–`6` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal, work plugin unavailable |
+| `1`–`7` | Daemon protocol code: bad request, not found, invalid state, Herdr unavailable, internal; `6` and `7` come only from an older daemon that ran the work plugin's scripts |
 | `64` | The CLI itself refused — usage/parse error, declined confirmation, bad enum value, unresolvable column, missing `$BOARD_CARD_ID` (`EX_USAGE`) |
-| `70` | Daemon reported a protocol code outside `1..=6`, clamped (`EX_SOFTWARE`) |
+| `70` | Daemon reported a protocol code outside `1..=7`, clamped (`EX_SOFTWARE`) |
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–42);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–45);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development

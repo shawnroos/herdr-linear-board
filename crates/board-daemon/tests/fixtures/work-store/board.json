@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "global": {
+    "levels": {"tab": "parent", "column": "ticket"},
+    "filter": {"project": ["project-1"], "assignee": ["me"]}
+  },
+  "spaces": {
+    "zeta": {"levels": {"tab": "project", "column": "state"}, "filter": {"team": "team-1"}},
+    "alpha": {"levels": {"column": "sub-ticket"}, "filter": {"state-type": "started"}}
+  }
+}

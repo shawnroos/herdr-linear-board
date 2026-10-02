@@ -13,6 +13,7 @@ mod card;
 mod column;
 mod common;
 mod discovery;
+mod import;
 mod project;
 mod run;
 
@@ -23,6 +24,7 @@ pub(crate) use common::ConfirmArgs;
 pub(crate) use discovery::{
     HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
 };
+pub(crate) use import::ImportCmd;
 pub(crate) use project::ProjectCmd;
 pub(crate) use run::RunCmd;
 
@@ -48,7 +50,12 @@ pub(crate) struct Cli {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Cmd {
     /// Open the kanban TUI (auto-starts the daemon).
-    Tui,
+    Tui {
+        /// The session side pane beside one agent, whose identity the
+        /// daemon passes in BOARD_SESSION_* when it opens the pane.
+        #[arg(long)]
+        session: bool,
+    },
     /// Run or inspect the daemon.
     Daemon {
         /// Deprecated: use `board daemon start --foreground`.
@@ -64,6 +71,8 @@ pub(crate) enum Cmd {
     Version,
     /// Print the exact operational skill document.
     Skill,
+    /// Serve the board's agent tools as an MCP server over stdio.
+    Mcp,
     /// Board operations.
     Board {
         #[command(subcommand)]
@@ -151,6 +160,11 @@ pub(crate) enum Cmd {
     Linear {
         #[command(subcommand)]
         sub: LinearCmd,
+    },
+    /// Import local state from another store.
+    Import {
+        #[command(subcommand)]
+        sub: ImportCmd,
     },
 }
 

@@ -263,3 +263,58 @@ impl Iterator for EventStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_event_stream_skips_an_event_it_does_not_know_and_reads_on() {
+        let (mut daemon, client) = UnixStream::pair().unwrap();
+        daemon
+            .write_all(
+                b"{\"event\":\"a_future_event\",\"space\":\"s\"}\n\
+                  {\"event\":\"local_state_changed\",\"space\":\"space-1\"}\n\
+                  {\"event\":\"run_ended\",\"card_id\":1,\"run_id\":2,\"outcome\":\"ok\"}\n",
+            )
+            .unwrap();
+        drop(daemon);
+        let events: Vec<Event> = EventStream {
+            reader: BufReader::new(client),
+        }
+        .collect();
+        assert_eq!(
+            events,
+            vec![
+                Event::LocalStateChanged {
+                    space: Some("space-1".into()),
+                    snapshot: false,
+                },
+                Event::RunEnded {
+                    card_id: 1,
+                    run_id: 2,
+                    outcome: crate::protocol::RunOutcome::Ok,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_old_event_enum_skips_the_local_state_changed_line() {
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "event", rename_all = "snake_case")]
+        enum OldEvent {
+            RunEnded { card_id: i64 },
+        }
+        let line = serde_json::to_string(&Event::LocalStateChanged {
+            space: Some("space-1".into()),
+            snapshot: false,
+        })
+        .unwrap();
+        assert!(serde_json::from_str::<OldEvent>(&line).is_err());
+        assert_eq!(
+            serde_json::from_str::<OldEvent>("{\"event\":\"run_ended\",\"card_id\":3}").unwrap(),
+            OldEvent::RunEnded { card_id: 3 }
+        );
+    }
+}

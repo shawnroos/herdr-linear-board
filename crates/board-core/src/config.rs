@@ -23,6 +23,9 @@ fn default_local_poll_ms() -> u64 {
 fn default_tick_ms() -> u64 {
     1000
 }
+fn default_show_request_ttl_secs() -> i64 {
+    crate::db::SHOW_REQUEST_TTL_DEFAULT_SECS
+}
 
 /// The kind of process spawner used by the daemon.
 ///
@@ -50,9 +53,8 @@ pub struct DaemonConfig {
     pub local_poll_ms: u64,
     #[serde(default = "default_tick_ms")]
     pub tick_ms: u64,
-    /// Root of the installed work plugin (the directory holding
-    /// `.claude-plugin/plugin.json` and `bin/work-snapshot.sh`). Second in the
-    /// resolution order after `BOARD_WORK_PLUGIN_ROOT`.
+    /// Retired: accepted so an existing config still loads, and ignored.
+    /// boardd warns once at startup when it is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_plugin_root: Option<PathBuf>,
 }
@@ -65,6 +67,23 @@ impl Default for DaemonConfig {
             local_poll_ms: default_local_poll_ms(),
             tick_ms: default_tick_ms(),
             work_plugin_root: None,
+        }
+    }
+}
+
+/// Settings in the root `[linear]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearSettingsConfig {
+    /// How long a show-request waits for the person before it expires.
+    /// Board-wide: an agent cannot set its own.
+    #[serde(default = "default_show_request_ttl_secs")]
+    pub show_request_ttl_secs: i64,
+}
+
+impl Default for LinearSettingsConfig {
+    fn default() -> Self {
+        Self {
+            show_request_ttl_secs: default_show_request_ttl_secs(),
         }
     }
 }
@@ -198,6 +217,8 @@ pub struct RootConfig {
     pub board: Config,
     #[serde(default)]
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub linear: LinearSettingsConfig,
 }
 
 impl RootConfig {

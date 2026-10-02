@@ -54,12 +54,43 @@ fn malformed_file_is_not_replaced_with_defaults() {
 }
 
 #[test]
-fn work_plugin_root_passes_through_from_typed_config() {
+fn the_retired_plugin_root_settings_are_accepted_and_give_one_warning() {
     let root =
         RootConfig::from_toml("[daemon]\nwork_plugin_root = \"/opt/work-plugin\"\n").unwrap();
-    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
-    assert_eq!(
-        settings.work_plugin_root.as_deref(),
-        Some(std::path::Path::new("/opt/work-plugin"))
+    let settings = DaemonSettings::from_root(
+        &root,
+        &env(&[("BOARD_WORK_PLUGIN_ROOT", "/opt/other-plugin")]),
+    )
+    .unwrap();
+    let warning = settings.retired_warning().expect("one warning");
+    assert!(warning.contains("[daemon] work_plugin_root"), "{warning}");
+    assert!(warning.contains("BOARD_WORK_PLUGIN_ROOT"), "{warning}");
+    assert!(
+        !warning.contains("/opt/"),
+        "the value is not echoed: {warning}"
     );
+
+    let config_only = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(config_only.retired, ["[daemon] work_plugin_root"]);
+
+    let blank = DaemonSettings::from_root(
+        &RootConfig::default(),
+        &env(&[("BOARD_WORK_PLUGIN_ROOT", " ")]),
+    )
+    .unwrap();
+    assert_eq!(blank.retired_warning(), None);
+}
+
+#[test]
+fn the_show_request_ttl_comes_from_the_linear_table_and_defaults_to_thirty_minutes() {
+    let defaults = DaemonSettings::from_root(&RootConfig::default(), &env(&[])).unwrap();
+    assert_eq!(defaults.show_request_ttl_secs, 1800);
+
+    let root = RootConfig::from_toml("[linear]\nshow_request_ttl_secs = 600\n").unwrap();
+    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(settings.show_request_ttl_secs, 600);
+
+    let root = RootConfig::from_toml("[linear]\nshow_request_ttl_secs = 0\n").unwrap();
+    let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
+    assert_eq!(settings.show_request_ttl_secs, 1, "a zero TTL is clamped");
 }

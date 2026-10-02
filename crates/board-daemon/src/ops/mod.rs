@@ -10,7 +10,10 @@ use serde_json::{json, Value};
 
 use crate::state::Daemon;
 
-mod bind_handoff;
+pub(crate) fn now_secs(d: &Arc<Daemon>) -> i64 {
+    d.wall_now_ms() / 1000
+}
+
 mod boards;
 mod cards;
 mod columns;
@@ -18,6 +21,7 @@ mod comments;
 mod discovery;
 mod errors;
 mod linear;
+mod linear_state;
 mod panes;
 mod projects;
 mod runs;
@@ -120,14 +124,63 @@ routes!(d, params, {
     "session.list" => discovery::session_list(d),
     "pane.set_title" => panes::pane_set_title(from(params)?),
     "pane.focus" => panes::pane_focus(from(params)?),
+    "board.pane.open" => panes::board_pane_open(d, from(params)?),
+    "board.pane.close" => panes::board_pane_close(d, from(params)?),
+    "board.notify" => panes::board_notify(from(params)?),
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
     "linear.list" => linear::linear_list(d, from(params)?),
     "linear.issue" => linear::linear_issue(d, from(params)?),
-    "linear.bind_handoff" => bind_handoff::linear_bind_handoff(d, from(params)?),
+    "linear.state.get" => linear_state::state_get(d, from(params)?),
+    "linear.bind" => linear_state::bind(d, from(params)?),
+    "linear.space.bind" => linear_state::space_bind(d, from(params)?),
+    "linear.unbind" => linear_state::unbind(d, from(params)?),
+    "linear.grouping.get" => linear_state::grouping_get(d, from_or_default(params)?),
+    "linear.grouping.set" => linear_state::grouping_set(d, from(params)?),
+    "linear.grouping.preview" => linear_state::grouping_preview(d, from(params)?),
+    "linear.mark.set" => linear_state::mark_set(d, from(params)?),
+    "linear.mark.clear" => linear_state::mark_clear(d, from(params)?),
+    "linear.mark.unmark" => linear_state::mark_unmark(d, from(params)?),
+    "linear.note.set" => linear_state::note_set(d, from(params)?),
+    "linear.note.clear" => linear_state::note_clear(d, from(params)?),
+    "linear.show.request" => linear_state::show_request(d, from(params)?),
+    "linear.show.accept" => linear_state::show_accept(d, from(params)?),
+    "linear.show.dismiss" => linear_state::show_dismiss(d, from(params)?),
+    "linear.show.withdraw" => linear_state::show_withdraw(d, from(params)?),
+    "linear.session.get" => linear_state::session_get(d, from(params)?),
+    "linear.activity.record" => linear_state::activity_record(d, from(params)?),
+    "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
+    "linear.import" => linear_import(d, from_or_default(params)?),
 });
+
+fn linear_import(d: &Arc<Daemon>, p: LinearImportParams) -> Result<Value> {
+    linear_import_at(d, &crate::import::store_dir_from_env()?, p.dry_run)
+}
+
+pub(crate) fn linear_import_at(
+    d: &Arc<Daemon>,
+    store_dir: &std::path::Path,
+    dry_run: bool,
+) -> Result<Value> {
+    let outcome = crate::import::import_work_store(&d.store.lock(), store_dir, dry_run)?;
+    for space in outcome.changed_spaces {
+        d.emit(Event::LocalStateChanged {
+            space,
+            snapshot: false,
+        });
+    }
+    Ok(json!(outcome.result))
+}
 
 fn from<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
     serde_json::from_value(v).map_err(|e| Error::BadRequest(format!("bad params: {e}")))
+}
+
+fn from_or_default<T: serde::de::DeserializeOwned + Default>(v: Value) -> Result<T> {
+    if v.is_null() {
+        Ok(T::default())
+    } else {
+        from(v)
+    }
 }
 
 fn require_card(d: &Arc<Daemon>, id: i64) -> Result<board_core::model::Card> {
