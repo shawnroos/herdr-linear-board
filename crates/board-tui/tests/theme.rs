@@ -236,3 +236,29 @@ fn the_fixture_names_gruvbox_with_a_custom_accent() {
     assert_eq!(theme.palette.accent, rgb(0xfe8019));
     assert_eq!(theme.palette.panel_bg, rgb(0x282828));
 }
+
+#[test]
+fn auto_switch_and_mode_tables_are_ignored_not_fatal() {
+    let theme = theme_of(
+        "[theme]\nname = \"nord\"\nauto_switch = true\ndark_name = \"tokyo-night\"\n\
+         light_name = \"catppuccin-latte\"\n[theme.custom]\naccent = \"#ff0000\"\n\
+         [theme.custom.light]\naccent = \"#00ff00\"\n[theme.custom.dark]\ntext = \"#00ff00\"\n",
+    );
+    assert_eq!(theme.name, "nord");
+    assert_eq!(theme.palette.accent, rgb(0xff0000));
+    assert_eq!(
+        theme.palette.text,
+        Theme::named("nord").unwrap().palette.text
+    );
+}
+
+#[test]
+fn fade_blends_toward_the_app_background() {
+    let t = Theme::gruvbox();
+    assert_eq!(t.fade(t.app_bg), t.app_bg);
+    assert_eq!(t.fade(rgb(0xffffff)), Color::Rgb(0x78, 0x78, 0x78));
+    assert_eq!(
+        Theme::named("terminal").unwrap().fade(Color::Gray),
+        Color::Gray
+    );
+}

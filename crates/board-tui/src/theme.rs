@@ -629,6 +629,8 @@ const MUTED_CARD_STEP: u8 = 2;
 // Shawn's gruvbox muted detail; no blend reproduces it in every channel.
 const GRUVBOX_MUTED_DETAIL: Color = Color::Rgb(0x7c, 0x6f, 0x64);
 const MUTED_DETAIL_BLEND: f32 = 0.2;
+// "about 60%" per the design (KTD6).
+const FADE: f32 = 0.6;
 
 impl Theme {
     pub fn gruvbox() -> Theme {
@@ -821,6 +823,11 @@ impl Theme {
 
     pub fn success(&self) -> Style {
         Style::default().fg(self.palette.green)
+    }
+
+    /// `c` faded toward the app background, for what sits behind a modal.
+    pub fn fade(&self, c: Color) -> Color {
+        blend(c, self.app_bg, FADE)
     }
 
     /// The surface one tone above `under`: app → card → raised → rule tone.
