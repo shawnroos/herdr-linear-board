@@ -12,11 +12,12 @@ use crate::protocol::{
     ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DeletedResult, Event, LinearIssueDocument, LinearIssueParams,
-    LinearListKind, LinearListParams, LinearListResult, LinearSnapshot, LinearSnapshotParams,
-    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
-    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
-    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
-    RunFocusResult, TemplateApplyParams, Trigger,
+    LinearListKind, LinearListParams, LinearListResult, LinearPrDocument, LinearPrParams,
+    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
+    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
+    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
+    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
+    TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -73,6 +74,9 @@ pub struct FakeLinear {
     /// An issue with no seeded document: `None` answers "this plugin ships no
     /// such script" (code 7), which is a different remedy from a failed read.
     pub issue_unsupported: bool,
+    /// Keyed by PR URL. An `Err` answers protocol code 8 (gh unavailable),
+    /// and so does a URL with nothing seeded.
+    pub prs: std::collections::BTreeMap<String, Result<LinearPrDocument, String>>,
 }
 
 impl Default for FakeLinear {
@@ -86,6 +90,7 @@ impl Default for FakeLinear {
             lists: std::collections::BTreeMap::new(),
             issues: std::collections::BTreeMap::new(),
             issue_unsupported: false,
+            prs: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -230,6 +235,21 @@ impl FakeBoardClient {
     /// current but ships no `bin/work-issue.sh`.
     pub fn with_linear_issue_unsupported(mut self) -> FakeBoardClient {
         self.linear.issue_unsupported = true;
+        self
+    }
+
+    /// Seed the document `linear.pr` answers for `url`.
+    pub fn with_linear_pr(mut self, url: &str, document: LinearPrDocument) -> FakeBoardClient {
+        self.linear.prs.insert(url.to_string(), Ok(document));
+        self
+    }
+
+    /// Make `linear.pr` for `url` fail with code 8, as a daemon whose `gh` is
+    /// missing or logged out answers.
+    pub fn with_linear_pr_unavailable(mut self, url: &str, message: &str) -> FakeBoardClient {
+        self.linear
+            .prs
+            .insert(url.to_string(), Err(message.to_string()));
         self
     }
 
@@ -875,6 +895,20 @@ fake_methods!(db, config, linear, now, params, {
                 return Err(crate::Error::PluginUnavailable(format!(
                     "no linear issue fixture configured for {}",
                     p.issue
+                ))
+                .into())
+            }
+        }
+    },
+    "linear.pr" => {
+        let p: LinearPrParams = serde_json::from_value(params)?;
+        match linear.prs.get(p.url.trim()) {
+            Some(Ok(document)) => serde_json::to_value(document)?,
+            Some(Err(message)) => return Err(crate::Error::GhUnavailable(message.clone()).into()),
+            None => {
+                return Err(crate::Error::GhUnavailable(format!(
+                    "no linear pr fixture configured for {}",
+                    p.url
                 ))
                 .into())
             }

@@ -1898,6 +1898,10 @@ pub struct LinearSnapshot {
     pub linear: LinearSource,
     #[serde(default)]
     pub herdr: LinearHerdr,
+    /// The daemon's `gh` reads behind the cards' PR fields; absent from a
+    /// daemon that predates them.
+    #[serde(default)]
+    pub gh: Option<LinearGhSource>,
     /// `tabs[0].groups`, kept for clients that predate `tabs`.
     #[serde(default)]
     pub groups: Vec<LinearGroup>,
@@ -2003,6 +2007,16 @@ pub struct LinearHerdr {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGhSource {
+    /// `ok`, `unavailable` (gh missing or not logged in) or `unknown` (no
+    /// read has finished yet).
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub status: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearGroup {
     #[serde(default)]
     pub key: String,
@@ -2089,6 +2103,142 @@ pub struct LinearCardPr {
     pub status: Option<String>,
     #[serde(default)]
     pub draft: Option<bool>,
+    /// The fields below come from the daemon's `gh` cache and stay absent
+    /// until `gh` has read the PR. `OPEN`, `CLOSED` or `MERGED`.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub ci: Option<LinearPrCi>,
+    #[serde(default)]
+    pub additions: Option<u64>,
+    #[serde(default)]
+    pub deletions: Option<u64>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    /// What keeps a blocked PR from merging, e.g.
+    /// `E2E Verification Required (required) is pending`.
+    #[serde(default)]
+    pub blocker: Option<String>,
+    /// Why `gh` could not read this PR the last time it tried.
+    #[serde(default)]
+    pub gh_error: Option<String>,
+}
+
+/// A PR's checks, counted after keeping only the latest run of each name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrCi {
+    /// `pass`, `pending`, `fail` or `none`.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub state: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub passed: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub pending: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub failed: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub skipped: u64,
+}
+
+/// `linear.pr` params: one pull request by its GitHub URL.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrParams {
+    pub url: String,
+    /// Read `gh` even when the cached entry is fresh.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
+/// How long a client waits for a `linear.pr` answer: up to four `gh` calls.
+pub const LINEAR_PR_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The `linear.pr` document. A `gh` failure for this PR is `status:
+/// "unavailable"` with a `message`; `gh` missing is protocol error 8.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrDocument {
+    #[serde(default)]
+    pub schema: i64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub status: String,
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Unix seconds of the `gh` read the document holds.
+    #[serde(default)]
+    pub fetched_at: Option<i64>,
+    #[serde(default)]
+    pub pr: Option<LinearPrDetail>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrDetail {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub repo: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub draft: Option<bool>,
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    /// gh's `mergeStateStatus`: `CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, ...
+    #[serde(default)]
+    pub merge_state: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<String>,
+    #[serde(default)]
+    pub review_decision: Option<String>,
+    #[serde(default)]
+    pub additions: Option<u64>,
+    #[serde(default)]
+    pub deletions: Option<u64>,
+    #[serde(default)]
+    pub changed_files: Option<u64>,
+    #[serde(default)]
+    pub head_ref: Option<String>,
+    #[serde(default)]
+    pub head_sha: Option<String>,
+    #[serde(default)]
+    pub ci: Option<LinearPrCi>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub checks: Vec<LinearPrCheck>,
+    #[serde(default)]
+    pub blocker: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub reviews: Vec<LinearPrReview>,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrCheck {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub name: String,
+    /// `pass`, `pending`, `fail` or `skipping`.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub bucket: String,
+    /// As GitHub sent it: a check run's conclusion or status, or a status
+    /// context's state.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub required: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrReview {
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub submitted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

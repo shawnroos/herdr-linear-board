@@ -128,6 +128,14 @@ impl ActiveRun {
     }
 }
 
+pub struct SubscriberGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for SubscriberGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// In-memory scheduler state.
 #[derive(Default)]
 pub struct Sched {
@@ -175,6 +183,9 @@ pub struct Daemon {
     pub sched: Mutex<Sched>,
     pub watch: Mutex<WatchState>,
     pub linear: crate::linear::LinearService,
+    pub gh: crate::gh::GhService,
+    /// Connections that sent `events.subscribe` and are still open.
+    subscribers: Arc<std::sync::atomic::AtomicUsize>,
     shutdown_tx: watch::Sender<bool>,
     stopping: AtomicBool,
     #[cfg(test)]
@@ -212,6 +223,8 @@ impl Daemon {
             sched: Mutex::new(Sched::default()),
             watch: Mutex::new(WatchState::default()),
             linear: crate::linear::LinearService::default(),
+            gh: crate::gh::GhService::default(),
+            subscribers: Arc::default(),
             shutdown_tx,
             stopping: AtomicBool::new(false),
             #[cfg(test)]
@@ -355,6 +368,16 @@ impl Daemon {
     pub fn trigger_shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Counts one event subscriber until the guard drops.
+    pub fn subscriber(&self) -> SubscriberGuard {
+        self.subscribers.fetch_add(1, Ordering::SeqCst);
+        SubscriberGuard(self.subscribers.clone())
+    }
+
+    pub fn subscribed(&self) -> bool {
+        self.subscribers.load(Ordering::SeqCst) > 0
     }
 
     pub fn is_shutdown(&self) -> bool {

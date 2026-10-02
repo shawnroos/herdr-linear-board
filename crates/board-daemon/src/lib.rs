@@ -5,6 +5,7 @@
 //! spawner) to launch agents.
 
 mod dispatch;
+pub mod gh;
 mod herdr_conn;
 mod herdr_snapshot;
 mod import;
@@ -55,6 +56,10 @@ pub use ops::ROUTED_METHODS;
 fn initial_herdr_handle(socket: &Path) -> Option<HerdrClient> {
     HerdrClient::connect(socket).ok()
 }
+
+// Finer than the two-minute re-read so a pending PR is read again within
+// 2:00-2:30 of its last read.
+const GH_TICK: Duration = Duration::from_secs(30);
 
 /// Run the daemon. `foreground` mirrors logs to stderr and is used by
 /// `board daemon --foreground`. Returns `Ok(())` immediately if another daemon
@@ -162,6 +167,8 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
         shutdown_tx,
     ));
 
+    daemon.gh.configure(settings::gh_config(&ProcessEnv));
+
     // Background tasks.
     {
         let d = daemon.clone();
@@ -174,6 +181,16 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
     let retention = tokio::spawn(logging::retention_task(daemon.shutdown_rx()));
     tokio::spawn(watchers::timeout_ticker(daemon.clone()));
     tokio::spawn(watchers::show_request_sweeper(daemon.clone()));
+    {
+        let d = daemon.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(GH_TICK);
+            while !d.is_shutdown() {
+                every.tick().await;
+                ops::gh_tick(&d);
+            }
+        });
+    }
     tokio::spawn(watchers::local_liveness_poller(daemon.clone()));
     if matches!(daemon.settings.spawner, SpawnerKind::Herdr) {
         // The supervisor is independent of the startup best-effort client: a

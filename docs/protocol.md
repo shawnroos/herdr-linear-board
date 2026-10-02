@@ -20,8 +20,9 @@ protocol version.
   (e.g. delete column with running card), `4` herdr unavailable, `5` internal. `6` (work plugin
   unavailable) and `7` (the plugin ships no script for this op) are retired: this daemon reads
   Linear itself and raises neither, but both keep their meaning so a client still reads them right
-  from an older daemon that ran the work plugin's scripts. The CLI passes `1..=7`
-  through as its exit status. The CLI preserves
+  from an older daemon that ran the work plugin's scripts. `8` is gh unavailable: `gh` is not
+  installed or not logged in, so `linear.pr` cannot read GitHub (see `linear.pr`). The CLI passes
+  `1..=7` through as its exit status; `8` exits `70` like any other code past `7`. The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
@@ -609,7 +610,33 @@ daemon start).
     request attachment by creation time. The read asks Linear for up to 10 attachments whose URL
     contains `/pull/`; only a `https://github.com/<owner>/<repo>/pull/<number>` URL becomes `pr`,
     with `repo` and `number` taken from the URL and `status` and `draft` from the attachment's
-    metadata as Linear sends them.
+    metadata as Linear sends them. A PR on the host named by boardd's `GH_HOST` is accepted too.
+  - **`gh` fields** on each `pr`, all additive and absent until boardd's `gh` has read the PR:
+    `state` (`OPEN`, `CLOSED`, `MERGED`), `ci` (`{state, passed, pending, failed, skipped}`, the
+    latest run of each check name, `state` one of `pass`, `pending`, `fail`, `none`), `additions`,
+    `deletions`, `preview` (the newest deployment status's `environment_url` for the PR's branch),
+    `blocker` (for a blocked open PR: the first required check that is not passing, as
+    `<name> (required) is pending|failing`, else `review required`, `changes requested` or
+    `merge blocked`; `has merge conflicts` for a conflicting one) and `gh_error` (why `gh` could
+    not read this PR the last time; the other fields keep the last good read). `draft` takes
+    gh's value once read. The document adds `gh: {status, message}`: `ok`, `unavailable` (with
+    why) or `unknown` (no read has finished).
+  - **`gh` enrichment.** boardd runs `gh` itself, never the client: `GH_BIN` (default `gh`),
+    with a cleared environment holding only `HOME`, `PATH`, `GH_TOKEN`, `GITHUB_TOKEN`,
+    `GH_HOST`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME` and `DBUS_SESSION_BUS_ADDRESS`, a 20 s deadline
+    per call and a 4 MiB output cap. It builds argv only from the URL's validated host, owner,
+    repo (`[A-Za-z0-9_.-]`, not `.`, `..` or a leading `-`) and number, never the URL itself.
+    Per PR: `gh pr view <n> -R <host>/<owner>/<repo> --json …`, `gh pr checks <n> -R … --required
+    --json name,state,bucket`, and for an open PR `gh api --method GET --hostname <host>
+    repos/<owner>/<repo>/deployments -f ref=<branch>` then that deployment's statuses. Results
+    are cached per PR and shared by every board. A snapshot that shows a PR its space did not
+    show before queues it for one debounced (500 ms) pass that reads at most 4 PRs at once; while
+    at least one connection is subscribed to events, a check every 30 s also queues each
+    on-board PR whose checks were pending at a read 2 minutes old, or whose read is 10 minutes
+    old (after `gh` was unavailable, it waits 10 minutes). With no subscriber nothing is read
+    again. Each pass ends with one `local_state_changed {space, snapshot: true}` per space that
+    shows a PR it read, so a plain `linear.snapshot` carries the new fields. A snapshot never
+    waits on `gh`.
   - Clients wait at most `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s). Error 1 for an empty
     `workspace_id`.
 - `linear.list {kind, id?, origin_socket?}` → `{status, message, rows}`. `status` is one of `ok`,
@@ -642,6 +669,20 @@ daemon start).
   nothing the page shows are dropped. Every Linear failure, no such issue included, is a document
   with `status: "unavailable"`, `message` and `issue: null`, not an error code. Clients wait at
   most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape.
+- `linear.pr {url, force?}` → `{schema, status, message, fetched_at, pr}`: one pull request's
+  full `gh` detail for the issue page. `pr` is `{repo, number, url, title, state, draft,
+  merged_at, merge_state, mergeable, review_decision, additions, deletions, changed_files,
+  head_ref, head_sha, ci, checks, blocker, reviews, preview}`, with `checks: [{name, bucket,
+  state, required, url}]` (latest run per name; `bucket` `pass`, `pending`, `fail` or `skipping`)
+  and `reviews: [{author, state, submitted_at}]` (each reviewer's latest). `url` must be a
+  `https://github.com/<owner>/<repo>/pull/<number>` URL (or on boardd's `GH_HOST`), checked as
+  `linear.snapshot` checks card PRs; anything else is error 1 and starts no `gh`. A read of the
+  shared cache less than 60 s old answers without `gh` unless `force` is set; otherwise the read
+  runs the `gh` calls above and updates the cache, announcing the spaces that show the PR. A
+  `gh` failure for this PR is `status: "unavailable"` with `message` (and the last good `pr`,
+  if any); `gh` not installed or not logged in is error 8. Clients wait at most
+  `LINEAR_PR_CLIENT_TIMEOUT` (90 s). A daemon that predates the method answers error 1
+  `unknown method`, and a client then shows Linear's PR data only.
 - `linear.bind_handoff` — retired. The daemon answers it as an unknown method (error 1); bind a
   space with `linear.space.bind`.
 
@@ -893,7 +934,8 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
   session, so a reader of the same workspace id in another session re-reads its own state for
   nothing. A `linear.activity.record` for a space a reader has read is announced at once and again
   by its debounced refetch (see `linear.snapshot`): one more event when the refetch lands or
-  fails, however many reports it folded, with `snapshot: true`. That flag means the daemon's cached read is already fresh, so a reader answers
+  fails, however many reports it folded, with `snapshot: true`. A `gh` enrichment pass or a
+  `linear.pr` read also ends with one `snapshot: true` event per space showing a PR it read. That flag means the daemon's cached read is already fresh, so a reader answers
   it with one plain `linear.snapshot`, never a forced one; without the flag a reader re-reads
   `linear.state.get`. The flag is omitted when false, and an older client ignores it. It is a
   new event rather than a `board_changed` reason because a client skips an event line it cannot

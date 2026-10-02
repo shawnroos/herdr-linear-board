@@ -94,3 +94,39 @@ fn the_show_request_ttl_comes_from_the_linear_table_and_defaults_to_thirty_minut
     let settings = DaemonSettings::from_root(&root, &env(&[])).unwrap();
     assert_eq!(settings.show_request_ttl_secs, 1, "a zero TTL is clamped");
 }
+
+#[test]
+fn the_gh_child_environment_keeps_only_the_allowlist() {
+    let config = gh_config(&env(&[
+        ("HOME", "/home/x"),
+        ("PATH", "/usr/bin"),
+        ("GH_TOKEN", "t"),
+        ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/bus"),
+        ("LINEAR_API_KEY", "lin_secret"),
+        ("AWS_SECRET_ACCESS_KEY", "aws"),
+        ("BOARD_SOCKET", "/tmp/b.sock"),
+    ]));
+
+    let keys: Vec<&str> = config.env.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["HOME", "PATH", "GH_TOKEN", "DBUS_SESSION_BUS_ADDRESS"]
+    );
+    assert_eq!(config.bin, "gh");
+    assert_eq!(config.host, None);
+    assert!(
+        !format!("{config:?}").contains("lin_secret") && !format!("{config:?}").contains("\"t\"")
+    );
+}
+
+#[test]
+fn gh_bin_and_a_plain_gh_host_are_read_and_a_malformed_host_is_dropped() {
+    let config = gh_config(&env(&[
+        ("GH_BIN", "/opt/gh"),
+        ("GH_HOST", "GHE.Corp.Example"),
+    ]));
+    assert_eq!(config.bin, "/opt/gh");
+    assert_eq!(config.host.as_deref(), Some("ghe.corp.example"));
+    let bad = gh_config(&env(&[("GH_HOST", "evil.example/x?y")]));
+    assert_eq!(bad.host, None);
+}

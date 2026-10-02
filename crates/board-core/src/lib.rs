@@ -79,6 +79,10 @@ pub enum Error {
     #[error("plugin op unsupported: {0}")]
     PluginOpUnsupported(String),
 
+    /// `gh` could not run: not installed, or not logged in (protocol code 8).
+    #[error("gh unavailable: {0}")]
+    GhUnavailable(String),
+
     #[error(transparent)]
     Validation(#[from] ValidationError),
 }
@@ -94,6 +98,7 @@ impl Error {
             Error::HerdrUnavailable(_) => 4,
             Error::PluginUnavailable(_) => 6,
             Error::PluginOpUnsupported(_) => 7,
+            Error::GhUnavailable(_) => 8,
             Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => 5,
         }
     }

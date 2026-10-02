@@ -13,6 +13,7 @@ use board_core::db::{GroupingConfig, SpaceBinding, WorktreeBinding};
 use board_core::engine::grouping::{self, GroupingIssue, ViewPreferences, WorkflowState};
 use board_herdr::SessionSnapshot;
 
+use crate::gh::PrRef;
 use crate::linear::{fetch, names_project, CacheRead, FetchPlan, SpaceKey, SpaceRead};
 
 use super::*;
@@ -198,10 +199,18 @@ pub(in crate::ops) fn snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Resu
         d.linear.cache.invalidate(&key);
     }
     let read = read_space(d, &key, &plan);
-    fill_from_linear(&mut doc, &read, local.config.as_ref(), &plan);
+    let gh_host = d.gh.host();
+    fill_from_linear(
+        &mut doc,
+        &read,
+        local.config.as_ref(),
+        &plan,
+        gh_host.as_deref(),
+    );
     attach_bindings(&mut doc, &local.worktrees, herdr.as_ref(), &key.space);
     let ids = doc.pane_ids();
     doc.pane_status = pane_status(herdr, &ids);
+    super::pr::enrich(d, key, &mut doc, gh_host.as_deref());
     Ok(doc)
 }
 
@@ -210,6 +219,7 @@ fn fill_from_linear(
     read: &CacheRead<SpaceRead>,
     config: Option<&GroupingConfig>,
     plan: &FetchPlan,
+    gh_host: Option<&str>,
 ) {
     let Some((data, age)) = &read.good else {
         doc.linear.status = "unavailable".into();
@@ -299,8 +309,10 @@ fn fill_from_linear(
             continue;
         };
         if listed.contains(identifier.as_str()) {
-            doc.issues
-                .insert(identifier.clone(), linear_issue(node, identifier, stale));
+            doc.issues.insert(
+                identifier.clone(),
+                linear_issue(node, identifier, stale, gh_host),
+            );
         }
     }
     grouping::fill_snapshot(doc, tabs);
@@ -325,7 +337,12 @@ fn names(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn linear_issue(node: &Value, identifier: String, stale: bool) -> LinearIssue {
+fn linear_issue(
+    node: &Value,
+    identifier: String,
+    stale: bool,
+    gh_host: Option<&str>,
+) -> LinearIssue {
     LinearIssue {
         id: text(&node["id"]),
         identifier,
@@ -344,7 +361,7 @@ fn linear_issue(node: &Value, identifier: String, stale: bool) -> LinearIssue {
             .map(|d| excerpt(&d))
             .filter(|d| !d.is_empty()),
         milestone: named(&node["projectMilestone"]),
-        pr: newest_pr(&node["attachments"]),
+        pr: newest_pr(&node["attachments"], gh_host),
     }
 }
 
@@ -361,41 +378,21 @@ fn excerpt(description: &str) -> String {
         .collect()
 }
 
-/// `(owner/repo, number)` for a `https://github.com/<owner>/<repo>/pull/<n>`
-/// URL and nothing else, so a commit or file link under a PR is not one.
-fn github_pr(url: &str) -> Option<(String, u64)> {
-    let path = url.strip_prefix("https://github.com/")?;
-    let path = path.split(['?', '#']).next()?.trim_end_matches('/');
-    let [owner, repo, "pull", number] = path.split('/').collect::<Vec<_>>()[..] else {
-        return None;
-    };
-    let name_ok = |part: &str| {
-        !matches!(part, "" | "." | "..")
-            && !part.starts_with('-')
-            && part
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-    };
-    if !(name_ok(owner) && name_ok(repo) && number.chars().all(|c| c.is_ascii_digit())) {
-        return None;
-    }
-    Some((format!("{owner}/{repo}"), number.parse().ok()?))
-}
-
-fn newest_pr(attachments: &Value) -> Option<LinearCardPr> {
+fn newest_pr(attachments: &Value, gh_host: Option<&str>) -> Option<LinearCardPr> {
     nodes(attachments)
         .iter()
         .filter_map(|a| {
             let url = a["url"].as_str()?;
-            let (repo, number) = github_pr(url)?;
-            let pr = LinearCardPr {
-                repo,
-                number,
+            let pr = PrRef::parse(url, gh_host)?;
+            let card = LinearCardPr {
+                repo: pr.repo(),
+                number: pr.number,
                 url: url.to_string(),
                 status: text(&a["metadata"]["status"]),
                 draft: a["metadata"]["draft"].as_bool(),
+                ..LinearCardPr::default()
             };
-            Some((a["createdAt"].as_str().unwrap_or("").to_string(), pr))
+            Some((a["createdAt"].as_str().unwrap_or("").to_string(), card))
         })
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, pr)| pr)
@@ -536,7 +533,7 @@ pub(in crate::ops) fn cached_column(
         good: Some((data, std::time::Duration::ZERO)),
         error: None,
     };
-    fill_from_linear(&mut doc, &read, config.as_ref(), &plan);
+    fill_from_linear(&mut doc, &read, config.as_ref(), &plan, None);
     Ok(doc
         .tabs
         .iter()

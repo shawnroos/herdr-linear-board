@@ -142,6 +142,42 @@ impl DaemonSettings {
     }
 }
 
+/// The only variables a `gh` child sees (KTD8). The last one carries
+/// Linux keyring auth.
+pub(crate) const GH_ENV_ALLOWLIST: &[&str] = &[
+    "HOME",
+    "PATH",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_HOST",
+    "GH_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "DBUS_SESSION_BUS_ADDRESS",
+];
+
+// One `gh` call is a GitHub API round trip; this only bounds a hung child.
+const GH_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// `gh` from `GH_BIN` (default `gh`), `GH_HOST` when it is a plain host name,
+/// and the allowlisted environment.
+pub(crate) fn gh_config(env: &dyn EnvLookup) -> crate::gh::GhConfig {
+    crate::gh::GhConfig {
+        bin: env
+            .var("GH_BIN")
+            .filter(|bin| !bin.trim().is_empty())
+            .unwrap_or_else(|| "gh".into()),
+        host: env
+            .var("GH_HOST")
+            .map(|host| host.trim().to_ascii_lowercase())
+            .filter(|host| crate::gh::host_ok(host)),
+        env: GH_ENV_ALLOWLIST
+            .iter()
+            .filter_map(|key| Some((key.to_string(), env.var(key)?)))
+            .collect(),
+        timeout: GH_CALL_TIMEOUT,
+    }
+}
+
 fn parse_spawner(value: &str) -> Result<SpawnerKind> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" => Ok(SpawnerKind::Local),

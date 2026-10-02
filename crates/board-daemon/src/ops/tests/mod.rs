@@ -721,6 +721,7 @@ mod boards;
 mod cards;
 mod comments;
 mod discovery;
+mod gh;
 mod import;
 mod lifecycle;
 mod linear_native;

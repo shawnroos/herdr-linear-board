@@ -1,0 +1,12 @@
+[
+  {
+    "bucket": "pass",
+    "name": "build",
+    "state": "SUCCESS"
+  },
+  {
+    "bucket": "pending",
+    "name": "E2E Verification Required",
+    "state": "PENDING"
+  }
+]

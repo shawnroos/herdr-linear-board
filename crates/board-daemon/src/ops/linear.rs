@@ -4,6 +4,7 @@
 use super::*;
 
 pub(super) mod native;
+pub(super) mod pr;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,6 +21,10 @@ pub(super) fn linear_list(d: &Arc<Daemon>, p: LinearListParams) -> Result<Value>
 
 pub(super) fn linear_issue(d: &Arc<Daemon>, p: LinearIssueParams) -> Result<Value> {
     Ok(json!(native::issue(d, p)?))
+}
+
+pub(super) fn linear_pr(d: &Arc<Daemon>, p: LinearPrParams) -> Result<Value> {
+    Ok(json!(pr::pr(d, p)?))
 }
 
 pub(super) fn checked_issue_id(p: &LinearIssueParams) -> Result<&str> {

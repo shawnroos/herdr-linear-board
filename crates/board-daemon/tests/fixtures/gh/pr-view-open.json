@@ -1,0 +1,268 @@
+{
+  "additions": 412,
+  "changedFiles": 17,
+  "deletions": 88,
+  "headRefName": "feature/web-101-frame-effects",
+  "headRefOid": "3f2c9a1d0b8e7f6a5c4d3e2f1a0b9c8d7e6f5a4b",
+  "isDraft": false,
+  "latestReviews": [
+    {
+      "author": {
+        "login": "ada"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-09-30T12:00:00Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": "3f2c9a1d0b8e7f6a5c4d3e2f1a0b9c8d7e6f5a4b"
+      }
+    }
+  ],
+  "mergeStateStatus": "BLOCKED",
+  "mergeable": "MERGEABLE",
+  "mergedAt": null,
+  "number": 4212,
+  "reviewDecision": "APPROVED",
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T10:05:00Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/457815",
+      "name": "unit-tests",
+      "startedAt": "2026-09-30T10:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/34041",
+      "name": "build",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/651493",
+      "name": "lint",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/425819",
+      "name": "typecheck",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/60410",
+      "name": "unit-tests",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/721076",
+      "name": "integration-tests",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/888167",
+      "name": "storybook",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/595203",
+      "name": "bundle-size",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/506226",
+      "name": "codeql",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/88740",
+      "name": "dependency-review",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:04:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/127022",
+      "name": "license-check",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/232343",
+      "name": "deploy-docs",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/217725",
+      "name": "e2e-chrome",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/812232",
+      "name": "e2e-firefox",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/156999",
+      "name": "e2e-safari",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/595779",
+      "name": "release-notes",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/355323",
+      "name": "publish-canary",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/321083",
+      "name": "visual-diff",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/132069",
+      "name": "perf-budget",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/321495",
+      "name": "mobile-smoke",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/364924",
+      "name": "i18n-sync",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-30T11:00:01Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/165924",
+      "name": "nightly-only",
+      "startedAt": "2026-09-30T11:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "vercel",
+      "startedAt": "2026-09-30T11:02:00Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/acme/web/abc"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "E2E Verification Required",
+      "startedAt": "2026-09-30T11:03:00Z",
+      "state": "PENDING",
+      "targetUrl": "https://e2e.example.com/runs/42"
+    }
+  ],
+  "title": "WEB-101 Frame effects drawer",
+  "url": "https://github.com/acme/web/pull/4212"
+}
