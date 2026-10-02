@@ -249,6 +249,7 @@ fn the_pr_row_has_a_linear_only_a_loading_and_a_gh_unavailable_state() {
         url: "https://github.com/acme/web/pull/2132".into(),
         status: Some("open".into()),
         draft: Some(false),
+        ..Default::default()
     };
     let text = |gh| {
         card_pr_line(&theme, &pr, gh, false)
@@ -290,6 +291,7 @@ fn a_card_with_a_linear_pr_shows_its_number_on_the_meta_row() {
         url: "https://github.com/acme/web/pull/2132".into(),
         status: Some("open".into()),
         draft: None,
+        ..Default::default()
     });
     let mut d = driver_for(snapshot);
     let buf = buffer_at(&mut d, 200, 80);
