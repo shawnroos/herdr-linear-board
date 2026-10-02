@@ -1054,15 +1054,26 @@ carries (`kind`) puts them in Linear's own progression — triage, backlog, unst
 completed, canceled. A group with no type, which is every group under a grouping other than
 workflow state, keeps its place among its equals.
 
-**Layout.** The snapshot's tabs are a row under the header, the active one in brackets; `[` and
-`]` switch tabs, and each tab keeps its own cursor. A document from before tabs has no tab row.
-Columns are fixed at a page: a page holds as many 36-cell columns as fit, at least one, so a
-narrow pane shows one column a page. When not every column fits, a pager row names the hidden
-column and its card count at each edge (`‹ Todo 4`, `In Review 1 ›`); `←`/`→` flip the page past
-its edge and `<`/`>` jump a page. Inside a column, cards sit under lane sub-headers
-(`── Alpha 3`) with the lane's card count in that column; a board with no lane grouping has none.
-Cards are five rows tall, and a title wraps to two lines by display width, so wide characters do
-not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
+**Layout.** The board follows [`board-design.md`](board-design.md) §2–§3 and draws every colour
+from herdr's theme. The snapshot's tabs are a powerline row under the header, the active one on
+herdr's accent; `[` and `]` switch tabs, and each tab keeps its own cursor. A document from before
+tabs has no tab row. Columns have no borders: their titles (`TODO  4`, the count after any filter)
+form one powerline bar, the focused column on the accent. A page holds as many 36-cell columns as
+fit, at least one, so a narrow pane shows one column a page. When not every column fits, a pager
+row names the hidden column and its card count at each edge (`‹ Todo 4`, `In Review 1 ›`);
+`←`/`→` flip the page past its edge and `<`/`>` jump a page. Lanes are one line each across the
+whole board (`─ ALPHA ──── 5 󰈳 ─`, the count across the tab and a fold icon), and each lane's band
+is as tall as its busiest column, so a lane starts on the same row in every column; a board with
+no lane grouping has no lane lines. Cards are 13 rows tall with a 2-cell inset: header (identifier,
+priority, panes; marks and `▶` right-aligned), two title rows, three description rows (the newest
+note replaces the last as `› note`), then assignee and milestone, and the pull request row. That
+row shows Linear's number and status with dim placeholders for preview, diff and CI until `gh`
+data is wired in. Selecting a card changes only its surface, title colour and two inner rules, so
+no text moves. Unfocused columns are muted; with nothing selected none is. The board scrolls as
+one unit by the least that keeps the selection in view. An empty column says `no issues`, a filter
+that matches nothing says `no matching issues`, and a pane shorter than the header, one card and
+the bar says `pane too short`. Titles and descriptions wrap by display width, so wide characters
+do not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
 keeps it on the same card when it can. The header names the recorded view, or `view: project issues (default)` when none is
 chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
 herdr config (`$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`), read
@@ -1103,8 +1114,9 @@ retired, and the daemon answers its method as unknown.
 
 **Agent marks.** Agents mark cards through `board mcp`: needs you (`!`), question (`?`) and done
 (`✓`). The board adds a suggestion (`◇`) when a reported Linear write could not link a worktree.
-A 2-cell gutter left of each identifier shows a card's marks, with `◉` for a pending show-request,
-and a card with a note shows the latest one under its title. Pending show-requests pin one line
+A card's header shows its marks right-aligned, each in its own colour (also in muted columns),
+with `◉` for a pending show-request, and a card with a note shows the latest one in place of its
+last description line. Pending show-requests pin one line
 between the columns and the strip, oldest first. `a` accepts (binds a selected suggestion, or
 shows the oldest request's card), `x` rejects, and `n`/`N` walk the marked cards across columns,
 pages and tabs. Opening a card's detail clears the `!`, `?` and `✓` marks it showed. Pager arrows
