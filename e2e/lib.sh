@@ -285,13 +285,13 @@ e2e_protocol_preflight() {
   local version ping protocol reported_version
   version="$($HERDR_BIN --version 2>&1 || true)"
   printf '  Herdr preflight: %s\n' "$version"
-  # A preview build of the pinned release ships the same socket protocol, so it
-  # passes; any other release still fails. The same rule the runtime client
+  # A supported release (0.9.0-0.9.3) or a preview of one ships the same socket
+  # protocol, so it passes; any other release still fails. The same rule the runtime client
   # applies in crates/board-herdr/src/client.rs -- this gate is its twin, and
   # was left comparing exactly when that one was fixed.
   case "$version" in
-    "herdr 0.9.0"|"herdr 0.9.0-preview."*) ;;
-    *) fail "requires Herdr 0.9.0 or a preview of it (got: $version)" ;;
+    "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;;
+    *) fail "requires Herdr 0.9.0-0.9.3 or a preview of one (got: $version)" ;;
   esac
   ping="$(hrpc ping '{}')" \
     || fail "Herdr protocol preflight ping failed"
@@ -300,8 +300,8 @@ e2e_protocol_preflight() {
   printf '  Herdr ping evidence: version=%s protocol=%s payload=%s\n' \
     "$reported_version" "$protocol" "$ping"
   case "$reported_version" in
-    "0.9.0"|"0.9.0-preview."*) ;;
-    *) fail "requires Herdr 0.9.0 or a preview of it from ping (got: $reported_version)" ;;
+    "0.9."[0-3]|"0.9."[0-3]"-preview."*) ;;
+    *) fail "requires Herdr 0.9.0-0.9.3 or a preview of one from ping (got: $reported_version)" ;;
   esac
   [ "$protocol" = "22" ] \
     || fail "requires Herdr protocol 22 (got: ${protocol:-missing})"

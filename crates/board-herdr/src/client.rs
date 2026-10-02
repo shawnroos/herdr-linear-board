@@ -230,8 +230,8 @@ impl HerdrClient {
         self.call_into("ping", json!({}))
     }
 
-    /// Require the exact Herdr release and socket protocol supported by this
-    /// client. The supported contract is owned by [`crate::SUPPORTED_HERDR_VERSION`]
+    /// Require a supported Herdr release and the socket protocol of this
+    /// client. The supported contract is owned by [`crate::SUPPORTED_HERDR_VERSIONS`]
     /// and [`crate::SUPPORTED_HERDR_PROTOCOL`], so callers cannot accidentally
     /// ask this gate to validate a different contract.
     pub fn require_supported_protocol(&mut self) -> Result<Pong> {
@@ -242,7 +242,7 @@ impl HerdrClient {
                 code: "incompatible_protocol".to_string(),
                 message: format!(
                     "Herdr {} with protocol {} is required (found Herdr {} with protocol {})",
-                    crate::SUPPORTED_HERDR_VERSION,
+                    crate::SUPPORTED_HERDR_RANGE,
                     crate::SUPPORTED_HERDR_PROTOCOL,
                     pong.version,
                     pong.protocol
@@ -255,8 +255,8 @@ impl HerdrClient {
     /// Compatibility adapter for callers of the pre-0.8.0 API.
     ///
     /// The argument is retained so existing clients continue to compile, but
-    /// it is not a version selector: this crate supports only its exact pinned
-    /// Herdr 0.9.0 / protocol-22 contract. New callers should use
+    /// it is not a version selector: this crate supports only its pinned
+    /// Herdr 0.9.0–0.9.3 / protocol-22 contract. New callers should use
     /// [`Self::require_supported_protocol`].
     #[deprecated(
         note = "use require_supported_protocol; the argument is retained only for source compatibility"
@@ -267,7 +267,7 @@ impl HerdrClient {
                 code: "incompatible_protocol".to_string(),
                 message: format!(
                     "Herdr {} with protocol {} is the only supported contract (requested protocol {})",
-                    crate::SUPPORTED_HERDR_VERSION,
+                    crate::SUPPORTED_HERDR_RANGE,
                     crate::SUPPORTED_HERDR_PROTOCOL,
                     expected
                 ),
@@ -455,18 +455,47 @@ impl HerdrClient {
     }
 }
 
-// A preview build of the pinned release ships the same socket protocol, so it
+// A preview build of a supported release ships the same socket protocol, so it
 // passes; any other release or a protocol mismatch still fails.
 fn is_supported_release(version: &str) -> bool {
-    version == crate::SUPPORTED_HERDR_VERSION
-        || version
-            .strip_prefix(crate::SUPPORTED_HERDR_VERSION)
-            .is_some_and(|rest| rest.starts_with("-preview."))
+    crate::SUPPORTED_HERDR_VERSIONS.iter().any(|supported| {
+        version == *supported
+            || version
+                .strip_prefix(supported)
+                .is_some_and(|rest| rest.starts_with("-preview."))
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::diagnostic_method;
+    use super::{diagnostic_method, is_supported_release};
+
+    #[test]
+    fn supported_release_accepts_the_range_and_its_previews_only() {
+        for accepted in [
+            "0.9.0",
+            "0.9.0-preview.1",
+            "0.9.2",
+            "0.9.3",
+            "0.9.3-preview.x",
+        ] {
+            assert!(
+                is_supported_release(accepted),
+                "{accepted} must be accepted"
+            );
+        }
+        for refused in [
+            "0.8.9",
+            "0.9.4",
+            "1.0.0",
+            "0.9.0-rc1",
+            "0.9.00",
+            "0.9.30",
+            "",
+        ] {
+            assert!(!is_supported_release(refused), "{refused} must be refused");
+        }
+    }
 
     #[test]
     fn plugin_pane_methods_are_labelled_in_diagnostics() {

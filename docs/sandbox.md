@@ -28,6 +28,20 @@ for your architecture verified by SHA-256, exact version string, and socket
 protocol 22 (both `amd64` and `arm64` assets are pinned). Nothing floats; the
 image is rebuilt automatically when the `docker/` directory changes.
 
+The default image carries Herdr 0.9.0, the oldest supported release and the one
+CI runs. To run against the newest supported release, pass `--herdr-version 0.9.3`
+(or set `SANDBOX_HERDR_VERSION=0.9.3`) before the subcommand:
+
+```bash
+scripts/sandbox.sh --herdr-version 0.9.3 gates
+scripts/sandbox.sh --herdr-version 0.9.3 shell
+```
+
+A 0.9.3 sandbox gets its own image tag, environment container and state volumes
+(`hb-sb-<slug>-herdr093-…`), so its Herdr server never shares state with the
+default one; only the cargo and target caches are shared. `docker/Dockerfile`
+pins a SHA-256 per version and architecture, and an unlisted version fails.
+
 ## The one-command edit-test loop
 
 ```bash
@@ -245,7 +259,7 @@ run, the gate fails loudly.
 | Path | Purpose |
 |---|---|
 | `scripts/sandbox.sh` | The one entry command (argument handling, isolation profile, volumes, modes). |
-| `docker/Dockerfile` | Pinned image: digest-pinned Rust base, per-arch SHA-verified Herdr 0.9.0, non-root user. |
+| `docker/Dockerfile` | Pinned image: digest-pinned Rust base, SHA-verified Herdr per version and arch (0.9.0 default, 0.9.3 opt-in), non-root user. |
 | `docker/selfcheck.sh`, `docker/lib.sh` | The in-container isolation proof and shared mount audit. |
 | `docker/gates.sh` | Gate sequence with named first failure and e2e evidence export. |
 | `docker/prepare.sh` | Dependency fetch + `board` build (network-enabled step). |

@@ -14,7 +14,8 @@
 //!
 //! Method and field names are verified against `herdr api schema --json`
 //! (Herdr 0.9.0, protocol 22), captured in `docs/herdr-0.9.0-schema.json`
-//! (legacy fixture at `tests/fixtures/schema.json` is protocol 20).
+//! and re-checked against 0.9.3 (`docs/herdr.md`); the legacy fixture at
+//! `tests/fixtures/schema.json` is protocol 20.
 
 mod client;
 mod envelope;
@@ -24,8 +25,13 @@ mod params;
 mod transport;
 mod types;
 
-/// The only Herdr release supported by this client.
+/// Herdr releases this client accepts, oldest first. Each must speak
+/// [`SUPPORTED_HERDR_PROTOCOL`]; a release that changes the protocol is refused.
+pub const SUPPORTED_HERDR_VERSIONS: &[&str] = &["0.9.0", "0.9.1", "0.9.2", "0.9.3"];
+/// The oldest supported Herdr release; test fakes report it in `ping`.
 pub const SUPPORTED_HERDR_VERSION: &str = "0.9.0";
+/// The supported releases as shown in error messages and docs.
+pub const SUPPORTED_HERDR_RANGE: &str = "0.9.0\u{2013}0.9.3";
 /// The only Herdr socket protocol supported by this client.
 pub const SUPPORTED_HERDR_PROTOCOL: u32 = 22;
 

@@ -18,7 +18,8 @@ use board_herdr::{
     AgentPromptParams, AgentStartParams, AgentStatus, AgentWaitParams, HerdrClient, HerdrError,
     HerdrEvent, HerdrEvents, PaneRenameParams, PaneSplitParams, PluginPaneOpenParams,
     PluginPanePlacement, ReadSource, SocketDeadlines, SplitDirection, Subscription,
-    TabRenameParams, WorkspaceCreateParams, SUPPORTED_HERDR_PROTOCOL, SUPPORTED_HERDR_VERSION,
+    TabRenameParams, WorkspaceCreateParams, SUPPORTED_HERDR_PROTOCOL, SUPPORTED_HERDR_RANGE,
+    SUPPORTED_HERDR_VERSION, SUPPORTED_HERDR_VERSIONS,
 };
 use serde_json::Value;
 
@@ -186,10 +187,14 @@ fn protocol_gate_rejects_mismatches_with_exact_diagnostics() {
         ("0.8.0", 17),
         ("0.7.5", 17),
         ("0.9.0", 20),
+        ("0.9.3", 23),
         ("0.9.0-preview.2026-09-09-5a244caa60b0", 21),
-        ("0.9.1-preview.2026-10-01-0000", 22),
         ("0.9.0-rc1", 22),
         ("0.9.00", 22),
+        ("0.8.9", 22),
+        ("0.9.4", 22),
+        ("0.9.4-preview.2026-10-01-0000", 22),
+        ("1.0.0", 22),
     ] {
         let path = serve_calls(move |req| {
             reply_for(
@@ -205,7 +210,7 @@ fn protocol_gate_rejects_mismatches_with_exact_diagnostics() {
             .require_supported_protocol()
             .expect_err("a mismatched Herdr contract must be rejected");
         let expected_message = format!(
-            "Herdr {SUPPORTED_HERDR_VERSION} with protocol {SUPPORTED_HERDR_PROTOCOL} is required (found Herdr {version} with protocol {protocol})"
+            "Herdr {SUPPORTED_HERDR_RANGE} with protocol {SUPPORTED_HERDR_PROTOCOL} is required (found Herdr {version} with protocol {protocol})"
         );
         assert!(matches!(
             &err,
@@ -217,6 +222,51 @@ fn protocol_gate_rejects_mismatches_with_exact_diagnostics() {
             format!("herdr protocol error [incompatible_protocol]: {expected_message}")
         );
     }
+}
+
+#[test]
+fn protocol_gate_accepts_every_release_in_the_supported_range() {
+    for version in [
+        "0.9.0",
+        "0.9.0-preview.1",
+        "0.9.1",
+        "0.9.1-preview.2026-10-01-0000",
+        "0.9.2",
+        "0.9.3",
+        "0.9.3-preview.2026-09-29-8e78f929d8f0",
+    ] {
+        let path = serve_calls(move |req| {
+            reply_for(
+                req,
+                &format!(
+                    r#"{{"type":"pong","version":"{version}","protocol":{SUPPORTED_HERDR_PROTOCOL},"capabilities":{{}}}}"#
+                ),
+            )
+        });
+
+        let mut c = HerdrClient::connect(&path).unwrap();
+        let pong = c
+            .require_supported_protocol()
+            .unwrap_or_else(|e| panic!("Herdr {version} must be accepted: {e}"));
+        assert_eq!(pong.version, version);
+    }
+}
+
+#[test]
+fn supported_range_names_its_oldest_and_newest_release() {
+    assert_eq!(
+        SUPPORTED_HERDR_VERSIONS,
+        &["0.9.0", "0.9.1", "0.9.2", "0.9.3"]
+    );
+    assert_eq!(SUPPORTED_HERDR_VERSION, SUPPORTED_HERDR_VERSIONS[0]);
+    assert_eq!(
+        SUPPORTED_HERDR_RANGE,
+        format!(
+            "{}\u{2013}{}",
+            SUPPORTED_HERDR_VERSIONS[0],
+            SUPPORTED_HERDR_VERSIONS[SUPPORTED_HERDR_VERSIONS.len() - 1]
+        )
+    );
 }
 
 #[test]

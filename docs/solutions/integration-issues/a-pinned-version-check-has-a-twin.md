@@ -40,13 +40,12 @@ every site calls. It is not worth a shared crate for a shell script and a Rust
 client, so the next best thing is what this file is for: the sites know about
 each other now.
 
-Two of them are fixed: the runtime client and `e2e/lib.sh`, whose rule
-`scripts/tests/test_e2e_ci.py` now asserts as "release or preview" rather than
-as an exact string — the pinned string was how the gap survived here in the
-first place. The eight comparisons in the four real-provider smokes still match
-exactly. They are opt-in, outside CI, and refuse loudly rather than passing
-wrongly, so they were left alone deliberately; the fix is the same one-line
-`case` when someone runs one on a preview build.
+The widening to 0.9.0–0.9.3 changed all eleven together. The runtime client reads
+`SUPPORTED_HERDR_VERSIONS`; `e2e/lib.sh` and the four smokes use the shell pattern
+`"0.9."[0-3]` (plus `-preview.*`), and the smokes' `ping` checks use the matching
+`jq` regex. `scripts/tests/test_e2e_ci.py` asserts each site carries the pattern and
+also runs the patterns against accepted and refused versions, because a string match
+proves the pattern is present, not that it accepts the right releases.
 
 ## The general shape
 

@@ -14,7 +14,7 @@
 9. Common failures
 
 Commands below were exercised with Herdr 0.9.0 / protocol 22. This repository
-requires that exact pair; re-verify the installed CLI and session socket before use.
+accepts Herdr 0.9.0–0.9.3 with protocol 22 only; re-verify the installed CLI and session socket before use.
 
 ## 1. Preflight
 
@@ -22,7 +22,7 @@ requires that exact pair; re-verify the installed CLI and session socket before 
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO"
 git status --short
-test "$(herdr --version)" = "herdr 0.9.0"
+case "$(herdr --version)" in "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;; *) false ;; esac
 herdr status
 herdr api schema --json | jq -e 'select(.protocol == 22) | {protocol,schema_version}'
 herdr plugin list --plugin herdr-board --json | jq '.result.plugins[0] | {version,plugin_root,source}'

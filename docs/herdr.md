@@ -25,19 +25,26 @@ Rule of thumb (mirrors [AGENTS.md](../AGENTS.md)): **never assume a herdr
 command, flag, or JSON shape from memory — verify against `api schema` /
 `--help`, and pin the argv you verified in a test comment.**
 
-## Compatibility gate: Herdr 0.9.0 / socket protocol 22
+## Compatibility gate: Herdr 0.9.0–0.9.3 / socket protocol 22
 
-The supported matrix is exact: **Herdr 0.9.0**, **socket protocol 22**, board protocol
-v1, and SQLite schema v16. `board-herdr` rejects a different Herdr version or
-protocol before the daemon performs workspace discovery, pane placement, an agent
+The supported matrix: **Herdr 0.9.0, 0.9.1, 0.9.2 or 0.9.3**, **socket protocol 22**,
+board protocol v1, and SQLite schema v16. `board-herdr` rejects any other Herdr version
+or protocol before the daemon performs workspace discovery, pane placement, an agent
 launch, a configured runner action, or a notification mutation. This is a policy
-gate, not a protocol-negotiation fallback. A preview build of the pinned release
-(`0.9.0-preview.*`) passes when it reports protocol 22.
+gate, not a protocol-negotiation fallback. A preview build of a supported release
+(`0.9.N-preview.*`) passes when it reports protocol 22.
+
+The accepted list is `SUPPORTED_HERDR_VERSIONS` in `crates/board-herdr/src/lib.rs`.
+`e2e/lib.sh` and the four `e2e/real-*-smoke.sh` scripts repeat the same rule as shell
+patterns (`docs/solutions/integration-issues/a-pinned-version-check-has-a-twin.md`);
+`scripts/tests/test_e2e_ci.py` runs those patterns against accepted and refused versions.
+CI and the default sandbox image run 0.9.0. `./scripts/sandbox.sh --herdr-version 0.9.3 …`
+builds and runs a separate 0.9.3 sandbox (see "Herdr 0.9.3 compatibility" below).
 
 Use these read-only probes before changing a wire call or debugging a live session:
 
 ```bash
-test "$(herdr --version)" = "herdr 0.9.0"
+case "$(herdr --version)" in "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;; *) false ;; esac
 herdr api schema --json | python3 -c \
   'import json, sys; s=json.load(sys.stdin); assert s["protocol"] == 22, s'
 herdr api snapshot
@@ -443,8 +450,8 @@ workspace, tab, pane, agent, notification, session, and events. The upstream wor
 DTOs are not part of this crate's public surface; repository isolation belongs in the agent prompt.
 The checked-in schema fixture is regenerated from the installed Herdr contract and
 is not rewritten during unrelated API cleanup. The board fixture and typed client
-are currently pinned to **Herdr 0.9.0 / protocol 22**; board protocol v1 and DB
-schema v16 remain independent and unchanged.
+are currently pinned to **Herdr 0.9.0–0.9.3 / protocol 22** (the schema fixture is the
+0.9.0 dump); board protocol v1 and DB schema v16 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

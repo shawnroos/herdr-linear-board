@@ -11,7 +11,7 @@
 # (amd64 and arm64). See docs/sandbox.md for the full guide.
 #
 # Usage: scripts/sandbox.sh [--dry-run] [--platform linux/amd64|linux/arm64] \
-#           <subcommand> [args...]
+#           [--herdr-version 0.9.0|0.9.3] <subcommand> [args...]
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -29,6 +29,11 @@ Global flags:
   --platform <linux/amd64|linux/arm64>
                              Target platform (default: the docker server arch;
                              a non-native choice is transparent emulation)
+  --herdr-version <0.9.0|0.9.3>
+                             Herdr release baked into the image (default 0.9.0,
+                             or $SANDBOX_HERDR_VERSION). A non-default version
+                             gets its own image tag, env container and state
+                             volumes; the cargo and target caches are shared
   -h, --help                 Show this help
 
 Subcommands:
@@ -85,6 +90,8 @@ info() { echo "sandbox: $*"; }
 DRY_RUN=0
 PLATFORM=""
 SUBCOMMAND=""
+DEFAULT_HERDR_VERSION=0.9.0
+HERDR_VERSION="${SANDBOX_HERDR_VERSION:-$DEFAULT_HERDR_VERSION}"
 
 # ---------------------------------------------------------------------------
 # Resource naming (per worktree; everything this tool creates is prefixed)
@@ -163,14 +170,24 @@ image_hash() {
 
 IMAGE_TAG="" # set after resolve_platform
 
+image_tag() { # the default Herdr keeps the historical tag so existing images are reused
+  local tag
+  tag="hb-sandbox:$(image_hash)-$PLATFORM"
+  [ "$HERDR_VERSION" = "$DEFAULT_HERDR_VERSION" ] || tag="$tag-herdr$HERDR_VERSION"
+  printf '%s\n' "$tag"
+}
+
 ensure_image() {
-  local hash
-  hash="$(image_hash)"
-  IMAGE_TAG="hb-sandbox:$hash-$PLATFORM"
+  IMAGE_TAG="$(image_tag)"
   info "image: $IMAGE_TAG"
   if [ "$DRY_RUN" -eq 0 ] && ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-    info "building image (pinned base, rust 1.97.0, herdr 0.9.0 verified per arch)"
-    run docker build --platform "linux/$PLATFORM" -t "$IMAGE_TAG" "$DOCKER_DIR"
+    info "building image (pinned base, rust 1.97.0, herdr $HERDR_VERSION verified per arch)"
+    if [ "$HERDR_VERSION" = "$DEFAULT_HERDR_VERSION" ]; then
+      run docker build --platform "linux/$PLATFORM" -t "$IMAGE_TAG" "$DOCKER_DIR"
+    else
+      run docker build --platform "linux/$PLATFORM" --build-arg "HERDR_VERSION=$HERDR_VERSION" \
+        -t "$IMAGE_TAG" "$DOCKER_DIR"
+    fi
   fi
 }
 
@@ -394,18 +411,14 @@ cmd_reset() {
     --state) run docker rm -f "$ENV_CONTAINER" "$AGENT_CONTAINER" >/dev/null 2>&1 || true; run docker volume rm "$VOL_STATE" "$VOL_AGENT_STATE" ;;
     --artifacts) run docker volume rm "$VOL_ARTIFACTS" ;;
     --image)
-      local hash
-      hash="$(image_hash)"
       resolve_platform
-      run docker rmi "hb-sandbox:$hash-$PLATFORM" || true
+      run docker rmi "$(image_tag)" || true
       ;;
     --all)
       run docker rm -f "$ENV_CONTAINER" "$AGENT_CONTAINER" >/dev/null 2>&1 || true
       run docker volume rm "$VOL_CARGO" "$VOL_TARGET" "$VOL_STATE" "$VOL_AGENT_STATE" "$VOL_ARTIFACTS" "$VOL_TMP"
-      local hash
-      hash="$(image_hash)"
       resolve_platform
-      run docker rmi "hb-sandbox:$hash-$PLATFORM" || true
+      run docker rmi "$(image_tag)" || true
       ;;
     *) die "unknown reset scope '$scope'" ;;
   esac
@@ -617,12 +630,28 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --platform) [ $# -ge 2 ] || die "--platform needs a value"; PLATFORM="$2"; shift 2 ;;
+    --herdr-version) [ $# -ge 2 ] || die "--herdr-version needs a value"; HERDR_VERSION="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown flag '$1' (see --help)" ;;
     *) SUBCOMMAND="$1"; shift; break ;;
   esac
 done
 [ -n "$SUBCOMMAND" ] || { usage >&2; exit 2; }
+
+case "$HERDR_VERSION" in
+  0.9.0|0.9.3) ;;
+  *) die "unsupported --herdr-version '$HERDR_VERSION' (docker/Dockerfile pins 0.9.0 and 0.9.3)" ;;
+esac
+# A second Herdr version must never share a live Herdr server or its state
+# with the default one; only the version-neutral build caches are shared.
+if [ "$HERDR_VERSION" != "$DEFAULT_HERDR_VERSION" ]; then
+  herdr_suffix="-herdr$(printf '%s' "$HERDR_VERSION" | tr -d .)"
+  VOL_STATE="$PREFIX$herdr_suffix-state"
+  VOL_TMP="$PREFIX$herdr_suffix-tmp"
+  ENV_CONTAINER="$PREFIX$herdr_suffix-env"
+  VOL_AGENT_STATE="$PREFIX$herdr_suffix-agent-state"
+  AGENT_CONTAINER="$PREFIX$herdr_suffix-agent"
+fi
 
 case "$SUBCOMMAND" in
   gates) cmd_gates "$@" ;;

@@ -46,8 +46,10 @@ PI_VERSION="$(pi --version)"
 MODEL_ROW="$(pi --list-models "$DEFAULT_MODEL" | awk -v p="$PROVIDER" -v m="$MODEL" '$1==p && $2==m {print; found=1} END{if(!found) exit 1}')" \
   || { echo "real-pi-smoke: model $DEFAULT_MODEL not in pi --list-models" >&2; exit 2; }
 HERDR_VERSION="$("$HERDR_BIN" --version 2>&1)"
-[ "$HERDR_VERSION" = "herdr 0.9.0" ] \
-  || { echo "real-pi-smoke: requires exactly Herdr 0.9.0 (got: $HERDR_VERSION)" >&2; exit 2; }
+case "$HERDR_VERSION" in
+  "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;;
+  *) echo "real-pi-smoke: requires Herdr 0.9.0-0.9.3 (got: $HERDR_VERSION)" >&2; exit 2 ;;
+esac
 HERDR_SCHEMA="$("$HERDR_BIN" api schema --json)"
 printf '%s' "$HERDR_SCHEMA" | jq -e '.protocol == 22' >/dev/null \
   || { echo "real-pi-smoke: requires Herdr schema protocol 22" >&2; exit 2; }
