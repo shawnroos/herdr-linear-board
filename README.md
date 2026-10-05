@@ -107,7 +107,7 @@ and agent tools. Design: [`docs/design.md`](docs/design.md) section 13.
 ## Install
 
 ```bash
-herdr plugin install nelsonPires5/herdr-board --ref v0.17.0
+herdr plugin install nelsonPires5/herdr-board --ref v0.18.0
 ```
 
 Open the board:

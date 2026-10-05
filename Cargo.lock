@@ -120,7 +120,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "board-cli"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "board-core",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "board-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "board-daemon"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "board-core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "board-herdr"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "libc",
  "serde",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "board-tui"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
