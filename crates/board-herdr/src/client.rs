@@ -230,10 +230,11 @@ impl HerdrClient {
         self.call_into("ping", json!({}))
     }
 
-    /// Require the exact Herdr release and socket protocol supported by this
-    /// client. The supported contract is owned by [`crate::SUPPORTED_HERDR_VERSION`]
-    /// and [`crate::SUPPORTED_HERDR_PROTOCOL`], so callers cannot accidentally
-    /// ask this gate to validate a different contract.
+    /// Require a Herdr release of the supported series and the exact socket
+    /// protocol supported by this client. The supported contract is owned by
+    /// [`crate::SUPPORTED_HERDR_SERIES`] and [`crate::SUPPORTED_HERDR_PROTOCOL`],
+    /// so callers cannot accidentally ask this gate to validate a different
+    /// contract.
     pub fn require_supported_protocol(&mut self) -> Result<Pong> {
         let pong = self.ping()?;
         if !is_supported_release(&pong.version) || pong.protocol != crate::SUPPORTED_HERDR_PROTOCOL
@@ -241,8 +242,8 @@ impl HerdrClient {
             return Err(HerdrError::Protocol {
                 code: "incompatible_protocol".to_string(),
                 message: format!(
-                    "Herdr {} with protocol {} is required (found Herdr {} with protocol {})",
-                    crate::SUPPORTED_HERDR_VERSION,
+                    "Herdr {}.x with protocol {} is required (found Herdr {} with protocol {})",
+                    crate::SUPPORTED_HERDR_SERIES,
                     crate::SUPPORTED_HERDR_PROTOCOL,
                     pong.version,
                     pong.protocol
@@ -255,8 +256,8 @@ impl HerdrClient {
     /// Compatibility adapter for callers of the pre-0.8.0 API.
     ///
     /// The argument is retained so existing clients continue to compile, but
-    /// it is not a version selector: this crate supports only its exact pinned
-    /// Herdr 0.9.0 / protocol-22 contract. New callers should use
+    /// it is not a version selector: this crate supports only the Herdr 0.9.x /
+    /// protocol-22 contract. New callers should use
     /// [`Self::require_supported_protocol`].
     #[deprecated(
         note = "use require_supported_protocol; the argument is retained only for source compatibility"
@@ -266,8 +267,8 @@ impl HerdrClient {
             return Err(HerdrError::Protocol {
                 code: "incompatible_protocol".to_string(),
                 message: format!(
-                    "Herdr {} with protocol {} is the only supported contract (requested protocol {})",
-                    crate::SUPPORTED_HERDR_VERSION,
+                    "Herdr {}.x with protocol {} is the only supported contract (requested protocol {})",
+                    crate::SUPPORTED_HERDR_SERIES,
                     crate::SUPPORTED_HERDR_PROTOCOL,
                     expected
                 ),
@@ -455,18 +456,73 @@ impl HerdrClient {
     }
 }
 
-// A preview build of the pinned release ships the same socket protocol, so it
-// passes; any other release or a protocol mismatch still fails.
+// Patch releases and preview builds of the supported series keep socket
+// protocol 22 (schema diff of 0.9.3 against 0.9.0 is additive for every method
+// the board calls, see docs/herdr.md), so the protocol check stays the hard
+// gate. The same rule is repeated in e2e/lib.sh and e2e/real-*.sh; keep them
+// in step (docs/solutions/integration-issues/a-pinned-version-check-has-a-twin.md).
 fn is_supported_release(version: &str) -> bool {
-    version == crate::SUPPORTED_HERDR_VERSION
-        || version
-            .strip_prefix(crate::SUPPORTED_HERDR_VERSION)
-            .is_some_and(|rest| rest.starts_with("-preview."))
+    let Some(rest) = version
+        .strip_prefix(crate::SUPPORTED_HERDR_SERIES)
+        .and_then(|rest| rest.strip_prefix('.'))
+    else {
+        return false;
+    };
+    let (patch, suffix) = match rest.split_once('-') {
+        Some((patch, suffix)) => (patch, Some(suffix)),
+        None => (rest, None),
+    };
+    let canonical_patch = !patch.is_empty()
+        && patch.bytes().all(|b| b.is_ascii_digit())
+        && (patch == "0" || !patch.starts_with('0'));
+    canonical_patch && suffix.is_none_or(|suffix| suffix.starts_with("preview."))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::diagnostic_method;
+    use super::{diagnostic_method, is_supported_release};
+
+    #[test]
+    fn every_patch_release_of_the_supported_series_is_accepted() {
+        for version in [
+            "0.9.0",
+            "0.9.1",
+            "0.9.3",
+            "0.9.12",
+            "0.9.0-preview.2026-09-09-5a244caa60b0",
+            "0.9.3-preview.2026-10-01-0000",
+        ] {
+            assert!(is_supported_release(version), "{version} must be accepted");
+        }
+    }
+
+    #[test]
+    fn releases_outside_the_supported_series_are_refused() {
+        for version in [
+            "",
+            "0.8.2",
+            "0.8.9",
+            "0.10.0",
+            "1.9.0",
+            "0.90.0",
+            "0.9",
+            "0.9.",
+            "0.9.x",
+            "0.9.3a",
+            "0.9.00",
+            "0.9.03",
+            "0.9.0-rc1",
+            "0.9.3-beta.1",
+            "v0.9.3",
+            " 0.9.3",
+            "0.9.3 ",
+        ] {
+            assert!(
+                !is_supported_release(version),
+                "{version:?} must be refused"
+            );
+        }
+    }
 
     #[test]
     fn plugin_pane_methods_are_labelled_in_diagnostics() {

@@ -24,7 +24,12 @@ mod params;
 mod transport;
 mod types;
 
-/// The only Herdr release supported by this client.
+/// The Herdr release series supported by this client: any `0.9.<patch>`
+/// release or `-preview.*` build of one, provided it speaks
+/// [`SUPPORTED_HERDR_PROTOCOL`].
+pub const SUPPORTED_HERDR_SERIES: &str = "0.9";
+/// The Herdr release the checked-in schema dump and test fakes are pinned to.
+/// It is one member of [`SUPPORTED_HERDR_SERIES`], not the runtime gate.
 pub const SUPPORTED_HERDR_VERSION: &str = "0.9.0";
 /// The only Herdr socket protocol supported by this client.
 pub const SUPPORTED_HERDR_PROTOCOL: u32 = 22;

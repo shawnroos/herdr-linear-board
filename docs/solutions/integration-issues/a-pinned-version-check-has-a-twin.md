@@ -40,13 +40,15 @@ every site calls. It is not worth a shared crate for a shell script and a Rust
 client, so the next best thing is what this file is for: the sites know about
 each other now.
 
-Two of them are fixed: the runtime client and `e2e/lib.sh`, whose rule
-`scripts/tests/test_e2e_ci.py` now asserts as "release or preview" rather than
-as an exact string — the pinned string was how the gap survived here in the
-first place. The eight comparisons in the four real-provider smokes still match
-exactly. They are opt-in, outside CI, and refuse loudly rather than passing
-wrongly, so they were left alone deliberately; the fix is the same one-line
-`case` when someone runs one on a preview build.
+All eleven now apply one rule: any `0.9.<patch>` release, or a `-preview.*` build
+of one, at protocol 22 (widened from exactly 0.9.0 after the 0.9.3 schema diff in
+`docs/herdr.md`). The runtime copy is `is_supported_release` in
+`crates/board-herdr/src/client.rs`, with unit tests beside it. The shell copies are
+`E2E_HERDR_SERIES_RE` in `e2e/lib.sh` and `HERDR_SERIES_RE` in each real-provider
+smoke. `scripts/tests/test_e2e_ci.py` evaluates the `lib.sh` pattern against an
+accept and a refuse list and checks every smoke carries the same pattern, rather
+than pinning an exact string — the pinned string was how the gap survived here in
+the first place.
 
 ## The general shape
 

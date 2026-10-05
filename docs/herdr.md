@@ -25,19 +25,27 @@ Rule of thumb (mirrors [AGENTS.md](../AGENTS.md)): **never assume a herdr
 command, flag, or JSON shape from memory — verify against `api schema` /
 `--help`, and pin the argv you verified in a test comment.**
 
-## Compatibility gate: Herdr 0.9.0 / socket protocol 22
+## Compatibility gate: Herdr 0.9.x / socket protocol 22
 
-The supported matrix is exact: **Herdr 0.9.0**, **socket protocol 22**, board protocol
-v1, and SQLite schema v16. `board-herdr` rejects a different Herdr version or
-protocol before the daemon performs workspace discovery, pane placement, an agent
-launch, a configured runner action, or a notification mutation. This is a policy
-gate, not a protocol-negotiation fallback. A preview build of the pinned release
-(`0.9.0-preview.*`) passes when it reports protocol 22.
+The supported matrix is: **Herdr 0.9.x** (any `0.9.<patch>` release, or a
+`0.9.<patch>-preview.*` build of one), **socket protocol 22**, board protocol v1, and
+SQLite schema v16. `board-herdr` rejects any other Herdr version (0.8.x, 0.10.0, 1.x,
+`0.90.0`, a malformed version) or any other protocol before the daemon performs
+workspace discovery, pane placement, an agent launch, a configured runner action, or a
+notification mutation. This is a policy gate, not a protocol-negotiation fallback:
+protocol 22 is the hard requirement, and the series rule only stops a release that
+happens to report protocol 22 from passing outside the series that was checked.
+The checked-in schema dump, the sandbox, and CI stay pinned to Herdr 0.9.0.
+
+The rule lives in `is_supported_release` (`crates/board-herdr/src/client.rs`) and is
+repeated in the shell gates: `e2e/lib.sh` (`E2E_HERDR_SERIES_RE`) and the four
+`e2e/real-*-smoke.sh` scripts. Change them together; `scripts/tests/test_e2e_ci.py`
+checks the shell copies agree.
 
 Use these read-only probes before changing a wire call or debugging a live session:
 
 ```bash
-test "$(herdr --version)" = "herdr 0.9.0"
+herdr --version   # expect herdr 0.9.<patch>, optionally -preview.*
 herdr api schema --json | python3 -c \
   'import json, sys; s=json.load(sys.stdin); assert s["protocol"] == 22, s'
 herdr api snapshot
@@ -168,7 +176,7 @@ copying them from this page.
 
 The stable transport rule is pane-first and intentionally independent of a
 protocol number: create or split the target pane with its cwd/environment first,
-then start the agent in that existing pane. Under the exact Herdr 0.9.0 / socket
+then start the agent in that existing pane. Under the Herdr 0.9.x / socket
 protocol 22 gate, herdr-board first creates a shell root for a new durable card
 tab and reserves it as `card-<id>-anchor`. When the dispatch itself just created
 the workspace (`new_workspace` with no matching open workspace), the workspace's
@@ -436,15 +444,35 @@ Linear's GraphQL `CustomView` exposes its board grouping through `viewPreference
 `columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
 schema, 2026-09-29).
 
+## Herdr 0.9.3 against the 0.9.0 schema (observed 2026-10-05)
+
+Observed on the host with the installed Herdr 0.9.3, read-only: `herdr api schema --json`
+reports **protocol 22**. A semantic diff of that schema against
+[`herdr-0.9.0-schema.json`](herdr-0.9.0-schema.json) (methods, their params, and every
+request/response/event definition) found:
+
+- **Methods added:** `pane.clear`, `pane.link.resolve`, `server.ssh_agent.register`.
+- **Methods removed:** `pane.graphics.clear`, `pane.graphics.info`, `pane.graphics.set`
+  (with their `PaneGraphics*` request definitions). No board code calls them: under
+  `crates/`, `graphics` appears only in the legacy protocol-20 schema fixture.
+- **Params changed on existing methods:** none.
+- **Optional fields added:** `PaneInfo.restore_error`, `AgentInfo.completion_seq`,
+  `PaneReportAgentParams.resume_argv`, `PaneReportAgentSessionParams.resume_argv`,
+  `ServerCapabilities.ssh_agent_registration`; new response definition `PaneLinkRegion`. No
+  field became required, and no event definition changed.
+
+Every method and shape the board uses is unchanged, so the gate accepts the whole 0.9 series
+at protocol 22 instead of exactly 0.9.0. Re-run the same diff before widening it again.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:
 workspace, tab, pane, agent, notification, session, and events. The upstream worktree methods and
 DTOs are not part of this crate's public surface; repository isolation belongs in the agent prompt.
 The checked-in schema fixture is regenerated from the installed Herdr contract and
-is not rewritten during unrelated API cleanup. The board fixture and typed client
-are currently pinned to **Herdr 0.9.0 / protocol 22**; board protocol v1 and DB
-schema v16 remain independent and unchanged.
+is not rewritten during unrelated API cleanup. The board fixture is pinned to the
+**Herdr 0.9.0** schema, and the typed client accepts **Herdr 0.9.x / protocol 22**;
+board protocol v1 and DB schema v16 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

@@ -296,8 +296,10 @@ if declare -F codex >/dev/null 2>&1; then
 fi
 
 HERDR_VERSION="$($HERDR_BIN --version 2>&1)"
-[ "$HERDR_VERSION" = "herdr 0.9.0" ] \
-  || fail "requires exactly Herdr 0.9.0 (got: $HERDR_VERSION)"
+# Same series rule as is_supported_release in crates/board-herdr/src/client.rs.
+HERDR_SERIES_RE='0\.9\.(0|[1-9][0-9]*)(-preview\..*)?$'
+[[ "$HERDR_VERSION" =~ ^herdr\ $HERDR_SERIES_RE ]] \
+  || fail "requires Herdr 0.9.x, protocol 22 (got: $HERDR_VERSION)"
 HERDR_SCHEMA="$($HERDR_BIN api schema --json)"
 printf '%s' "$HERDR_SCHEMA" | jq -e '.protocol == 22' >/dev/null \
   || fail "requires Herdr schema protocol 22"
@@ -440,8 +442,8 @@ e2e_process_identity_verify "$SERVER_PID" "$SERVER_IDENTITY" \
   || fail "disposable Herdr server failed identity check before socket publication"
 write_state
 PING="$(HERDR_SOCKET_PATH="$SOCK" python3 "$ROOT/e2e/hrpc.py" ping '{}')"
-printf '%s' "$PING" | jq -e '.version == "0.9.0" and .protocol == 22' >/dev/null \
-  || fail "disposable session ping is not Herdr 0.9.0 protocol 22"
+printf '%s' "$PING" | jq -e '(.version | test("^0\\.9\\.(0|[1-9][0-9]*)(-preview\\..*)?$")) and .protocol == 22' >/dev/null \
+  || fail "disposable session ping is not Herdr 0.9.x, protocol 22"
 printf '%s\n' "$PING" >"$EVIDENCE/herdr-ping.json"
 
 printf 'HERDR MUTATION: create one disposable workspace in %s\n' "$SESSION"
