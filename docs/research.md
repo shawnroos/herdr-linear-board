@@ -117,7 +117,7 @@ output `done` from the integration's terminal end-of-turn idle report.
 > **Historical comparison only — not support policy:** the earlier Herdr 0.7.5 / protocol-17
 > capture had 89 request methods, 25 emitted event kinds, 26 subscription selectors, and Pi
 > integration v6. It is retained solely to explain the additive protocol-22 delta above; all
-> current gates and integration instructions use Herdr 0.9.0 / protocol 22, Pi v8, and Claude v7.
+> current gates and integration instructions use Herdr 0.9.x / protocol 22, Pi v8, and Claude v7.
 
 ## B. Prior art
 
@@ -140,7 +140,7 @@ The flags below describe direct/local CLI capabilities and historical adapter re
 **not** the shipped managed-launch transport. For a shipped managed run, herdr-board creates a
 pane first, starts the explicit agent kind with prompt-free startup args, supplies the system prompt
 through a temporary `0600` file, waits for `interactive_ready`, and sends the card prompt only via
-`agent.prompt` under the exact Herdr 0.9.0/protocol-22 gate described above.
+`agent.prompt` under the Herdr 0.9.x/protocol-22 gate described above.
 
 **Pi Coding Agent 0.80.10**: `--model <provider/model>`; `--thinking off|minimal|low|medium|high|xhigh|max`; direct CLI supports `--append-system-prompt <text>` and positional prompts; exact mint/resume via `--session-id <id>`; retry fork via `--fork <source-id> --session-id <new-id>`. Pi has no per-tool permission prompts; `--approve`/`--no-approve` controls project trust and must not be mapped to the board permission field. Models are runtime provider/auth/user configuration, so the board does not persist a parsed `--list-models` catalog. At verification time the user default was `openai-codex/gpt-5.6-sol`, thinking `xhigh`; the isolated smoke detects this at runtime and overrides only the invocation to `low`.
 

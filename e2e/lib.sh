@@ -277,6 +277,8 @@ e2e_require() {
   [ -f "$HRPC" ] || fail "hrpc.py missing at $HRPC"
 }
 
+E2E_HERDR_SERIES_RE='0\.9\.(0|[1-9][0-9]*)(-preview\..*)?$'
+
 # Protocol-22 preflight. Keep this exact and early: no scenario may dispatch
 # against an older or unknown/future Herdr, since the wire launch contract is
 # intentionally not backward compatible. The ping evidence is printed so a
@@ -285,24 +287,20 @@ e2e_protocol_preflight() {
   local version ping protocol reported_version
   version="$($HERDR_BIN --version 2>&1 || true)"
   printf '  Herdr preflight: %s\n' "$version"
-  # A preview build of the pinned release ships the same socket protocol, so it
-  # passes; any other release still fails. The same rule the runtime client
-  # applies in crates/board-herdr/src/client.rs -- this gate is its twin, and
-  # was left comparing exactly when that one was fixed.
-  case "$version" in
-    "herdr 0.9.0"|"herdr 0.9.0-preview."*) ;;
-    *) fail "requires Herdr 0.9.0 or a preview of it (got: $version)" ;;
-  esac
+  # Any 0.9.<patch> release or preview of one passes; protocol 22 below is the
+  # hard gate. The same rule the runtime client applies in
+  # crates/board-herdr/src/client.rs (is_supported_release) -- this gate is its
+  # twin, as are the real-provider smokes; change them together.
+  [[ "$version" =~ ^herdr\ $E2E_HERDR_SERIES_RE ]] \
+    || fail "requires Herdr 0.9.x, protocol 22 (got: $version)"
   ping="$(hrpc ping '{}')" \
     || fail "Herdr protocol preflight ping failed"
   protocol="$(printf '%s' "$ping" | python3 -c 'import json,sys; print(json.load(sys.stdin)["protocol"])' 2>/dev/null || true)"
   reported_version="$(printf '%s' "$ping" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version", ""))' 2>/dev/null || true)"
   printf '  Herdr ping evidence: version=%s protocol=%s payload=%s\n' \
     "$reported_version" "$protocol" "$ping"
-  case "$reported_version" in
-    "0.9.0"|"0.9.0-preview."*) ;;
-    *) fail "requires Herdr 0.9.0 or a preview of it from ping (got: $reported_version)" ;;
-  esac
+  [[ "$reported_version" =~ ^$E2E_HERDR_SERIES_RE ]] \
+    || fail "requires Herdr 0.9.x, protocol 22 from ping (got: $reported_version)"
   [ "$protocol" = "22" ] \
     || fail "requires Herdr protocol 22 (got: ${protocol:-missing})"
 }

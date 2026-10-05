@@ -1,7 +1,7 @@
 # herdr-board
 
 ![Rust](https://img.shields.io/badge/rust-edition%202021-orange.svg)
-![herdr 0.9.0](https://img.shields.io/badge/herdr-0.9.0-8a2be2)
+![herdr 0.9.x](https://img.shields.io/badge/herdr-0.9.x-8a2be2)
 ![board protocol v1 · schema v16](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v16-blue.svg)
 ![platforms: linux, macOS](https://img.shields.io/badge/platforms-linux%2C%20macOS-informational)
 
@@ -150,7 +150,7 @@ prefix is `ctrl+a`, it is `Ctrl+A Shift+K`). Do not reuse `prefix+k` — it is H
 <details>
 <summary><strong>Requirements and details</strong></summary>
 
-- Requires exactly **Herdr 0.9.0 (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
+- Requires **Herdr 0.9.x (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
   Linux and macOS are supported. The daemon rejects any other Herdr version or protocol before
   workspace discovery and pane launch.
 - Board protocol **v1**, SQLite schema **v16** (`schema.sql`; upgrades via `board-core::db`).
