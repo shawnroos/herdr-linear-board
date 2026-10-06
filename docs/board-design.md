@@ -126,7 +126,7 @@ Open modes are in `responsive-board.md` (modal, expand `e`, pinned overlay `o`, 
 - **Main column:** title, description, ATTACHMENTS, PULL REQUESTS, ACTIVITY. Section lines use the lane line style.
 - **Open PRs** are cards: state chip, branch → target, diff stats, checks summary, the specific merge blocker, reviews, preview URL. **Merged PRs** are one line each, with repo and diff aligned in columns.
 - **Attachments other than PRs** are cards: kind and chip (commit, Slack thread, upload, link), title, detail (branch, channel, file name), link.
-- **Modal:** everything behind it is faded about 60% toward the background. The bottom bar is not faded.
+- **Modal:** no border (Shawn, 2026-10-06). Its `panel_bg` surface against the faded board marks its edge. Everything behind it is faded about 60% toward the background. The bottom bar is not faded.
 - **Pinned panel:** takes one column's slot at the right. The board drops a column. No cards are hidden behind the panel.
 
 ## 7. Data sources for the issue view

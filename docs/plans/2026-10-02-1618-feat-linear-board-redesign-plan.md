@@ -562,7 +562,7 @@ Each wave-1 and wave-2 unit runs in its own worktree. `CHANGELOG.md` and `docs/t
 - PR cards render Linear's attachment data at once and fill in gh fields when they arrive. On gh failure they show one dim line with the reason (R18).
 
 **Test scenarios:**
-- Return at width 140 opens a modal ≤ 128 wide. Every board cell outside it is faded, and the bar cells are not.
+- Return at width 140 opens a modal ≤ 128 wide with no border cells (no box-drawing characters on its edge). Every board cell outside it is faded, and the bar cells are not.
 - `e` toggles modal and expanded; at width 120 the view renders narrow with no buttons, and back at 140 the modal returns.
 - `o` pins the issue into a column slot: the board drops one column and keeps the keys; `o` on the board unpins.
 - `p` focuses the pinned panel; ↓ scrolls it; Return on a linked issue opens it in the panel; Esc returns focus to the board with the card still selected.

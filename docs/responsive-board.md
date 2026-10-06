@@ -40,7 +40,7 @@ herdr support (verified on 0.9.3 / protocol 22): `pane.layout` returns the tab's
 
 | Mode | How | Behaviour |
 |---|---|---|
-| Modal | Return, when the board is ≥ 136 cells wide | Centred window (≤ 128 wide) over the board; the board shows muted behind it |
+| Modal | Return, when the board is ≥ 136 cells wide | Centred borderless window (≤ 128 wide) over the board; the board shows muted behind it |
 | Expand | `󰁌 Expand` button / `e` | Fills the board; the button becomes `Window e` to shrink back |
 | Overlay | Overlay button / `o` | Pins the issue as a floating panel over the right of the board (single-column layout). The board keeps the keys underneath; `o` from the board unpins |
 | Narrow | Return, when the board is < 136 wide | Fills the board directly; no buttons |
