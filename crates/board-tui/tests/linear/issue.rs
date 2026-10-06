@@ -795,3 +795,69 @@ fn below_two_columns_the_panel_hides_the_tip_says_it_is_pinned_and_its_focus_ret
     let back = render_at(&mut d, BOARD, TALL);
     assert!(back.contains("Unpin o"), "the panel returns at 144: {back}");
 }
+
+#[test]
+fn question_mark_on_the_issue_focuses_the_bar_and_up_or_esc_return_to_the_issue() {
+    use board_tui::app::BarItem;
+    let mut d = driver_with(client(), WIDE);
+    press(&mut d, KeyCode::Enter);
+    let card = state(&d).focus.clone();
+    let open = state(&d).detail.clone();
+    assert!(open.is_some());
+
+    press(&mut d, KeyCode::Char('?'));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(state(&d).focus, Focus::Bar(BarItem::Keys));
+    press(&mut d, KeyCode::Right);
+    assert_eq!(state(&d).focus, Focus::Bar(BarItem::Filter));
+    press(&mut d, KeyCode::Up);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(state(&d).focus, card, "↑ hands the focus back to the issue");
+    assert_eq!(state(&d).detail, open);
+
+    press(&mut d, KeyCode::Char('?'));
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "Esc leaves the bar, not the issue"
+    );
+    assert_eq!(state(&d).focus, card);
+    assert_eq!(state(&d).detail, open);
+}
+
+#[test]
+fn keys_on_the_issue_bar_opens_help_and_esc_returns_to_the_issue_bar() {
+    use board_tui::app::BarItem;
+    let mut d = driver_with(client(), WIDE);
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('?'));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::Help);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(state(&d).focus, Focus::Bar(BarItem::Keys));
+}
+
+#[test]
+fn filter_on_the_issue_bar_closes_the_issue_and_opens_the_board_filter() {
+    use board_tui::app::BarItem;
+    let mut d = driver_with(client(), WIDE);
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('?'));
+    press(&mut d, KeyCode::Right);
+    assert_eq!(state(&d).focus, Focus::Bar(BarItem::Filter));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(state(&d).focus, Focus::Filter);
+    assert_eq!(state(&d).detail, None);
+}
+
+#[test]
+fn the_issue_view_bar_shows_the_bar_hint() {
+    let mut d = driver_with(client(), WIDE);
+    press(&mut d, KeyCode::Enter);
+    let frame = render_at(&mut d, WIDE, TALL);
+    let last = frame.lines().last().unwrap_or_default().to_string();
+    assert!(last.contains("? bar"), "{last}");
+}

@@ -1736,7 +1736,7 @@ fn bar_item(state: &LinearState, item: &BarItem, label: String, selected: bool) 
 
 /// The issue's tip while it is open, else the board's.
 fn tip_text(app: &App, state: &LinearState, width: u16) -> String {
-    if !on_issue(app) {
+    if !on_issue(app) || matches!(state.focus, Focus::Bar(_)) {
         return state.bar_tip(width);
     }
     if state.at_split() {
@@ -1770,8 +1770,8 @@ fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         _ => None,
     };
     let mut controls = vec![];
-    // `?` opens help on the issue, not the bar, so the hint stays off there.
-    if layout.hint && !on_issue(app) {
+    // At the split level `?` opens help, not the bar.
+    if layout.hint && !state.at_split() {
         let (key, rest) = BAR_HINT.split_at(1);
         controls.push(Span::styled(format!(" {key}"), t.text()));
         controls.push(Span::styled(format!("{rest} "), t.dim()));

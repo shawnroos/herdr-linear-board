@@ -17,6 +17,9 @@ pub(super) fn detail_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     if app.linear.is_none() {
         return vec![];
     }
+    if let Some(effects) = super::linear_bar::bar_key(app, k) {
+        return effects;
+    }
     if let Some(delta) = nav_delta(k.code) {
         step_open(app, delta);
         return vec![];
@@ -239,6 +242,15 @@ pub(super) fn close_open(state: &mut LinearState) {
     state.detail_seed = None;
     state.detail_marks = None;
     state.detail_stack.clear();
+}
+
+/// Closes the whole issue stack, leaving the board's focus as it is.
+pub(super) fn close_to_board(app: &mut App) {
+    if let Some(state) = app.linear.as_mut() {
+        close_open(state);
+        state.opened_from = None;
+    }
+    app.screen = Screen::LinearBoard;
 }
 
 /// Opening a card clears its marks, so under a mark filter it can leave the

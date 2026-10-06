@@ -290,6 +290,9 @@ pub struct LinearState {
     /// The selected show-request vanished and its place was taken: the next
     /// `a` or `x` refuses rather than answering the item now under the cursor.
     pub bar_vanished: bool,
+    /// The board's focus when `?` moved it from an open issue to the bar,
+    /// given back when the bar is left.
+    pub bar_return: Option<Focus>,
     /// The board filter's text; it hides cards it does not match.
     pub filter: String,
     /// The mark a group alert filters by; a card shows only when it carries
@@ -473,6 +476,7 @@ impl LinearState {
             bar_from: 0,
             bar_at: 0,
             bar_vanished: false,
+            bar_return: None,
             filter: String::new(),
             filter_chip: None,
             folds: Default::default(),
@@ -1514,7 +1518,9 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     {
         return filter_key(app, k);
     }
-    if k.code == KeyCode::Char('?') && app.screen == Screen::LinearBoard {
+    let issue_bar =
+        app.screen == Screen::LinearDetail && app.linear.as_ref().is_some_and(|s| !s.at_split());
+    if k.code == KeyCode::Char('?') && (app.screen == Screen::LinearBoard || issue_bar) {
         super::linear_bar::open(app);
         return vec![];
     }

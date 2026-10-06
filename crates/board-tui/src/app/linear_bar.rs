@@ -574,23 +574,42 @@ impl LinearState {
     }
 }
 
-/// `?` on the board.
+/// `?` on the board or on an open issue.
 pub(super) fn open(app: &mut App) {
     let width = app.last_area.width;
+    let on_issue = app.screen == Screen::LinearDetail;
     if let Some(state) = app.linear.as_mut() {
+        if on_issue && !matches!(state.focus, Focus::Bar(_)) {
+            state.bar_return = Some(state.focus.clone());
+        }
         state.open_bar(width);
     }
 }
 
+impl LinearState {
+    fn leave_bar_to_issue(&mut self) {
+        self.bar_vanished = false;
+        match self.bar_return.take() {
+            Some(focus) => self.focus = focus,
+            None => self.reselect(),
+        }
+    }
+}
+
 /// Keys while the bar has the focus. `None` hands the key to the board.
+/// On an open issue, ↑ and Esc give the focus back to the issue, and an
+/// item that acts on the board closes the issue first.
 pub(super) fn bar_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
     let width = app.last_area.width;
+    let on_issue = app.screen == Screen::LinearDetail;
     let state = app.linear.as_mut()?;
     let Focus::Bar(item) = state.focus.clone() else {
         return None;
     };
     if let Some(delta) = nav_delta(k.code) {
-        if delta < 0 {
+        if delta < 0 && on_issue {
+            state.leave_bar_to_issue();
+        } else if delta < 0 {
             state.bar_vanished = false;
             state.reselect();
         }
@@ -599,17 +618,31 @@ pub(super) fn bar_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
     match k.code {
         KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.bar_step(-1, width),
         KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.bar_step(1, width),
+        KeyCode::Esc if on_issue => state.leave_bar_to_issue(),
         KeyCode::Esc => {
             state.bar_vanished = false;
             state.deselect();
         }
-        KeyCode::Enter => return Some(run(app, item)),
+        KeyCode::Enter => {
+            if on_issue && acts_on_board(&item) {
+                state.bar_return = None;
+                super::linear_issue::close_to_board(app);
+            }
+            return Some(run(app, item));
+        }
         KeyCode::Char('a') => return Some(answer(app, item, true)),
         KeyCode::Char('x') => return Some(answer(app, item, false)),
-        KeyCode::Char('/' | 'n' | 'N' | '[' | ']' | 'z') => return None,
+        KeyCode::Char('/' | 'n' | 'N' | '[' | ']' | 'z') if !on_issue => return None,
         _ => {}
     }
     Some(vec![])
+}
+
+fn acts_on_board(item: &BarItem) -> bool {
+    !matches!(
+        item,
+        BarItem::Keys | BarItem::Quit | BarItem::More | BarItem::GhUnavailable
+    )
 }
 
 fn run(app: &mut App, item: BarItem) -> Vec<Effect> {
