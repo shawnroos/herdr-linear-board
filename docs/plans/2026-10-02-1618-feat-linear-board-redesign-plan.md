@@ -509,33 +509,36 @@ Each wave-1 and wave-2 unit runs in its own worktree. `CHANGELOG.md` and `docs/t
 
 **Verification:** bar tests pass; `skill/SKILL.md` describes the bar alert.
 
-### U12. Content-sized cards
+### U12. Content-sized cards and compact density
 
-**Goal:** Cards are as tall as their content, so more cards fit on screen; widths are unchanged.
+**Goal:** Cards drop rows that would be empty, and `z` toggles a compact density, so more cards fit on screen; widths are unchanged.
 
-**Requirements:** R5 (as amended by Shawn, 2026-10-06: cards no longer share one height), R6.
+**Requirements:** R5 (as amended by Shawn, 2026-10-06: cards no longer share one height; roomy default plus a compact toggle), R6, R7 (new key).
 
 **Dependencies:** U8. Runs before U9.
 
 **Files:**
-- `crates/board-tui/src/view/linear.rs` (`card_lines`, `Band`, band height, hit-testing), `crates/board-tui/src/app/linear.rs` (scroll offset, click targets)
+- `crates/board-tui/src/view/linear.rs` (`card_lines`, `Band`, band height, hit-testing), `crates/board-tui/src/app/linear.rs` (density state, `z`, scroll offset, click targets)
+- `crates/board-tui/src/view/mod.rs` (`HELP_KEYS`), `tests/interaction_contract.rs`, `tests/help.rs`
 - `crates/board-tui/tests/linear/layout.rs`, `tests/linear/snapshots/*.snap`
 - `docs/tui-interactions.md`, `CHANGELOG.md`
 
 **Approach:**
-- Card rows per `docs/board-design.md` §3: header 1, title 1–2, description 0–3, meta 0–2; no padding or rule rows. Selection changes only surface and title colour.
-- Replace every fixed-height assumption (`Band::card_top`, the 13-row constant, scroll math, mouse hit-testing) with per-card heights computed once per draw from the same function the renderer uses.
-- Lane band height is the tallest column's summed card heights plus gaps; a 2-up row is as tall as its taller card. No blank row under lane lines.
+- Card rows per `docs/board-design.md` §3 for both densities. Default keeps padding, rule and blank rows but drops the blank, description and rule rows when their content is absent, and meta rows without data. Compact drops padding, rule and blank rows.
+- One function returns a card's rows for a density; layout, scrolling and hit-testing all use its heights. Replace every fixed-height assumption (`Band::card_top`, the 13-row constant, scroll math, mouse hit-testing).
+- Lane band height is the tallest column's summed card heights plus gaps; a 2-up row is as tall as its taller card. The blank row under lane lines is dropped in compact.
+- Density is per board session (not persisted). Toggling keeps the selected card selected and visible.
 
 **Test scenarios:**
-- A card with only a title is 2 rows; one with a 2-row title, 3-row description and both meta rows is 8.
-- Selecting a card moves no text and changes no card's height.
+- Default: a full card is 13 rows; a card with a 2-row description and one meta row is 11; a title-only card is 5.
+- Compact: a full card is 8 rows; a title-only card is 2; no rule rows are drawn when selected.
+- Selecting a card moves no text and changes no card's height, in both densities.
 - Lanes still align when columns hold cards of different heights.
 - A 2-up row takes the taller card's height, and a click lands on the right card in a mixed-height column.
-- Scrolling keeps a tall selected card fully visible.
-- At 50 rows, a column of description-free cards shows more cards than the 13-row layout did.
+- `z` toggles density, keeps the selection and scrolls it into view; `z` in the filter is typed as text.
+- At 50 rows, a compact column shows more cards than the default.
 
-**Verification:** layout and snapshot tests pass; classic snapshots unchanged.
+**Verification:** layout, snapshot and contract tests pass; classic snapshots unchanged.
 
 ### U9. Issue view
 

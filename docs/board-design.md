@@ -45,26 +45,37 @@ the prototype's `icon` modules.
 |---|---|
 | Columns | No borders. 4-cell gap between columns (2 cells of each column's slot). |
 | Column titles | One powerline bar across the board. Focused column: herdr's active-tab style (`panel_bg` text on `accent`, bold), filling its slot including its half of each gap. Others: `overlay0` on `panel_bg`, running together with no divider. A full `/` cut (`U+E0BC`) where the colour changes, and at the bar's right end. No underline row. |
-| Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). No blank row below. Each lane band is as tall as its tallest column (the sum of its card heights and gaps), so lanes align. |
+| Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). One blank row below (none in compact). Each lane band is as tall as its tallest column (the sum of its card heights and gaps), so lanes align. |
 | Lane states | Normal: dim. Holds the selected card: label `accent`. Lane line selected: plus `surface0` background. Nothing selected: all lanes in the "holds the selected card" state. |
 | Folding | Lane lines are selectable in ↑↓ order (lane, its cards, next lane). Return folds or unfolds the lane in every column. |
-| Spacing | 1 blank row between cards and between a lane's last card and the next lane line. None below a lane line. |
+| Spacing | 1 blank row between cards, below lane lines (not in compact), and between a lane's last card and the next lane line. |
 
 ## 3. Cards
 
-Cards are sized to their content (Shawn, 2026-10-06): no padding rows and no reserved rule rows. Widths are unchanged. Selecting a card changes only its surface and title colour, so it never moves text.
+Cards are sized to their content (Shawn, 2026-10-06). Widths are unchanged in both densities. Selecting a card never moves text or changes its height.
+
+**Default density** keeps the roomy spacing and drops only rows that would be empty:
 
 | Row | Content | Rows |
 |---|---|---|
+| padding | blank (top) | 1 |
 | header | `WEB-101 P0 ⧉2`, left-aligned. Marks and `▶` right-aligned | 1 |
+| rule | blank; a solid rule when selected | 1 |
 | title | bold, wrapped; `yellow` when selected | 1–2 |
+| blank | only when a description follows | 0–1 |
 | description | wrapped, ends in `…`; only when the issue has one | 0–3 |
-| meta | Nerd Font icon items, one row per group that has data: assignee and milestone; PR, preview, diff, CI | 0–2 |
+| rule | blank; a dashed rule when selected; only when meta follows | 0–1 |
+| meta | Nerd Font icon items, one row per group with data: assignee and milestone; PR, preview, diff, CI | 0–2 |
+| padding | blank (bottom) | 1 |
 
-The shortest card is 2 rows, the fullest 8. In a 2-up row, the row is as tall as its taller card.
+A full card is 13 rows, as before. A card with a 2-row description and one meta row is 11; a title-only card is 5.
+
+**Compact density** (`z` toggles it) drops the padding, rule and blank rows: header, title 1–2, description 0–3, meta 0–2. Selection shows only the surface and title colour. A full card is 8 rows, a title-only card 2.
+
+In a 2-up row, the row is as tall as its taller card.
 
 - **Inset:** 2 cells on each side, so text keeps its column whether or not the card is selected.
-- **Selected card:** `surface0` background and a yellow title. No border, no rules.
+- **Selected card:** `surface0` background and a yellow title. No border. Rules only in default density.
 - **Unfocused columns:** muted tones (section 1).
 - **Marks keep their colour everywhere:** `!` red, `?` peach, `✓` green, `◇` mauve, `◉` blue.
 - **Width:** cards cap at 64 cells. A column whose inside is ≥ 81 cells shows cards 2-up (minimum 40 each, 1-cell gap). See `responsive-board.md`.
@@ -89,6 +100,7 @@ The shortest card is 2 rows, the fullest 8. In a 2-up row, the row is as tall as
 | Return | Card: open the issue. Lane: fold or unfold |
 | Esc | Clear the selection: nothing focused; all columns and cards in their default, unmuted state; all lanes active |
 | `?` | Open the bottom bar |
+| `z` | Toggle compact density |
 | `p` | Focus the pinned issue panel (Esc or `p` returns) |
 | ctrl+q | Quit (plain `q` does nothing) |
 
