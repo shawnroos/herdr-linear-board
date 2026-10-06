@@ -345,15 +345,20 @@ fn load_from_cli_bounded_rejects_oversized_stdout_and_kills_the_child() {
     let bin = pid_fixture_agy_bin(
         &dir,
         pid_file.to_str().unwrap(),
-        "head -c $((8 * 1024 * 1024 + 1)) /dev/zero | tr '\\0' x; exec sleep 30",
+        "head -c $((8 * 1024 * 1024 + 1)) /dev/zero | tr '\\0' x; exec sleep 600",
     );
+    // Returning before the deadline is what proves the size bound fired. The
+    // deadline sits far above the pipeline's worst measured time (16s at a
+    // quarter CPU) and the fixture's hang far above the deadline, so a
+    // missing size bound can only end by timeout.
+    let timeout = Duration::from_secs(120);
     let started = Instant::now();
-    let models = load_from_cli_bounded(bin.to_str().unwrap(), Duration::from_secs(30));
+    let models = load_from_cli_bounded(bin.to_str().unwrap(), timeout);
     let elapsed = started.elapsed();
     assert!(models.is_none(), "oversized stdout must yield None");
     assert!(
-        elapsed < Duration::from_secs(2),
-        "the oversized child must be killed promptly (took {elapsed:?})"
+        elapsed < timeout,
+        "the oversized child must be killed by the size bound, not the timeout (took {elapsed:?})"
     );
     let pid = wait_for_pid_file(&pid_file).expect("the fixture wrote its PID before the kill");
     assert!(
