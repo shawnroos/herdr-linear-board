@@ -1019,3 +1019,67 @@ fn at_fifty_rows_a_compact_column_shows_more_cards() {
         shown(false)
     );
 }
+
+const FILTER_ICON: &str = "\u{f0232}";
+
+fn row_text(buf: &Buffer, y: u16) -> String {
+    cells(buf, y).concat()
+}
+
+#[test]
+fn the_filter_is_a_card_across_the_board_with_one_blank_row_either_side() {
+    let theme = gruvbox();
+    let mut d = tabs_driver();
+    let before = at(&buffer_at(&mut d, 200, 80), "WEB-101").1;
+    press(&mut d, KeyCode::Char('/'));
+    let buf = buffer_at(&mut d, 200, 80);
+    let (_, y) = at(&buf, FILTER_ICON);
+    assert!(row_text(&buf, y - 2).contains("TODO"), "{}", dump(&buf));
+    assert_eq!(row_text(&buf, y - 1).trim(), "", "one blank row above");
+    assert_eq!(row_text(&buf, y + 1).trim(), "", "one blank row below");
+    assert!(row_text(&buf, y + 2).contains("ALPHA"), "{}", dump(&buf));
+    let w = buf.area.width;
+    assert_eq!(
+        buf[(2, y)].bg,
+        theme.palette.surface0,
+        "starts at the inset"
+    );
+    assert_eq!(
+        buf[(w - 3, y)].bg,
+        theme.palette.surface0,
+        "ends at the inset"
+    );
+    assert_ne!(buf[(1, y)].bg, theme.palette.surface0);
+    assert_ne!(buf[(w - 2, y)].bg, theme.palette.surface0);
+    assert_eq!(slice(&buf, y, 2, 4), format!("  {FILTER_ICON} "));
+    assert!(
+        slice(&buf, y, 2, w - 4).ends_with("8 matches  "),
+        "the count is right-aligned: {:?}",
+        slice(&buf, y, 2, w - 4)
+    );
+    assert_eq!(
+        at(&buf, "WEB-101").1,
+        before + 2,
+        "the board moves down by the filter's rows"
+    );
+}
+
+#[test]
+fn an_unfocused_filter_keeps_its_card_on_the_card_surface_with_the_count() {
+    let theme = gruvbox();
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('/'));
+    for c in "export".chars() {
+        press(&mut d, KeyCode::Char(c));
+    }
+    press(&mut d, KeyCode::Enter);
+    let buf = buffer_at(&mut d, 200, 80);
+    let (x, y) = at(&buf, FILTER_ICON);
+    assert_eq!(buf[(x, y)].bg, theme.palette.panel_bg);
+    assert!(row_text(&buf, y).contains("export"), "{}", dump(&buf));
+    assert!(
+        row_text(&buf, y).trim_end().ends_with("1 match"),
+        "{}",
+        dump(&buf)
+    );
+}

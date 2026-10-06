@@ -37,6 +37,8 @@ const CARD_GAP: u16 = 1;
 const HEADER_ROWS: u16 = 2;
 // The column title bar and the blank row under it.
 const TITLE_ROWS: u16 = 2;
+/// The filter card and the blank row under it; the title rows' blank sits above.
+const FILTER_ROWS: u16 = 2;
 
 mod icon {
     pub const PERSON: &str = "\u{f415}";
@@ -728,14 +730,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let mut y = area.y + HEADER_ROWS;
     let mut body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
     let overlays = state.overlays();
-    let rows = [
-        tab_row(state, &overlays, area.width as usize),
-        filter_row(state, area.width as usize),
-    ];
-    for row in rows.into_iter().flatten() {
-        if body_h == 0 {
-            break;
-        }
+    if let Some(row) = tab_row(state, &overlays, area.width as usize).filter(|_| body_h > 0) {
         f.render_widget(Paragraph::new(row), Rect::new(area.x, y, area.width, 1));
         y += 1;
         body_h -= 1;
@@ -1085,15 +1080,19 @@ fn draw_columns(
             Zone::LinearGroup(groups[idx].key.clone()),
         );
     }
-    if body.height <= TITLE_ROWS {
+    let line_w = body.width.saturating_sub(2 * SLOT_PAD);
+    let mut above = TITLE_ROWS;
+    if filter_shown(state) && body.height > TITLE_ROWS {
+        f.render_widget(
+            filter_card(state, line_w as usize, counts.iter().sum()),
+            Rect::new(body.x + SLOT_PAD, body.y + TITLE_ROWS, line_w, 1),
+        );
+        above += FILTER_ROWS;
+    }
+    if body.height <= above {
         return;
     }
-    let view = Rect::new(
-        body.x,
-        body.y + TITLE_ROWS,
-        body.width,
-        body.height - TITLE_ROWS,
-    );
+    let view = Rect::new(body.x, body.y + above, body.width, body.height - above);
 
     let selected_slot = state.selected_slot();
     let total: u16 = bands.iter().map(Band::height).sum();
@@ -1139,7 +1138,6 @@ fn draw_columns(
     }
 
     let holding_lane = selected_slot.map(|(lane, _)| lane);
-    let line_w = body.width.saturating_sub(2 * SLOT_PAD);
     for band in &bands {
         let Some(label) = band.label else { continue };
         if let Some((y, _, _)) = on_screen(band.top, 1) {
@@ -1270,21 +1268,25 @@ fn attention_count<'a>(
     }
 }
 
-/// The board filter, shown while it is selected or filters anything. A
-/// group alert's chip leads in its mark's colour and is never cut.
-fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
+/// The filter shows while selected or while it filters anything.
+fn filter_shown(state: &LinearState) -> bool {
+    state.focus == Focus::Filter || state.filtering()
+}
+
+/// The filter as a card `width` cells wide: icon, the group alert's chip in
+/// its mark's colour, the text, and `matches` right-aligned. Only the text is
+/// ever cut.
+fn filter_card(state: &LinearState, width: usize, matches: usize) -> Paragraph<'static> {
+    let t = &state.theme;
     let selected = state.focus == Focus::Filter;
-    if !selected && !state.filtering() {
-        return None;
-    }
-    let caret = if selected { "▏" } else { "" };
-    let style = if selected {
-        state.theme.accent()
-    } else {
-        state.theme.dim()
-    };
-    let mut spans = vec![Span::styled(" / ", style)];
-    let mut used = 3;
+    let surface = if selected { t.card_active() } else { t.card() };
+    let inset = " ".repeat(CARD_INSET as usize);
+    let icon_style = if selected { t.accent() } else { t.dim() };
+    let mut spans = vec![
+        Span::raw(inset.clone()),
+        Span::styled(format!("{} ", icon::FILTER), icon_style),
+    ];
+    let mut used = 2 * inset.len() + icon::FILTER.width() + 1;
     if let Some(kind) = state.filter_chip {
         let chip = match kind {
             MarkKind::Attention => "! needs you",
@@ -1292,18 +1294,26 @@ fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
             MarkKind::Suggestion => "◇ suggestion",
             MarkKind::Done => "✓ done",
         };
-        spans.push(Span::styled(chip, state.theme.mark(kind)));
-        spans.push(Span::styled(" ", style));
+        spans.push(Span::styled(chip, t.mark(kind)));
+        spans.push(Span::raw(" "));
         used += chip.width() + 1;
     }
-    spans.push(Span::styled(
-        fit(
-            &format!("{}{caret}", line(&state.filter)),
-            width.saturating_sub(used),
-        ),
-        style,
-    ));
-    Some(Line::from(spans))
+    let count = match matches {
+        1 => "1 match".to_string(),
+        n => format!("{n} matches"),
+    };
+    used += count.width() + 1;
+    let caret = if selected { "▏" } else { "" };
+    let text = fit(
+        &format!("{}{caret}", line(&state.filter)),
+        width.saturating_sub(used),
+    );
+    let pad = width.saturating_sub(used + text.width()) + 1;
+    spans.push(Span::raw(text));
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::styled(count, t.dim()));
+    spans.push(Span::raw(inset));
+    Paragraph::new(Line::from(spans)).style(surface)
 }
 
 fn boxed(f: &mut Frame, area: Rect, title: &str, border: Style, lines: Vec<Line<'static>>) {

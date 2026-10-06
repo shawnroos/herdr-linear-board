@@ -460,16 +460,17 @@ fn return_on_a_group_alert_filters_the_board_to_its_cards_and_selects_the_first(
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
     assert_eq!(chip(&d), Some(MarkKind::Attention));
     assert_eq!(filter_text(&d), "");
+    insta::assert_snapshot!("linear_group_alert_filter_120", render_at(&mut d, 120, 40));
     let frame = render_at(&mut d, 240, 40);
     assert!(
-        frame.contains(" / ! needs you"),
+        frame.contains("\u{f0232} ! needs you"),
         "the filter line shows the chip:\n{frame}"
     );
     let buf = board_tui::testkit::buffer_at(&mut d, 240, 40);
     let (x, y) = (0..buf.area.height)
         .find_map(|y| {
             let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
-            row.find("/ ! needs you")
+            row.find("\u{f0232} ! needs you")
                 .map(|at| (row[..at].chars().count() as u16 + 2, y))
         })
         .expect("the chip is drawn");
@@ -531,7 +532,7 @@ fn esc_on_the_filter_clears_chip_and_text_and_keeps_the_selected_card() {
     assert_eq!(shown(&d).len(), 8);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
     let frame = without_bar(&render_at(&mut d, 240, 40), 1);
-    assert!(!frame.contains(" / "), "the filter line closes:\n{frame}");
+    assert!(!frame.contains("\u{f0232}"), "the filter closes:\n{frame}");
 }
 
 #[test]
@@ -599,6 +600,6 @@ fn a_group_alert_keeps_text_that_excludes_its_cards_and_leaves_the_filter_select
     assert_eq!(focus(&d), Focus::Filter);
     assert!(shown(&d).is_empty());
     let frame = render_at(&mut d, 240, 40);
-    assert!(frame.contains(" / ? question WEB-102"), "{frame}");
+    assert!(frame.contains("\u{f0232} ? question WEB-102"), "{frame}");
     assert!(frame.contains("no matching issues"), "{frame}");
 }

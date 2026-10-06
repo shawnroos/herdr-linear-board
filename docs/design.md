@@ -1063,7 +1063,9 @@ columns, at least one, stretched to fill, so a narrow pane shows one column a pa
 64 cells and sit two to a row once a column's inside reaches 81. When columns are hidden on a
 side, that side's outer gap becomes a `←` or `→` button with the hidden count under it: `←`/`→`
 past the page's edge select the button, a further press toward it pages one column, and `<`/`>`
-page one column; paging never moves the selected issue. Lanes are one line each across the
+page one column; paging never moves the selected issue. The filter, while open or holding text
+or a group alert's mark chip, is a full-width card under the column titles with a blank row either
+side, showing the chip, the text and a right-aligned match count. Lanes are one line each across the
 whole board (`─ ALPHA ──── 5 󰈳 ─`, the count across the tab and a fold icon), and each lane's band
 is as tall as its tallest column (its summed card heights and gaps), so a lane starts on the
 same row in every column; a board with no lane grouping has no lane lines. Cards have a 2-cell

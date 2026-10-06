@@ -111,7 +111,7 @@ fn esc_from_a_filter_holding_text_clears_it_and_returns_to_the_last_card() {
     assert_eq!(d.app.linear.as_ref().unwrap().filter, "");
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
     let frame = without_bar(&render_at(&mut d, 140, 40), 1);
-    assert!(!frame.contains(" / "), "the filter line closes:\n{frame}");
+    assert!(!frame.contains("\u{f0232}"), "the filter closes:\n{frame}");
 }
 
 #[test]
@@ -128,14 +128,17 @@ fn esc_from_an_empty_filter_leaves_nothing_selected() {
 fn up_from_the_top_card_selects_the_lane_line_then_opens_the_filter() {
     let mut d = tabs_driver();
     let frame = without_bar(&render_at(&mut d, 140, 40), 1);
-    assert!(!frame.contains(" / "), "the filter is hidden:\n{frame}");
+    assert!(
+        !frame.contains("\u{f0232}"),
+        "the filter is hidden:\n{frame}"
+    );
     press(&mut d, KeyCode::Char('k'));
     assert_eq!(selected_id(&d), None);
     assert_eq!(focus(&d), line("ln-alpha"));
     press(&mut d, KeyCode::Up);
     assert_eq!(focus(&d), Focus::Filter);
     let frame = render_at(&mut d, 140, 40);
-    assert!(frame.contains(" / ▏"), "{frame}");
+    assert!(frame.contains("\u{f0232} ▏"), "{frame}");
     press(&mut d, KeyCode::Down);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
 }
