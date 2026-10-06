@@ -1434,7 +1434,7 @@ fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellips
         "{rows:#?}"
     );
     assert!(second.ends_with('…'), "{rows:#?}");
-    assert_eq!(card[9], format!("{PERSON} @Example User"), "{rows:#?}");
+    assert_eq!(card[5], format!("{PERSON} @Example User"), "{rows:#?}");
     insta::assert_snapshot!("linear_card_two_line_title_36", rows.join("\n"));
 }
 
@@ -1458,29 +1458,31 @@ fn a_title_of_wide_glyphs_wraps_by_display_width() {
     let card = card(&rows, "WEB-3308");
     assert_eq!(card[2], "例".repeat(14), "{rows:#?}");
     assert_eq!(card[3], format!("{}…", "例".repeat(13)), "{rows:#?}");
-    assert_eq!(card[9], format!("{PERSON} unassigned"), "{rows:#?}");
 }
 
 #[test]
-fn a_one_line_title_leaves_the_second_title_row_blank() {
+fn a_one_line_title_takes_one_row() {
     let rows = narrow_rows("Example short title", Some("Example User"));
     let card = card(&rows, "WEB-3308");
     assert_eq!(card[2], "Example short title", "{rows:#?}");
-    assert_eq!(card[3], "", "{rows:#?}");
-    assert_eq!(card[9], format!("{PERSON} @Example User"), "{rows:#?}");
+    assert!(card[3].starts_with("─ ─"), "the meta rule: {rows:#?}");
+    assert_eq!(card[4], format!("{PERSON} @Example User"), "{rows:#?}");
 }
 
 #[test]
-fn an_empty_title_and_a_missing_assignee_render_placeholders() {
+fn an_empty_title_shows_a_placeholder_and_no_assignee_drops_the_meta_row() {
     let rows = narrow_rows("", None);
     let card = card(&rows, "WEB-3308");
     assert_eq!(card[2], "(no title)", "{rows:#?}");
     assert_eq!(card[3], "", "{rows:#?}");
-    assert_eq!(card[9], format!("{PERSON} unassigned"), "{rows:#?}");
+    assert!(
+        !card[..4].iter().any(|row| row.contains(PERSON)),
+        "{rows:#?}"
+    );
 }
 
 #[test]
-fn cards_in_a_column_are_13_rows_with_a_blank_row_between_them() {
+fn cards_in_a_column_are_sized_to_their_content_with_a_blank_row_between_them() {
     let mut snapshot = bound_with_view();
     snapshot.groups.truncate(1);
     snapshot.groups[0].issues = vec!["WEB-3308".into(), "WEB-3307".into()];
@@ -1488,8 +1490,10 @@ fn cards_in_a_column_are_13_rows_with_a_blank_row_between_them() {
     let rows: Vec<String> = render_at(&mut d, 36, 40).lines().map(backend_row).collect();
     let first = rows.iter().position(|r| r.contains("WEB-3308")).unwrap();
     let second = rows.iter().position(|r| r.contains("WEB-3307")).unwrap();
-    assert_eq!(second, first + 14, "{rows:#?}");
-    assert_eq!(rows[first + 12].trim(), "", "{rows:#?}");
+    // Padding, header, rule, a 2-row title, the meta rule, the assignee row
+    // and padding: 8 rows, then the blank row between cards.
+    assert_eq!(second, first + 9, "{rows:#?}");
+    assert_eq!(rows[first + 7].trim(), "", "{rows:#?}");
 }
 
 #[test]
@@ -2274,16 +2278,17 @@ fn frame_row(frame: &str, row: usize) -> String {
 }
 
 /// The In Progress column at `BW`×`H`: slot x 96..144 with its cards at x
-/// 98..142, title row 2, first card rows 4..=16 (header row 5), gap row 17,
-/// second card from row 18 (header row 19) to the strip.
+/// 98..142, title row 2, first card rows 4..=11 (header row 5; no
+/// description, one meta row), gap row 12, second card rows 13..=20 (header
+/// row 14).
 fn assert_in_progress_geometry(frame: &str) {
     let title: String = frame_row(frame, 2).chars().skip(96).collect();
     assert!(title.contains("IN PROGRESS  4"), "{frame}");
     let first: String = frame_row(frame, 5).chars().skip(96).collect();
     assert!(first.contains("WEB-3302"), "{frame}");
-    let gap: String = frame_row(frame, 17).chars().skip(96).take(48).collect();
+    let gap: String = frame_row(frame, 12).chars().skip(96).take(48).collect();
     assert!(gap.trim().is_empty(), "{frame}");
-    let second: String = frame_row(frame, 19).chars().skip(96).collect();
+    let second: String = frame_row(frame, 14).chars().skip(96).collect();
     assert!(second.contains("WEB-9001"), "{frame}");
 }
 
@@ -2292,7 +2297,7 @@ fn a_click_on_a_card_selects_it_and_opens_its_detail() {
     let mut d = mouse_driver();
     let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
-    d.handle(left_down(106, 21));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
 }
@@ -2312,7 +2317,7 @@ fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
     let mut d = mouse_driver();
     let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
-    for (x, y) in [(106, 17), (116, 17), (10, 0), (96, 5), (97, 9)] {
+    for (x, y) in [(106, 12), (116, 12), (10, 0), (96, 5), (97, 9)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearBoard, "click at {x},{y}");
         assert_eq!(selection(&d), (0, 0, None), "click at {x},{y}");
@@ -2341,7 +2346,7 @@ fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
         .find(|g| g.key == "st-prog")
         .unwrap();
     group.issues.retain(|id| id != "WEB-3302");
-    d.handle(left_down(106, 21));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 0, Some("WEB-9001".into())));
 }
@@ -2361,7 +2366,7 @@ fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
         .find(|g| g.key == "st-todo")
         .unwrap();
     todo.issues.push("WEB-9001".into());
-    d.handle(left_down(106, 21));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (1, 1, Some("WEB-9001".into())));
 }
@@ -2376,7 +2381,7 @@ fn a_click_on_a_card_that_left_the_snapshot_since_the_draw_does_nothing() {
         group.issues.retain(|id| id != "WEB-9001");
     }
     snapshot.issues.remove("WEB-9001");
-    d.handle(left_down(106, 21));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(selection(&d), (0, 0, None));
 }
@@ -2429,7 +2434,7 @@ fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
     render_at(&mut d, BW, H);
     assert!(
         matches!(
-            d.app.hit_map.borrow().hit(70, 15),
+            d.app.hit_map.borrow().hit(110, 15),
             Some(Zone::LinearCard { .. })
         ),
         "a card sits under the picker's body"
@@ -2437,7 +2442,7 @@ fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
     d.open_linear_picker(LinearListKind::Spaces, None);
     let frame = render_at(&mut d, BW, H);
     assert!(frame_row(&frame, 14).contains("Choose a space"), "{frame}");
-    d.handle(left_down(70, 15));
+    d.handle(left_down(110, 15));
     assert_eq!(d.app.screen, Screen::LinearPicker);
     assert_eq!(selection(&d), (0, 0, None));
 }
@@ -2676,7 +2681,7 @@ fn a_click_on_a_card_while_the_strip_has_focus_opens_the_card() {
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Down);
     render_at(&mut d, BW, H);
-    d.handle(left_down(106, 21));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
     assert!(d.app.picker.is_none());

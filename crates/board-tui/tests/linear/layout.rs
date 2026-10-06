@@ -1,5 +1,5 @@
 //! The board's look: powerline titles, lane lines drawn once across the
-//! columns, fixed 13-row cards, muted unfocused columns, one board-wide
+//! columns, content-sized cards in two densities, muted unfocused columns, one board-wide
 //! scroll, and the empty and short-pane states (`docs/board-design.md` §2–§3).
 
 use super::marks::board;
@@ -86,8 +86,8 @@ fn a_lane_line_sits_on_one_row_across_columns_with_different_card_counts() {
     let (_, beta) = at(&buf, "BETA");
     // Todo holds three Alpha cards and In Progress one: the Beta band starts
     // below the busiest column's Alpha cards (2 rows of line and blank, then
-    // a 13-row card and a blank row each).
-    assert_eq!(beta, alpha + 2 + 3 * 14, "{}", dump(&buf));
+    // a 6-row title-only card and a blank row each).
+    assert_eq!(beta, alpha + 2 + 3 * 7, "{}", dump(&buf));
     assert_eq!(row(&buf, beta).matches("BETA").count(), 1);
     let (_, todo) = at(&buf, "WEB-104");
     let (_, progress) = at(&buf, "WEB-106");
@@ -112,7 +112,11 @@ fn a_lane_line_shows_its_count_and_fold_icon_right_aligned() {
 
 #[test]
 fn selecting_a_card_moves_no_text() {
-    let mut d = driver_for(described(tabs_lanes()));
+    let mut snapshot = described(tabs_lanes());
+    for issue in snapshot.issues.values_mut() {
+        issue.assignee = assignee("Example User");
+    }
+    let mut d = driver_for(snapshot);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
     let before = buffer_at(&mut d, 200, 80);
     press(&mut d, KeyCode::Down);
@@ -120,9 +124,9 @@ fn selecting_a_card_moves_no_text() {
     let after = buffer_at(&mut d, 200, 80);
     let (x, y) = at(&before, "WEB-101");
     assert_eq!(at(&after, "WEB-101"), (x, y));
-    // Header, two title rows, three description rows, two meta rows; the two
+    // Header, two title rows, three description rows, one meta row; the two
     // reserved rule rows are the only ones selection may change.
-    for dy in [0, 2, 3, 5, 6, 7, 9, 10] {
+    for dy in [0, 2, 3, 5, 6, 7, 9] {
         assert_eq!(
             slice(&before, y + dy, x, 40),
             slice(&after, y + dy, x, 40),
@@ -190,18 +194,18 @@ fn a_selected_card_at_the_bottom_of_a_tall_lane_scrolls_into_full_view() {
     press(&mut d, KeyCode::Down);
     press(&mut d, KeyCode::Down);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
-    let buf = buffer_at(&mut d, 140, 30);
+    let buf = buffer_at(&mut d, 140, 20);
     let (_, title) = at(&buf, "TODO");
-    let (_, header) = at(&buf, "WEB-103");
-    assert!(header > title + 2, "{}", dump(&buf));
-    assert!(header + 11 < 29, "card bottom off screen:\n{}", dump(&buf));
+    let (top, h) = card_span(&buf, "WEB-103");
+    assert!(top > title + 1, "{}", dump(&buf));
+    assert!(top + h < 20, "card bottom off screen:\n{}", dump(&buf));
     // One offset for the whole board: In Progress's first card shares
     // WEB-101's rows, so it scrolled away with it.
     assert!(find(&buf, "WEB-101").is_none(), "{}", dump(&buf));
     assert!(find(&buf, "WEB-105").is_none(), "{}", dump(&buf));
     press(&mut d, KeyCode::Up);
     press(&mut d, KeyCode::Up);
-    let buf = buffer_at(&mut d, 140, 30);
+    let buf = buffer_at(&mut d, 140, 20);
     assert!(find(&buf, "WEB-101").is_some(), "{}", dump(&buf));
 }
 
@@ -298,7 +302,7 @@ fn a_card_with_a_linear_pr_shows_its_number_on_the_meta_row() {
     let buf = buffer_at(&mut d, 200, 80);
     let (x, y) = at(&buf, "WEB-101");
     assert!(
-        slice(&buf, y + 10, x, 40).contains("#2132 open"),
+        slice(&buf, y + 5, x, 40).contains("#2132 open"),
         "{}",
         dump(&buf)
     );
@@ -386,7 +390,7 @@ fn a_click_on_a_card_the_board_scrolled_to_opens_that_card() {
     let mut d = tabs_driver();
     press(&mut d, KeyCode::Down);
     press(&mut d, KeyCode::Down);
-    let buf = buffer_at(&mut d, 140, 30);
+    let buf = buffer_at(&mut d, 140, 20);
     let (x, y) = at(&buf, "WEB-103");
     d.handle(left_down(x, y + 3));
     assert_eq!(d.app.screen, Screen::LinearDetail);
@@ -458,7 +462,8 @@ fn a_column_inside_80_shows_one_capped_card_a_row_and_81_shows_two() {
     let buf = buffer_at(&mut d, 84, 60);
     let (x, y) = at(&buf, "WEB-101");
     let (x2, y2) = at(&buf, "WEB-102");
-    assert_eq!((x2, y2), (x, y + 14), "1-up:\n{}", dump(&buf));
+    // A one-row title at 64 cells: a 5-row card and its blank row.
+    assert_eq!((x2, y2), (x, y + 6), "1-up:\n{}", dump(&buf));
     let card_x = x - 2;
     assert_eq!(buf[(card_x + 63, y)].bg, theme.palette.surface0, "64 wide");
     assert_eq!(buf[(card_x + 64, y)].bg, theme.app_bg, "capped at 64");
@@ -474,11 +479,11 @@ fn a_column_inside_80_shows_one_capped_card_a_row_and_81_shows_two() {
     );
     assert_eq!(buf[(x - 2 + 40, y)].bg, theme.app_bg, "the gap");
     let (x3, y3) = at(&buf, "WEB-103");
-    assert_eq!((x3, y3), (x, y + 14), "{}", dump(&buf));
-    // Alpha holds three cards: two rows of them before the Beta line.
+    assert_eq!((x3, y3), (x, y + 7), "{}", dump(&buf));
+    // Alpha holds three cards: two rows of 6-row cards before the Beta line.
     let (_, alpha) = at(&buf, "ALPHA");
     let (_, beta) = at(&buf, "BETA");
-    assert_eq!(beta, alpha + 2 + 2 * 14, "{}", dump(&buf));
+    assert_eq!(beta, alpha + 2 + 2 * 7, "{}", dump(&buf));
 }
 
 #[test]
@@ -701,7 +706,7 @@ fn pr_row(pr: LinearCardPr, gh: Option<(&str, Option<&str>)>) -> String {
     let mut d = driver_for(snapshot);
     let buf = buffer_at(&mut d, 200, 80);
     let (x, y) = at(&buf, "WEB-101");
-    slice(&buf, y + 10, x, 42)
+    slice(&buf, y + 5, x, 42)
 }
 
 fn linear_pr() -> LinearCardPr {
@@ -773,4 +778,244 @@ fn a_pr_from_a_daemon_without_gh_shows_linear_data_only() {
     let row = pr_row(linear_pr(), None);
     assert!(row.contains("#2132 open"), "{row:?}");
     assert_eq!(row.matches('–').count(), 3, "{row:?}");
+}
+
+// -- content-sized cards and compact density (`docs/board-design.md` §3) -----
+
+const TWO_ROW_DESCRIPTION: &str = "The save dialog opens in Downloads instead of the last folder.";
+
+fn assignee(name: &str) -> Option<board_core::protocol::LinearAssignee> {
+    Some(board_core::protocol::LinearAssignee {
+        id: None,
+        name: Some(name.into()),
+    })
+}
+
+/// WEB-101 with every row filled, WEB-102 with a 2-row description and only
+/// an assignee, WEB-103 with a one-row title and nothing else.
+fn sized_cards() -> LinearSnapshot {
+    let mut snapshot = described(tabs_lanes());
+    let full = snapshot.issues.get_mut("WEB-101").unwrap();
+    full.assignee = assignee("Example User");
+    full.pr = Some(linear_pr());
+    let partial = snapshot.issues.get_mut("WEB-102").unwrap();
+    partial.description = Some(TWO_ROW_DESCRIPTION.into());
+    partial.assignee = assignee("Example User");
+    let bare = snapshot.issues.get_mut("WEB-103").unwrap();
+    bare.title = "Blurry icon".into();
+    bare.description = None;
+    snapshot
+}
+
+/// The rows of the card whose header shows `id`: the run of rows around it
+/// whose card-edge cell is not the board background.
+fn card_span(buf: &Buffer, id: &str) -> (u16, u16) {
+    let (x, y) = at(buf, id);
+    let edge = x - 2;
+    let theme = gruvbox();
+    let on_card = |y: u16| buf[(edge, y)].bg != theme.app_bg;
+    let mut top = y;
+    while top > 0 && on_card(top - 1) {
+        top -= 1;
+    }
+    let mut bottom = y;
+    while bottom + 1 < buf.area.height && on_card(bottom + 1) {
+        bottom += 1;
+    }
+    (top, bottom + 1 - top)
+}
+
+fn card_height(buf: &Buffer, id: &str) -> u16 {
+    card_span(buf, id).1
+}
+
+fn compact(d: &mut Driver) {
+    press(d, KeyCode::Char('z'));
+}
+
+#[test]
+fn default_cards_drop_only_the_rows_their_content_lacks() {
+    let mut d = driver_for(sized_cards());
+    let buf = buffer_at(&mut d, 200, 80);
+    assert_eq!(card_height(&buf, "WEB-101"), 13, "full:\n{}", dump(&buf));
+    assert_eq!(
+        card_height(&buf, "WEB-102"),
+        11,
+        "2-row description, one meta row"
+    );
+    assert_eq!(
+        card_height(&buf, "WEB-103"),
+        5,
+        "title only:\n{}",
+        dump(&buf)
+    );
+    let (x, y) = at(&buf, "WEB-103");
+    assert_eq!(slice(&buf, y + 2, x, 20).trim(), "Blurry icon");
+    assert_eq!(slice(&buf, y + 3, x, 20).trim(), "", "bottom padding");
+}
+
+#[test]
+fn compact_cards_drop_padding_rules_and_blank_rows() {
+    let mut d = driver_for(sized_cards());
+    compact(&mut d);
+    let buf = buffer_at(&mut d, 200, 80);
+    assert_eq!(card_height(&buf, "WEB-101"), 8, "full:\n{}", dump(&buf));
+    assert_eq!(
+        card_height(&buf, "WEB-103"),
+        2,
+        "title only:\n{}",
+        dump(&buf)
+    );
+    let (top, h) = card_span(&buf, "WEB-101");
+    let (x, y) = at(&buf, "WEB-101");
+    assert_eq!(top, y, "the header is the first row");
+    for dy in 0..h {
+        let text = slice(&buf, top + dy, x, 40);
+        assert!(
+            !text.contains("──") && !text.contains("─ ─"),
+            "a rule in compact: {text:?}"
+        );
+    }
+    assert!(slice(&buf, y + 1, x, 40).starts_with("Example issue"));
+}
+
+#[test]
+fn selecting_a_card_changes_no_height_and_moves_no_text_in_either_density() {
+    for dense in [false, true] {
+        let mut d = driver_for(sized_cards());
+        if dense {
+            compact(&mut d);
+        }
+        let before = buffer_at(&mut d, 200, 80);
+        press(&mut d, KeyCode::Down);
+        assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+        let after = buffer_at(&mut d, 200, 80);
+        for id in ["WEB-101", "WEB-102", "WEB-103"] {
+            assert_eq!(
+                at(&before, id),
+                at(&after, id),
+                "{id} moved (compact {dense})"
+            );
+            assert_eq!(
+                card_span(&before, id),
+                card_span(&after, id),
+                "{id} changed height (compact {dense})"
+            );
+        }
+    }
+}
+
+#[test]
+fn lanes_align_when_columns_hold_cards_of_different_heights() {
+    for (dense, head, gap_rows) in [
+        (false, 2, 13 + 1 + 11 + 1 + 5 + 1),
+        (true, 1, 8 + 1 + 6 + 1 + 2 + 1),
+    ] {
+        let mut d = driver_for(sized_cards());
+        if dense {
+            compact(&mut d);
+        }
+        let buf = buffer_at(&mut d, 200, 80);
+        let (_, alpha) = at(&buf, "ALPHA");
+        let (_, beta) = at(&buf, "BETA");
+        assert_eq!(
+            beta,
+            alpha + head + gap_rows,
+            "compact {dense}:\n{}",
+            dump(&buf)
+        );
+        let (todo, _) = card_span(&buf, "WEB-104");
+        let (progress, _) = card_span(&buf, "WEB-106");
+        let (review, _) = card_span(&buf, "WEB-107");
+        assert_eq!((todo, progress), (review, review), "compact {dense}");
+        assert_eq!(review, beta + head, "compact {dense}");
+    }
+}
+
+#[test]
+fn a_two_up_row_is_as_tall_as_its_taller_card_and_clicks_land_on_the_right_card() {
+    let mut snapshot = sized_cards();
+    edit_first_tab(&mut snapshot, |groups| groups.truncate(1));
+    snapshot.issues.get_mut("WEB-102").unwrap().description = None;
+    snapshot.issues.get_mut("WEB-102").unwrap().assignee = None;
+    let mut d = driver_for(snapshot);
+    let buf = buffer_at(&mut d, 85, 60);
+    let (top, h) = card_span(&buf, "WEB-101");
+    assert_eq!(h, 13);
+    assert_eq!(card_height(&buf, "WEB-102"), 6, "{}", dump(&buf));
+    let (third, _) = card_span(&buf, "WEB-103");
+    assert_eq!(third, top + 13 + 1, "{}", dump(&buf));
+    let (x2, y2) = at(&buf, "WEB-102");
+    d.handle(left_down(x2 + 3, y2 + 8));
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearBoard,
+        "below the shorter card is no card"
+    );
+    let (x3, y3) = at(&buf, "WEB-103");
+    d.handle(left_down(x3 + 3, y3));
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert_eq!(
+        d.app.linear.as_ref().unwrap().detail.as_deref(),
+        Some("WEB-103")
+    );
+}
+
+#[test]
+fn z_toggles_density_keeping_the_selection_in_view() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    let roomy = buffer_at(&mut d, 140, 22);
+    let h = card_height(&roomy, "WEB-103");
+    compact(&mut d);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    let dense = buffer_at(&mut d, 140, 22);
+    assert!(card_height(&dense, "WEB-103") < h, "{}", dump(&dense));
+    compact(&mut d);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    let back = buffer_at(&mut d, 140, 22);
+    let (top, h) = card_span(&back, "WEB-103");
+    assert!(top + h <= 22, "{}", dump(&back));
+    assert_eq!(
+        card_height(&back, "WEB-103"),
+        card_height(&roomy, "WEB-103")
+    );
+}
+
+#[test]
+fn z_in_the_filter_is_typed_as_text() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('/'));
+    press(&mut d, KeyCode::Char('z'));
+    press(&mut d, KeyCode::Char('z'));
+    assert_eq!(d.app.linear.as_ref().unwrap().filter, "zz");
+    let buf = buffer_at(&mut d, 200, 40);
+    assert!(find(&buf, "no matching issues").is_some(), "{}", dump(&buf));
+}
+
+#[test]
+fn at_fifty_rows_a_compact_column_shows_more_cards() {
+    let mut full = described(tabs_lanes());
+    for issue in full.issues.values_mut() {
+        issue.assignee = assignee("Example User");
+        issue.pr = Some(linear_pr());
+    }
+    let shown = |dense: bool| {
+        let mut d = driver_for(full.clone());
+        if dense {
+            compact(&mut d);
+        }
+        let frame = render_at(&mut d, 60, 50);
+        (101..=108)
+            .filter(|n| frame.contains(&format!("WEB-{n}")))
+            .count()
+    };
+    assert!(
+        shown(true) > shown(false),
+        "{} vs {}",
+        shown(true),
+        shown(false)
+    );
 }

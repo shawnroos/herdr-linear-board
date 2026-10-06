@@ -53,7 +53,7 @@ mod switcher;
 
 pub use effect::Effect;
 pub use linear::{
-    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays,
+    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays, Density,
     LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
     StripView, WriteFailure,
 };

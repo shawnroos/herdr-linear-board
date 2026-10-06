@@ -362,6 +362,17 @@ fn the_tip_follows_the_selection() {
 }
 
 #[test]
+fn the_nothing_selected_tip_names_the_density_key() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let (mut d, _) = board(&shared);
+    let tip = |d: &mut Driver| bar_rows(&render_at(d, 240, 40), 1)[0].clone();
+    press(&mut d, KeyCode::Esc);
+    assert!(tip(&mut d).contains("z compacts cards"), "{}", tip(&mut d));
+    press(&mut d, KeyCode::Char('z'));
+    assert!(tip(&mut d).contains("z expands cards"), "{}", tip(&mut d));
+}
+
+#[test]
 fn the_tip_names_the_paging_button_and_a_suggestions_keys() {
     let shared = SharedFake::quiet(tabs_lanes());
     let worktree = Worktree::new("bar-tip");

@@ -12,8 +12,8 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    sanitise, App, BarItem, CardOverlay, CardOverlays, Focus, LinearState, Page, Screen, Side,
-    BAR_GAP, BAR_HINT, CONTROLS,
+    sanitise, App, BarItem, CardOverlay, CardOverlays, Density, Focus, LinearState, Page, Screen,
+    Side, BAR_GAP, BAR_HINT, CONTROLS,
 };
 use crate::theme::Theme;
 use crate::widgets::{HitMap, Zone};
@@ -21,9 +21,9 @@ use crate::widgets::{HitMap, Zone};
 use super::linear_strip::{draw_strip, strip_lines};
 use super::{centered_rect_abs, linear_help_keys};
 
-// Fixed so lanes line up across columns; supersedes the 5-row card of the
-// 2026-09-16 pickers-and-layout plan.
-const CARD_H: u16 = 13;
+// The tallest card in each density, which the board needs room for.
+const FULL_CARD_H: u16 = 13;
+const FULL_COMPACT_CARD_H: u16 = 8;
 const CARD_INSET: u16 = 2;
 // Each column's half of the 4-cell gap between columns; the outer halves
 // hold the paging buttons.
@@ -255,13 +255,17 @@ pub(super) fn fit(s: &str, max: usize) -> String {
     format!("{}…", split_at_width(s, max - 1).0)
 }
 
-/// `n` rows of `text` by display width: every row but the last breaks at a
-/// word boundary (mid-word only when one word is wider than the row), and the
-/// last takes the rest, ending in an ellipsis when it does not fit.
+/// Up to `n` rows of `text` by display width, only as many as it fills:
+/// every row but the last breaks at a word boundary (mid-word only when one
+/// word is wider than the row), and the last takes the rest, ending in an
+/// ellipsis when it does not fit.
 fn wrap_lines(text: &str, width: usize, n: usize) -> Vec<String> {
     let mut rest = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out = Vec::with_capacity(n);
     for at in 0..n {
+        if rest.is_empty() {
+            break;
+        }
         if at + 1 == n {
             out.push(fit(&rest, width));
             break;
@@ -285,15 +289,29 @@ fn wrap_lines(text: &str, width: usize, n: usize) -> Vec<String> {
         out.push(head.to_string());
         rest = tail.trim_start().to_string();
     }
-    out.resize(n, String::new());
     out
 }
 
 fn title_lines(title: &str, width: usize) -> Vec<String> {
     if title.trim().is_empty() {
-        return vec!["(no title)".to_string(), String::new()];
+        return vec!["(no title)".to_string()];
     }
     wrap_lines(title, width, 2)
+}
+
+/// The description's rows, the newest note taking the last of the three.
+fn description_lines(issue: &LinearIssue, overlay: CardOverlay<'_>, width: usize) -> Vec<String> {
+    let note = overlay
+        .latest_note
+        .map(|note| fit(&format!("› {}", line(&note.body)), width));
+    let room = if note.is_some() { 2 } else { 3 };
+    let mut rows = wrap_lines(
+        &line(issue.description.as_deref().unwrap_or("")),
+        width,
+        room,
+    );
+    rows.extend(note);
+    rows
 }
 
 /// `spans` cut to `width` display cells, the last kept span ending in `…`
@@ -495,7 +513,8 @@ fn card_header(
     clip(out, inner)
 }
 
-fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> [Vec<Span<'static>>; 2] {
+/// One row per meta group with data: assignee and milestone, then the PR.
+fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> Vec<Vec<Span<'static>>> {
     let t = &state.theme;
     let icon_style = |c| Style::default().fg(if look.muted { t.muted_detail } else { c });
     let label = if look.muted {
@@ -503,46 +522,47 @@ fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> [Vec<S
     } else {
         t.card_detail()
     };
-    let who = issue
-        .assignee
-        .as_ref()
-        .and_then(|a| a.name.as_deref())
-        .map(|n| format!(" @{}", line(n)))
-        .unwrap_or_else(|| " unassigned".to_string());
-    let mut first = vec![
-        Span::styled(icon::PERSON, icon_style(t.palette.blue)),
-        Span::styled(who, label),
-    ];
-    if let Some(name) = issue
+    let who = issue.assignee.as_ref().and_then(|a| a.name.as_deref());
+    let milestone = issue
         .milestone
         .as_ref()
         .and_then(|m| m.name.as_deref())
-        .filter(|n| !n.trim().is_empty())
-    {
-        first.push(Span::raw("  "));
-        first.push(Span::styled(icon::MILESTONE, icon_style(t.palette.mauve)));
-        first.push(Span::styled(format!(" {}", line(name)), label));
+        .filter(|n| !n.trim().is_empty());
+    let mut rows = vec![];
+    if who.is_some() || milestone.is_some() {
+        let who = who.map_or_else(|| " unassigned".to_string(), |n| format!(" @{}", line(n)));
+        let mut first = vec![
+            Span::styled(icon::PERSON, icon_style(t.palette.blue)),
+            Span::styled(who, label),
+        ];
+        if let Some(name) = milestone {
+            first.push(Span::raw("  "));
+            first.push(Span::styled(icon::MILESTONE, icon_style(t.palette.mauve)));
+            first.push(Span::styled(format!(" {}", line(name)), label));
+        }
+        rows.push(first);
     }
-    let second = issue
-        .pr
-        .as_ref()
-        .map(|pr| {
-            let source = state.snapshot().and_then(|s| s.gh.as_ref());
-            card_pr_line(t, pr, pr_gh(source, pr), look.muted).spans
-        })
-        .unwrap_or_default();
-    [first, second]
+    if let Some(pr) = &issue.pr {
+        let source = state.snapshot().and_then(|s| s.gh.as_ref());
+        rows.push(card_pr_line(t, pr, pr_gh(source, pr), look.muted).spans);
+    }
+    rows
 }
 
-/// A card's 13 rows, each starting with the 2-cell inset. Selection changes
-/// only the title colour and the two reserved rule rows, so no text moves.
+/// A card's rows, each starting with the 2-cell inset, sized to its content
+/// (supersedes the fixed 5-row card of the 2026-09-16 pickers-and-layout
+/// plan). The board measures cards with this, so its length is the card's
+/// height. Selection changes only the title colour and the rule rows roomy
+/// cards reserve, so no text moves and no height changes.
 fn card_lines(
     state: &LinearState,
     overlay: CardOverlay<'_>,
     issue: &LinearIssue,
     width: u16,
     look: CardLook,
+    density: Density,
 ) -> Vec<Line<'static>> {
+    let roomy = density == Density::Roomy;
     let t = &state.theme;
     let inner = width.saturating_sub(2 * CARD_INSET) as usize;
     let inset = |spans: Vec<Span<'static>>| {
@@ -569,28 +589,68 @@ fn card_lines(
     } else {
         t.card_detail()
     };
-    let mut lines = vec![
-        Line::default(),
-        inset(card_header(state, overlay, issue, inner, look)),
-        rule("─".repeat(inner)),
-    ];
+    let mut lines = vec![];
+    if roomy {
+        lines.push(Line::default());
+    }
+    lines.push(inset(card_header(state, overlay, issue, inner, look)));
+    if roomy {
+        lines.push(rule("─".repeat(inner)));
+    }
     for text in title_lines(&line(&issue.title), inner) {
         lines.push(inset(vec![Span::styled(text, title_style)]));
     }
-    lines.push(Line::default());
-    let mut description = wrap_lines(&line(issue.description.as_deref().unwrap_or("")), inner, 3);
-    if let Some(note) = overlay.latest_note {
-        description[2] = fit(&format!("› {}", line(&note.body)), inner);
+    let description = description_lines(issue, overlay, inner);
+    if roomy && !description.is_empty() {
+        lines.push(Line::default());
     }
     for text in description {
         lines.push(inset(vec![Span::styled(text, detail)]));
     }
-    lines.push(rule("─ ".repeat(inner / 2)));
-    for row in card_meta(state, issue, look) {
+    let meta = card_meta(state, issue, look);
+    if roomy && !meta.is_empty() {
+        lines.push(rule("─ ".repeat(inner / 2)));
+    }
+    for row in meta {
         lines.push(inset(row));
     }
-    lines.push(Line::default());
+    if roomy {
+        lines.push(Line::default());
+    }
     lines
+}
+
+/// `card_lines` for the card `identifier`, or one `(missing)` row, padded as
+/// the density pads a card, when the snapshot lacks the issue.
+fn card_rows(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    identifier: &str,
+    width: u16,
+    look: CardLook,
+) -> Vec<Line<'static>> {
+    if let Some(issue) = state.snapshot().and_then(|s| s.issues.get(identifier)) {
+        return card_lines(
+            state,
+            overlays.get(identifier),
+            issue,
+            width,
+            look,
+            state.density,
+        );
+    }
+    let missing = Line::from(format!(
+        "{}{}",
+        " ".repeat(CARD_INSET as usize),
+        fit(
+            &format!("{} (missing)", line(identifier)),
+            width.saturating_sub(2 * CARD_INSET) as usize
+        )
+    ));
+    match state.density {
+        Density::Roomy => vec![Line::default(), missing, Line::default()],
+        Density::Compact => vec![missing],
+    }
 }
 
 /// How many columns fit in `width` cells before the workflow caps them: at
@@ -627,9 +687,13 @@ fn draw_too_short(state: &LinearState, f: &mut Frame, area: Rect) {
     );
 }
 
-/// Whether `area` holds the header, one card and the bar.
+/// Whether `area` holds the header, one full card and the bar.
 fn board_fits(state: &LinearState, area: Rect) -> bool {
-    area.height >= HEADER_ROWS + CARD_H + state.bar_layout(area.width).rows()
+    let card = match state.density {
+        Density::Roomy => FULL_CARD_H,
+        Density::Compact => FULL_COMPACT_CARD_H,
+    };
+    area.height >= HEADER_ROWS + card + state.bar_layout(area.width).rows()
 }
 
 fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
@@ -677,14 +741,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         body_h -= 1;
     }
     let body = Rect::new(area.x, y, area.width, body_h);
-    draw_columns(
-        state,
-        &overlays,
-        snapshot,
-        f,
-        body,
-        &mut app.hit_map.borrow_mut(),
-    );
+    draw_columns(state, &overlays, f, body, &mut app.hit_map.borrow_mut());
     draw_strip(app, strip, f, area, body.bottom());
 }
 
@@ -775,40 +832,60 @@ fn tab_row(
 }
 
 /// One lane's band across the board: its line (when the board has lanes),
-/// a blank row, then as many card rows as its busiest column holds.
+/// a blank row in roomy density, then its cards. Each column stacks its cards
+/// in rows of `ups`, a row as tall as its tallest card and one blank row
+/// after it; the band is as tall as its tallest stack, so lanes align.
 struct Band<'a> {
     key: &'a str,
     label: Option<&'a str>,
     total: usize,
     folded: bool,
     top: u16,
-    ups: usize,
+    head: u16,
     columns: Vec<Vec<&'a str>>,
+    /// Each card's `(top, height)`, the top counted from the band's first
+    /// card row.
+    cards: Vec<Vec<(u16, u16)>>,
+    stack: u16,
 }
 
 impl Band<'_> {
-    fn head(&self) -> u16 {
-        if self.label.is_some() {
-            2
-        } else {
-            0
-        }
+    fn cards_top(&self) -> u16 {
+        self.top + self.head
     }
 
-    fn card_top(&self, at: usize) -> u16 {
-        self.top + self.head() + (at / self.ups) as u16 * (CARD_H + 1)
+    fn card(&self, column: usize, at: usize) -> Option<(u16, u16)> {
+        let (top, h) = *self.cards.get(column)?.get(at)?;
+        Some((self.cards_top() + top, h))
     }
 
     fn height(&self) -> u16 {
-        let cards = self.columns.iter().map(Vec::len).max().unwrap_or(0);
-        self.head() + cards.div_ceil(self.ups) as u16 * (CARD_H + 1)
+        self.head + self.stack
     }
 }
 
+/// Each card's `(top, height)` in a column of `heights`, `ups` a row, and the
+/// column's total height.
+fn stack(heights: &[u16], ups: usize) -> (Vec<(u16, u16)>, u16) {
+    let mut cards = Vec::with_capacity(heights.len());
+    let mut top = 0;
+    for row in heights.chunks(ups.max(1)) {
+        cards.extend(row.iter().map(|&h| (top, h)));
+        top += row.iter().copied().max().unwrap_or(0) + 1;
+    }
+    (cards, top)
+}
+
 /// The active tab's bands, top to bottom, for every column (not just the
-/// page shown), so the bands keep their height across pages. `ups` is the
-/// same for every column, so a hidden column measures as a shown one would.
-fn bands(state: &LinearState, ups: usize) -> Vec<Band<'_>> {
+/// page shown), so the bands keep their height across pages. Every column
+/// measures its cards at the same `ups` and `card_w`, so a hidden column
+/// measures as a shown one would.
+fn bands<'a>(
+    state: &'a LinearState,
+    overlays: &CardOverlays<'_>,
+    ups: usize,
+    card_w: u16,
+) -> Vec<Band<'a>> {
     let groups = state.groups();
     let rows: Vec<_> = groups.iter().map(|g| state.lane_rows(g, None)).collect();
     let lanes = state.lanes();
@@ -820,11 +897,19 @@ fn bands(state: &LinearState, ups: usize) -> Vec<Band<'_>> {
             .map(|(key, label)| (key, Some(label)))
             .collect()
     };
+    let measure = CardLook {
+        selected: false,
+        muted: false,
+    };
+    let lane_gap = match state.density {
+        Density::Roomy => 1,
+        Density::Compact => 0,
+    };
     let mut top = 0;
     keys.into_iter()
         .map(|(key, label)| {
             let mut total = 0;
-            let columns = rows
+            let columns: Vec<Vec<&str>> = rows
                 .iter()
                 .map(|column| {
                     match column
@@ -839,14 +924,29 @@ fn bands(state: &LinearState, ups: usize) -> Vec<Band<'_>> {
                     }
                 })
                 .collect();
+            let mut tallest = 0;
+            let cards = columns
+                .iter()
+                .map(|column| {
+                    let heights: Vec<u16> = column
+                        .iter()
+                        .map(|id| card_rows(state, overlays, id, card_w, measure).len() as u16)
+                        .collect();
+                    let (cards, h) = stack(&heights, ups);
+                    tallest = tallest.max(h);
+                    cards
+                })
+                .collect();
             let band = Band {
                 key,
                 label,
                 total,
                 folded: label.is_some() && state.folded(key),
                 top,
-                ups,
+                head: if label.is_some() { 1 + lane_gap } else { 0 },
                 columns,
+                cards,
+                stack: tallest,
             };
             top += band.height();
             band
@@ -914,7 +1014,6 @@ fn lane_line(
 fn draw_columns(
     state: &LinearState,
     overlays: &CardOverlays<'_>,
-    snapshot: &LinearSnapshot,
     f: &mut Frame,
     body: Rect,
     hit_map: &mut HitMap,
@@ -943,9 +1042,11 @@ fn draw_columns(
             (x, slot_x(slot + 1) - x, page.start + usize::from(slot))
         })
         .collect();
+    // One card width for every column: a card's height depends on its width,
+    // and slots differ by a cell, which would break lane alignment.
     let narrowest = slots.iter().map(|&(_, w, _)| w).min().unwrap_or(0);
-    let (ups, _) = grid(narrowest.saturating_sub(2 * SLOT_PAD));
-    let bands = bands(state, ups);
+    let (ups, card_w) = grid(narrowest.saturating_sub(2 * SLOT_PAD));
+    let bands = bands(state, overlays, ups, card_w);
     let counts: Vec<usize> = (0..groups.len())
         .map(|g| {
             state
@@ -1004,7 +1105,7 @@ fn draw_columns(
         Focus::Card(_) => selected_slot.and_then(|(lane, id)| {
             let band = bands.iter().find(|b| b.key == lane)?;
             let at = band.columns[sel_group].iter().position(|c| *c == id)?;
-            Some((band.card_top(at), CARD_H))
+            band.card(sel_group, at)
         }),
         _ => None,
     };
@@ -1055,10 +1156,8 @@ fn draw_columns(
         let muted = !in_focus && !nothing_selected;
         let column_x = x + SLOT_PAD;
         let inside = col_w.saturating_sub(2 * SLOT_PAD);
-        let card_w =
-            (inside.saturating_sub((ups as u16 - 1) * CARD_GAP) / ups as u16).min(CARD_MAX);
         if counts[idx] == 0 {
-            let first = bands.first().map_or(0, |b| b.card_top(0));
+            let first = bands.first().map_or(0, Band::cards_top);
             if let Some((y, _, _)) = on_screen(first, 1) {
                 f.render_widget(
                     Paragraph::new(Span::styled(
@@ -1077,7 +1176,10 @@ fn draw_columns(
         }
         for band in &bands {
             for (at, &identifier) in band.columns[idx].iter().enumerate() {
-                let Some((y, skip, h)) = on_screen(band.card_top(at), CARD_H) else {
+                let Some((top, card_h)) = band.card(idx, at) else {
+                    continue;
+                };
+                let Some((y, skip, h)) = on_screen(top, card_h) else {
                     continue;
                 };
                 let look = CardLook {
@@ -1091,20 +1193,7 @@ fn draw_columns(
                 } else {
                     t.card()
                 };
-                let lines = match snapshot.issues.get(identifier) {
-                    Some(issue) => card_lines(state, overlays.get(identifier), issue, card_w, look),
-                    None => vec![
-                        Line::default(),
-                        Line::from(format!(
-                            "{}{}",
-                            " ".repeat(CARD_INSET as usize),
-                            fit(
-                                &format!("{} (missing)", line(identifier)),
-                                card_w.saturating_sub(2 * CARD_INSET) as usize
-                            )
-                        )),
-                    ],
-                };
+                let lines = card_rows(state, overlays, identifier, card_w, look);
                 let card_x = column_x + (at % ups) as u16 * (card_w + CARD_GAP);
                 let rect = Rect::new(card_x, y, card_w, h);
                 f.render_widget(Paragraph::new(lines).style(surface).scroll((skip, 0)), rect);

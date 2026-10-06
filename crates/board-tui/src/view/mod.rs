@@ -308,6 +308,7 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "a", "accept: ◇ card / request"),
     (Screen::LinearBoard, "x", "dismiss: ◇ card / request"),
     (Screen::LinearBoard, "n / N", "next / prev marked card"),
+    (Screen::LinearBoard, "z", "compact / roomy cards"),
     (Screen::LinearBoard, "r / R", "refresh; R skips cache"),
     (Screen::LinearBoard, "?", "bottom bar; help: keys"),
     (Screen::LinearBoard, "←/→ h/l Tab", "bar: move along it"),

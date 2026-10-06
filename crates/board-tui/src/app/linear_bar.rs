@@ -8,7 +8,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::linear_cursor::{column_cards, Focus, Side};
 use super::nav::nav_delta;
-use super::{App, Effect, LinearState, Screen};
+use super::{App, Density, Effect, LinearState, Screen};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BarItem {
@@ -402,7 +402,13 @@ impl LinearState {
             Focus::Filter => {
                 "Type to filter cards by id or title · Enter or ↓ returns to the board".into()
             }
-            Focus::None => "Nothing selected · ↑↓, Tab or Enter selects a card".into(),
+            Focus::None => {
+                let z = match self.density {
+                    Density::Roomy => "z compacts cards",
+                    Density::Compact => "z expands cards",
+                };
+                format!("Nothing selected · ↑↓, Tab or Enter selects a card · {z}")
+            }
             Focus::LaneLine(key) => self.lane_tip(key),
             Focus::Pager(side, _) => {
                 let page = self.page(width);
@@ -557,7 +563,7 @@ pub(super) fn bar_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
         KeyCode::Enter => return Some(run(app, item)),
         KeyCode::Char('a') => return Some(answer(app, item, true)),
         KeyCode::Char('x') => return Some(answer(app, item, false)),
-        KeyCode::Char('/' | 'n' | 'N' | '[' | ']') => return None,
+        KeyCode::Char('/' | 'n' | 'N' | '[' | ']' | 'z') => return None,
         _ => {}
     }
     Some(vec![])

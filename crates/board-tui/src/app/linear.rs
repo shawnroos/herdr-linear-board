@@ -243,6 +243,15 @@ pub enum StripView {
     Tabs,
 }
 
+/// How tall cards draw: roomy keeps padding, rules and blank rows; compact
+/// drops them. Per board session, never saved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Density {
+    #[default]
+    Roomy,
+    Compact,
+}
+
 pub struct LinearState {
     pub workspace_id: String,
     pub board_version: String,
@@ -278,6 +287,7 @@ pub struct LinearState {
     /// that keeps the selected item in view, so it needs the last value; a
     /// `Cell` because the view only borrows the state, as with `App::hit_map`.
     pub board_scroll: std::cell::Cell<u16>,
+    pub density: Density,
     /// The identifier open on `Screen::LinearDetail`.
     pub detail: Option<String>,
     pub in_flight: bool,
@@ -404,6 +414,7 @@ impl LinearState {
             last_card: None,
             tab_cursors: Default::default(),
             board_scroll: Default::default(),
+            density: Density::default(),
             detail: None,
             in_flight: false,
             queued: false,
@@ -1540,6 +1551,12 @@ fn board_action(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.move_column(-1, width),
         KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.move_column(1, width),
         KeyCode::Char('/') => state.open_filter(),
+        KeyCode::Char('z') => {
+            state.density = match state.density {
+                Density::Roomy => Density::Compact,
+                Density::Compact => Density::Roomy,
+            };
+        }
         KeyCode::Esc => state.deselect(),
         KeyCode::Enter => {
             if let Some(lane) = state.selected_lane_line().map(str::to_string) {
