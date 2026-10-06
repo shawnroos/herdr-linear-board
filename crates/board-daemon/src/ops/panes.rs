@@ -84,6 +84,74 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
     }))
 }
 
+/// The caller's own pane in its tab: alone or split, overlay or tile, and the
+/// issue each other pane's working directory is bound to, resolved exactly as
+/// `linear.session.get` resolves it. Reading it also starts watching the
+/// session for focus and layout events.
+pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Value> {
+    if p.pane_id.trim().is_empty() {
+        return Err(Error::BadRequest(
+            "pane.context requires a non-empty pane_id".into(),
+        ));
+    }
+    let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket_path)?;
+    d.watch_levels(socket_path);
+    let layout = client
+        .pane_layout(Some(&p.pane_id))
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.layout {}: {e}", p.pane_id)))?;
+    let own = p.pane_id.as_str();
+    let alone = layout.panes.iter().all(|pane| pane.pane_id == own)
+        || (layout.zoomed && layout.focused_pane_id == own);
+    // Herdr reports no placement. Every tab or split board is one the daemon
+    // opened and recorded, so a plugin board without a row is an overlay.
+    let overlay = p.plugin_pane
+        && !d
+            .store
+            .lock()
+            .list_board_panes(&socket)?
+            .iter()
+            .any(|row| row.pane_id == own);
+    let listed = client
+        .pane_list(Some(&layout.workspace_id))
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.list: {e}")))?;
+    let cwd_of = |pane_id: &str| {
+        listed
+            .iter()
+            .find(|pane| pane.pane_id == pane_id && pane.tab_id == layout.tab_id)
+            .and_then(|pane| pane.foreground_cwd.clone().or_else(|| pane.cwd.clone()))
+    };
+    let now = now_secs(d);
+    let store = d.store.lock();
+    let mut panes = Vec::new();
+    for pane in layout.panes.iter().filter(|pane| pane.pane_id != own) {
+        let cwd = cwd_of(&pane.pane_id);
+        // Raw socket: the session read keys the space binding on this string.
+        let read = store.linear_session_get(
+            &LinearSessionGetParams {
+                space: p.space.clone(),
+                herdr_socket: Some(p.origin_socket.clone()),
+                herdr_pane_id: Some(pane.pane_id.clone()),
+                claude_session_id: None,
+                cwd: cwd.clone(),
+            },
+            now,
+        )?;
+        panes.push(PaneContextPane {
+            pane_id: pane.pane_id.clone(),
+            cwd,
+            issue: read.binding.map(|b| b.issue).filter(|i| !i.is_empty()),
+        });
+    }
+    Ok(json!(PaneContext {
+        tab_id: layout.tab_id.clone(),
+        alone,
+        overlay,
+        focused_pane_id: Some(layout.focused_pane_id.clone()).filter(|id| !id.is_empty()),
+        panes,
+    }))
+}
+
 const BOARD_PLUGIN_ID: &str = "herdr-board";
 const BOARD_ENTRYPOINT: &str = "board";
 const SESSION_ENTRYPOINT: &str = "session";

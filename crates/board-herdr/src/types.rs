@@ -116,6 +116,8 @@ pub struct PaneInfo {
     pub title: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub foreground_cwd: Option<String>,
     pub focused: bool,
     pub revision: u64,
 }

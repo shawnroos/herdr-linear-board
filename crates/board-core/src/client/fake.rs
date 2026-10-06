@@ -13,11 +13,11 @@ use crate::protocol::{
     CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
     CommentUpdateParams, DeletedResult, Event, LinearIssueDocument, LinearIssueParams,
     LinearListKind, LinearListParams, LinearListResult, LinearPrDocument, LinearPrParams,
-    LinearSnapshot, LinearSnapshotParams, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
-    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectGetParams,
-    ProjectListParams, ProjectOpenParams, ProjectOpenResult, ProjectSelectParams,
-    ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams, RunFocusResult,
-    TemplateApplyParams, Trigger,
+    LinearSnapshot, LinearSnapshotParams, PaneContext, PaneContextParams, PaneFocusParams,
+    PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
+    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
+    RunFocusResult, TemplateApplyParams, Trigger,
 };
 
 use super::BoardClient;
@@ -77,6 +77,8 @@ pub struct FakeLinear {
     /// Keyed by PR URL. An `Err` answers protocol code 8 (gh unavailable),
     /// and so does a URL with nothing seeded.
     pub prs: std::collections::BTreeMap<String, Result<LinearPrDocument, String>>,
+    /// Shared so a test can move panes and focus between reads.
+    pub pane_context: std::sync::Arc<std::sync::Mutex<PaneContext>>,
 }
 
 impl Default for FakeLinear {
@@ -90,6 +92,7 @@ impl Default for FakeLinear {
             lists: std::collections::BTreeMap::new(),
             issues: std::collections::BTreeMap::new(),
             issue_unsupported: false,
+            pane_context: std::sync::Arc::default(),
             prs: std::collections::BTreeMap::new(),
         }
     }
@@ -193,6 +196,16 @@ impl FakeBoardClient {
     /// cannot be reached (code 4).
     pub fn with_pane_focus_error(mut self, message: &str) -> FakeBoardClient {
         self.linear.focus = Err(message.to_string());
+        self
+    }
+
+    /// What `pane.context` answers: the handle stays live, so a test can
+    /// change the tab after the driver has the client.
+    pub fn with_pane_context(
+        mut self,
+        context: std::sync::Arc<std::sync::Mutex<PaneContext>>,
+    ) -> FakeBoardClient {
+        self.linear.pane_context = context;
         self
     }
 
@@ -837,6 +850,15 @@ fake_methods!(db, config, linear, now, params, {
             Ok(result) => serde_json::to_value(result.clone())?,
             Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
         }
+    },
+    "pane.context" => {
+        let _: PaneContextParams = serde_json::from_value(params)?;
+        let context = linear
+            .pane_context
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pane context fixture poisoned"))?
+            .clone();
+        serde_json::to_value(context)?
     },
     "linear.snapshot" => {
         let p: LinearSnapshotParams = serde_json::from_value(params)?;

@@ -367,6 +367,14 @@ pub enum Event {
         )]
         snapshot: bool,
     },
+    /// Herdr reported a focus or layout change in a session the daemon reads
+    /// pane context for. A board in that workspace re-reads `pane.context`.
+    PaneLayoutChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_id: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1060,45 @@ pub struct PaneFocusParams {
 pub struct PaneFocusResult {
     pub focused: bool,
     pub gone: bool,
+}
+
+/// `pane.context` params: the caller's own pane in its own herdr session.
+/// `plugin_pane` says the caller runs as the herdr-board plugin's `board`
+/// entrypoint, which herdr opens as an overlay unless the daemon placed it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContextParams {
+    pub origin_socket: String,
+    pub pane_id: String,
+    pub space: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub plugin_pane: bool,
+}
+
+/// One other pane in the caller's tab. `issue` is what `linear.session.get`
+/// resolves for the pane's working directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContextPane {
+    pub pane_id: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+/// `pane.context` result. `alone` means the caller's pane fills its tab;
+/// `panes` lists the tab's other panes in layout order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContext {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub tab_id: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub alone: bool,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub overlay: bool,
+    #[serde(default)]
+    pub focused_pane_id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub panes: Vec<PaneContextPane>,
 }
 
 /// What an agent-opened board shows: a space, an issue, a card, or a mix.

@@ -24,4 +24,4 @@ mod stream;
 
 pub use backoff::Backoff;
 pub use parse::{parse_event_line, HerdrEvent};
-pub use stream::{watch_subscriptions, HerdrEvents, Subscription};
+pub use stream::{layout_subscriptions, watch_subscriptions, HerdrEvents, Subscription};

@@ -155,6 +155,9 @@ pub struct Sched {
 #[derive(Default)]
 pub struct WatchState {
     pub panes_by_socket: HashMap<PathBuf, Vec<String>>,
+    /// Sessions a board read `pane.context` from: watched for focus and
+    /// layout events while any client is subscribed.
+    pub level_sockets: std::collections::HashSet<PathBuf>,
     pub generation: u64,
 }
 
@@ -243,6 +246,7 @@ impl Daemon {
             Event::RunEnded { .. } => "run_ended",
             Event::BoardChanged { .. } => "board_changed",
             Event::LocalStateChanged { .. } => "local_state_changed",
+            Event::PaneLayoutChanged { .. } => "pane_layout_changed",
         });
         let _ = self.events_tx.send(ev);
     }
@@ -356,6 +360,10 @@ impl Daemon {
             w.panes_by_socket = grouped;
             w.generation += 1;
         }
+    }
+
+    pub fn watch_levels(&self, socket: PathBuf) {
+        self.watch.lock().unwrap().level_sockets.insert(socket);
     }
 
     #[cfg(test)]

@@ -726,6 +726,7 @@ mod import;
 mod lifecycle;
 mod linear_native;
 mod linear_state;
+mod pane_context;
 mod panes;
 mod parity;
 mod rollback;

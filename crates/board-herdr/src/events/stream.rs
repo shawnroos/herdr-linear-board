@@ -90,6 +90,14 @@ pub fn watch_subscriptions(pane_ids: &[String]) -> Vec<Subscription> {
     subs
 }
 
+/// What a board's level follows: focus moves and layout changes, all global.
+pub fn layout_subscriptions() -> Vec<Subscription> {
+    ["pane.focused", "tab.focused", "layout.updated"]
+        .into_iter()
+        .map(|kind| Subscription(json!({ "type": kind })))
+        .collect()
+}
+
 /// A persistent event-stream connection. Iterating yields decoded events until
 /// the socket closes.
 pub struct HerdrEvents {

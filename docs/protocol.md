@@ -101,7 +101,7 @@ with lightweight recording/fake clients. Production clients perform no SQLite I/
 and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
-`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
+`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`, `pane.context`,
 `board.pane.open`, `board.pane.close`, `board.notify`,
 `linear.snapshot`, `linear.list`, `linear.issue`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.space.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
@@ -513,6 +513,18 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   never sent. The Linear-mode board uses it for the panes a snapshot names, which may be stale, so
   `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
   socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
+- `pane.context {origin_socket, pane_id, space, plugin_pane?}` →
+  `{tab_id, alone, overlay, focused_pane_id?, panes: [{pane_id, cwd?, issue?}]}` — where the
+  caller's own pane sits in its tab, for the Linear board's level. One herdr `pane.layout` and one
+  `pane.list`, after the protocol gate. `alone` is true when the pane is the tab's only pane, or the
+  tab is zoomed on it. `overlay` is true when `plugin_pane` (the caller is the herdr-board `board`
+  entrypoint) and the daemon has no `board.pane.open` record for the pane: herdr reports no
+  placement, and every tab or split board is one the daemon opened. `panes` lists the tab's other
+  panes in layout order; `cwd` is herdr's `foreground_cwd`, else `cwd`, and `issue` is what
+  `linear.session.get` resolves for that cwd with the raw `origin_socket`. The read also adds the
+  session to the daemon's focus watch until no client is subscribed (see `pane_layout_changed`).
+  Error 1 for an empty `pane_id`, error 4 for an unavailable socket or a herdr refusal. A daemon
+  without the method answers `unknown method`, and the board then stays at the space level.
 - `board.pane.open {context: {space?, issue?, card?, session?}, placement, origin_socket, origin_pane,
   session_cwd?, claude_session_id?}` →
   `{pane_id, tab_id, workspace_id, placement, reused}` — open a board beside an agent's own pane,
@@ -945,6 +957,12 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
   parse, while an unknown reason would make it drop the whole `board_changed` line. Unlike
   `board_changed`, the server does not coalesce these: a burst of other writes is a burst of
   events, and a subscriber whose outbox fills is disconnected.
+
+- `{"event":"pane_layout_changed","workspace_id"?:"<space>","tab_id"?:"<tab>"}` — herdr reported
+  `pane_focused`, `tab_focused` or `layout_updated` in a session a board read `pane.context` from.
+  `pane_focused` carries no tab, so `tab_id` may be absent. A board in that workspace re-reads
+  `pane.context`; the event names no session, so a board with the same workspace id in another
+  session re-reads for nothing. An older client ignores it.
 
 ## Dispatch semantics (column engine — lives in board-core, pure; daemon executes effects)
 

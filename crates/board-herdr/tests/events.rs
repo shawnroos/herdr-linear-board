@@ -170,3 +170,50 @@ fn parses_dotted_event_key_without_data_type() {
         HerdrEvent::PaneExited { .. }
     ));
 }
+
+// Shapes from the 0.9.3 live probe (docs/herdr.md "Herdr 0.9.3 compatibility").
+#[test]
+fn parses_focus_and_layout_events_as_layout_changed() {
+    let cases = [
+        (
+            r#"{"event":"pane_focused","data":{"type":"pane_focused","pane_id":"w1:p2","workspace_id":"w1"}}"#,
+            Some("w1"),
+            None,
+        ),
+        (
+            r#"{"event":"tab_focused","data":{"type":"tab_focused","tab_id":"w1:t2","workspace_id":"w1"}}"#,
+            Some("w1"),
+            Some("w1:t2"),
+        ),
+        (
+            r#"{"event":"layout_updated","data":{"type":"layout_updated","layout":{"workspace_id":"w2","tab_id":"w2:t1","zoomed":false,"area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":"w2:p1","panes":[],"splits":[]}}}"#,
+            Some("w2"),
+            Some("w2:t1"),
+        ),
+    ];
+    for (line, workspace, tab) in cases {
+        match parse_event_line(line).expect("event") {
+            HerdrEvent::LayoutChanged {
+                workspace_id,
+                tab_id,
+            } => {
+                assert_eq!(workspace_id.as_deref(), workspace, "{line}");
+                assert_eq!(tab_id.as_deref(), tab, "{line}");
+            }
+            other => panic!("wrong variant for {line}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn layout_subscriptions_are_the_three_global_focus_and_layout_kinds() {
+    let subs: Vec<_> = board_herdr::layout_subscriptions();
+    assert_eq!(
+        subs,
+        vec![
+            Subscription::raw(serde_json::json!({"type": "pane.focused"})),
+            Subscription::raw(serde_json::json!({"type": "tab.focused"})),
+            Subscription::raw(serde_json::json!({"type": "layout.updated"})),
+        ]
+    );
+}

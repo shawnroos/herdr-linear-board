@@ -22,13 +22,13 @@ use crate::protocol::{
     LinearPrDocument, LinearPrParams, LinearRemoved, LinearReplace, LinearSessionGetParams,
     LinearSessionGetResult, LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot,
     LinearSnapshotParams, LinearSpaceBindParams, LinearState, LinearStateGetParams,
-    LinearUnbindParams, Mark, Note, PaneFocusParams, PaneFocusResult, PaneSetTitleParams,
-    PaneSetTitleResult, ProjectArchiveParams, ProjectCreateParams, ProjectDetail, ProjectGetParams,
-    ProjectListParams, ProjectListResult, ProjectOpenParams, ProjectOpenResult,
-    ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunCardParams, RunDoneParams,
-    RunFocusParams, RunFocusResult, RunOutcome, RunPaneExitedParams, SessionListResult,
-    ShowRequest, SpaceBinding, SpaceListParams, SpaceListResult, StopResult, TemplateApplyParams,
-    Visibility, WorktreeBinding,
+    LinearUnbindParams, Mark, Note, PaneContext, PaneContextParams, PaneFocusParams,
+    PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
+    ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
+    RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
+    RunPaneExitedParams, SessionListResult, ShowRequest, SpaceBinding, SpaceListParams,
+    SpaceListResult, StopResult, TemplateApplyParams, Visibility, WorktreeBinding,
 };
 
 /// Blocking client to boardd. Object-safe so the TUI can hold `Box<dyn BoardClient>`.
@@ -521,6 +521,12 @@ pub trait BoardClient {
     fn pane_focus(&mut self, p: &PaneFocusParams) -> anyhow::Result<PaneFocusResult> {
         Ok(serde_json::from_value(
             self.call("pane.focus", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn pane_context(&mut self, p: &PaneContextParams) -> anyhow::Result<PaneContext> {
+        Ok(serde_json::from_value(
+            self.call("pane.context", serde_json::to_value(p)?)?,
         )?)
     }
 
