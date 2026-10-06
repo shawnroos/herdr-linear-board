@@ -1063,16 +1063,20 @@ fit, at least one, so a narrow pane shows one column a page. When not every colu
 row names the hidden column and its card count at each edge (`‹ Todo 4`, `In Review 1 ›`);
 `←`/`→` flip the page past its edge and `<`/`>` jump a page. Lanes are one line each across the
 whole board (`─ ALPHA ──── 5 󰈳 ─`, the count across the tab and a fold icon), and each lane's band
-is as tall as its busiest column, so a lane starts on the same row in every column; a board with
-no lane grouping has no lane lines. Cards are 13 rows tall with a 2-cell inset: header (identifier,
-priority, panes; marks and `▶` right-aligned), two title rows, three description rows (the newest
-note replaces the last as `› note`), then assignee and milestone, and the pull request row. That
-row shows Linear's number and status with dim placeholders for preview, diff and CI until `gh`
-data is wired in. Selecting a card changes only its surface, title colour and two inner rules, so
-no text moves. Unfocused columns are muted; with nothing selected none is. The board scrolls as
+is as tall as its tallest column (its summed card heights and gaps), so a lane starts on the
+same row in every column; a board with no lane grouping has no lane lines. Cards have a 2-cell
+inset and are sized to their content: header (identifier, priority, panes; marks and `▶`
+right-aligned), one or two title rows, up to three description rows (the newest note takes the
+last as `› note`), then one row each for assignee and milestone and for the pull request, when
+the issue has them. The default density adds a padding row above and below, a rule row under the
+header and above the meta rows, and a blank row before the description: a full card is 13 rows, a
+title-only card 5. `z` toggles a compact density for the board session that drops those rows (8
+and 2) and the blank row under lane lines. A 2-up row is as tall as its taller card. Selecting a
+card changes only its surface, title colour and, in the default density, two inner rules, so no
+text moves and no height changes. Unfocused columns are muted; with nothing selected none is. The board scrolls as
 one unit by the least that keeps the selection in view. An empty column says `no issues`, a filter
 that matches nothing says `no matching issues`, and a pane shorter than the header, one card and
-the bar says `pane too short`. Titles and descriptions wrap by display width, so wide characters
+the bar says `pane too short` (a full card in the current density). Titles and descriptions wrap by display width, so wide characters
 do not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
 keeps it on the same card when it can. The header names the recorded view, or `view: project issues (default)` when none is
 chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
