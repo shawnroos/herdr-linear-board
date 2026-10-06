@@ -17,11 +17,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board drops column borders for powerline titles, aligned lane lines and fixed cards with notes and the pull request.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board drops column borders for powerline titles, aligned lane lines and cards that show notes and the pull request.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board lanes fold with Return, / filters cards, Esc clears the selection, and ctrl+q quits (plain q does nothing).
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board columns fit any width, wide columns hold two cards a row, arrow buttons page hidden columns, and cards show PR checks.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board's bottom bar shows controls, a selection tip and alerts; `?` opens it, and show-requests are answered there.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear cards drop the rows they have nothing for, and z switches to a compact density that fits more cards.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Return on a Linear group alert such as `! 3 needs you` filters the board to those cards; Esc on the filter clears it.
 
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The board works with Herdr 0.9.0 through 0.9.3.
 
