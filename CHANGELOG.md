@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format is based on
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode reads Linear itself, owns its bindings (import once with board import work-store) and gives agents board mcp tools.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board reads carry each issue's description, milestone and newest pull request, and `board linear issue` lists attachments.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The daemon reads each on-board pull request's checks, blocker, diff and preview with gh, and says why when gh is missing.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board shows the space board alone in a tab and the focused split's issue beside other splits.
 
 ### Changed
 

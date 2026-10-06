@@ -51,8 +51,8 @@ pub(crate) struct Cli {
 pub(crate) enum Cmd {
     /// Open the kanban TUI (auto-starts the daemon).
     Tui {
-        /// The session side pane beside one agent, whose identity the
-        /// daemon passes in BOARD_SESSION_* when it opens the pane.
+        /// Start the Linear board at the split level beside one agent, whose
+        /// identity the daemon passes in BOARD_SESSION_* when it opens the pane.
         #[arg(long)]
         session: bool,
     },

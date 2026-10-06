@@ -10,10 +10,18 @@ pub struct OriginContext {
     pub origin_socket: Option<String>,
     pub session: Option<String>,
     pub plugin_id: Option<String>,
+    pub entrypoint: Option<String>,
     pub pane_id: Option<String>,
 }
 
 impl OriginContext {
+    /// The herdr-board `board` entrypoint, which herdr opens as an overlay
+    /// unless the daemon placed it in a tab or split.
+    pub fn board_plugin_pane(&self) -> bool {
+        self.plugin_id.as_deref() == Some("herdr-board")
+            && self.entrypoint.as_deref().is_none_or(|e| e == "board")
+    }
+
     /// Read the invoking Herdr/plugin context at the production boundary.
     pub fn from_environment() -> OriginContext {
         let origin_socket = std::env::var("HERDR_SOCKET_PATH")
@@ -23,6 +31,9 @@ impl OriginContext {
             session: board_core::paths::session_name_from_socket(origin_socket.as_deref()),
             origin_socket,
             plugin_id: std::env::var("HERDR_PLUGIN_ID")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            entrypoint: std::env::var("HERDR_PLUGIN_ENTRYPOINT_ID")
                 .ok()
                 .filter(|value| !value.is_empty()),
             pane_id: std::env::var("HERDR_PANE_ID")

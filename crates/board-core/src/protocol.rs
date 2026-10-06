@@ -1090,6 +1090,8 @@ pub struct PaneContextPane {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneContext {
     #[serde(default, deserialize_with = "null_as_empty")]
+    pub workspace_id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub tab_id: String,
     #[serde(default, deserialize_with = "null_as_default")]
     pub alone: bool,

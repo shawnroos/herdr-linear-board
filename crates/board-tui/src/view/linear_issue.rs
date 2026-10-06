@@ -219,7 +219,7 @@ pub fn open_rect(app: &App, state: &LinearState, area: Rect) -> (Rect, Look) {
     }
     let bar = bar_rows(state, area);
     let full = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(bar));
-    if area.width < MODAL_MIN {
+    if area.width < MODAL_MIN || state.at_split() {
         return (full, Look::Narrow);
     }
     if state.issue_mode == IssueMode::Expanded {

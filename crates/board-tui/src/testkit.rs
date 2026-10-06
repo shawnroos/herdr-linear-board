@@ -111,6 +111,7 @@ pub fn hostile_origin() -> OriginContext {
         origin_socket: Some("/hostile/socket".into()),
         session: Some("hostile-session".into()),
         plugin_id: Some("hostile-plugin-sentinel".into()),
+        entrypoint: Some("hostile-entrypoint-sentinel".into()),
         pane_id: Some("hostile-pane-sentinel".into()),
     }
 }
@@ -746,6 +747,17 @@ pub fn methods(log: &RequestLog) -> Vec<String> {
         .iter()
         .map(|(method, _)| method.clone())
         .collect()
+}
+
+/// A Linear-mode driver started at the split level beside the agent
+/// `identity` names, as `board tui --session` starts one.
+pub fn beside_driver<C: BoardClient + 'static>(
+    client: C,
+    start: LinearStart,
+    identity: SessionIdentity,
+) -> Driver {
+    let (platform, _, _) = FakePlatform::new();
+    Driver::linear_beside(Box::new(client), Box::new(platform), start, identity)
 }
 
 /// A session-pane driver over `client` with a fake platform, beside the

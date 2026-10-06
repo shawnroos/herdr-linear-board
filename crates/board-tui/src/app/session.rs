@@ -108,7 +108,7 @@ pub fn session_lane(state: &LinearState, issue: &str) -> Option<SessionLane> {
 
 pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
-        Msg::Refresh | Msg::Mouse(_) => vec![],
+        Msg::Refresh | Msg::Mouse(_) | Msg::PaneLayoutChanged(_) => vec![],
         Msg::LinearRefresh => read_everything(app),
         Msg::Key(k) => session_key(app, k),
         Msg::LocalStateChanged(signals) => {
@@ -139,7 +139,9 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 super::linear_issue::pr_arrived(app, url, *result);
                 vec![]
             }
-            LinearArrival::List { .. } | LinearArrival::Wrote { .. } => {
+            LinearArrival::List { .. }
+            | LinearArrival::Wrote { .. }
+            | LinearArrival::PaneContext(_) => {
                 vec![]
             }
         },

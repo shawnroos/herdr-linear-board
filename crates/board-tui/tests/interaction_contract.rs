@@ -158,6 +158,11 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
     (Screen::LinearDetail, "Esc ⌫ ←", "back an issue, then close"),
+    (
+        Screen::LinearDetail,
+        "Esc (split)",
+        "space board till refocus",
+    ),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
     (
@@ -194,8 +199,8 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        157,
-        "the interaction contract must stay at exactly 157 bindings (87 upstream + 65 Linear mode + 5 session pane)"
+        158,
+        "the interaction contract must stay at exactly 158 bindings (87 upstream + 66 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

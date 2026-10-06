@@ -70,6 +70,7 @@ pub enum LinearArrival {
         result: Box<Result<board_core::protocol::LinearPrDocument, LinearFailure>>,
     },
     Session(Box<Result<board_core::protocol::LinearSessionGetResult, LinearFailure>>),
+    PaneContext(Box<Result<board_core::protocol::PaneContext, LinearFailure>>),
     Wrote {
         write: LinearWrite,
         result: Result<(), WriteFailure>,
@@ -397,6 +398,9 @@ pub struct LinearState {
     pub pr_read_missing: bool,
     /// Where an agent-opened board lands, taken by the first good snapshot.
     pub landing: Option<crate::ShowContext>,
+    /// `Some` when the board knows its own herdr pane, so it can pick its
+    /// level from where that pane sits.
+    pub level: Option<super::LevelState>,
 }
 
 /// How many issues back Esc can walk. Each step holds a whole fetched
@@ -511,6 +515,7 @@ impl LinearState {
             prs: HashMap::new(),
             pr_read_missing: false,
             landing: None,
+            level: None,
         }
     }
 
@@ -924,8 +929,17 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
         // `board_changed` never refreshes a Linear board (R21).
         Msg::Refresh => vec![],
-        Msg::Mouse(m) => super::mouse::on_mouse(app, m),
-        Msg::LinearRefresh => request_or_queue(app),
+        Msg::Mouse(m) => {
+            let mut effects = super::mouse::on_mouse(app, m);
+            effects.extend(super::linear_level::settle(app));
+            effects
+        }
+        Msg::LinearRefresh => {
+            let mut effects = request_or_queue(app);
+            effects.extend(super::linear_level::request(app));
+            effects
+        }
+        Msg::PaneLayoutChanged(workspaces) => super::linear_level::layout_changed(app, &workspaces),
         Msg::LinearArrived(arrival) => match *arrival {
             LinearArrival::Snapshot(result) => arrived(app, *result),
             LinearArrival::List { kind, id, result } => {
@@ -939,14 +953,29 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
             } => issue_arrived(app, &issue, generation, *result),
             LinearArrival::State(result) => local_state_arrived(app, *result),
             LinearArrival::Wrote { write, result } => write_arrived(app, write, result),
-            LinearArrival::Session(_) => vec![],
+            LinearArrival::Session(result) => super::linear_level::start_arrived(app, *result),
+            LinearArrival::PaneContext(result) => super::linear_level::arrived(app, *result),
             LinearArrival::Pr { url, result } => {
                 super::linear_issue::pr_arrived(app, url, *result);
                 vec![]
             }
         },
-        Msg::Key(k) => linear_key(app, k),
-        Msg::LocalStateChanged(signals) => local_state_changed(app, &signals),
+        Msg::Key(k) => {
+            let mut effects = linear_key(app, k);
+            effects.extend(super::linear_level::settle(app));
+            effects
+        }
+        Msg::LocalStateChanged(signals) => {
+            let mut effects = local_state_changed(app, &signals);
+            let ours = app
+                .linear
+                .as_ref()
+                .is_some_and(|s| signals.for_space(&s.workspace_id).is_some());
+            if ours {
+                effects.extend(super::linear_level::request(app));
+            }
+            effects
+        }
     }
 }
 
@@ -1245,8 +1274,14 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
         }
     };
     // An overlay open when a snapshot lands stays open: the new home
-    // screen becomes where closing it goes.
+    // screen becomes where closing it goes. The split level keeps its issue
+    // on screen; leaving it picks the screen again.
+    let at_split = app.linear.as_ref().is_some_and(LinearState::at_split);
+    if at_split {
+        landing = None;
+    }
     match app.screen {
+        _ if at_split => {}
         Screen::LinearPicker if app.picker.is_some() => {
             if let Some(picker) = app.picker.as_mut() {
                 picker.return_to = screen;
@@ -1504,6 +1539,9 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         } else {
             request_snapshot(app, false)
         };
+    }
+    if app.screen == Screen::LinearDetail && app.linear.as_ref().is_some_and(|s| s.at_split()) {
+        return super::linear_level::split_key(app, k);
     }
     match app.screen {
         Screen::Help => {

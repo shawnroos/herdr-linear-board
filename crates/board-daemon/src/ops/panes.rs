@@ -144,6 +144,7 @@ pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Valu
         });
     }
     Ok(json!(PaneContext {
+        workspace_id: layout.workspace_id.clone(),
         tab_id: layout.tab_id.clone(),
         alone,
         overlay,

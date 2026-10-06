@@ -351,6 +351,11 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
     (Screen::LinearDetail, "Esc ⌫ ←", "back an issue, then close"),
+    (
+        Screen::LinearDetail,
+        "Esc (split)",
+        "space board till refocus",
+    ),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
     (

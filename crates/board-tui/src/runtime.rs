@@ -35,6 +35,9 @@ enum SubscriptionSignal {
         space: Option<String>,
         snapshot: bool,
     },
+    PaneLayout {
+        workspace_id: Option<String>,
+    },
     Reconnected,
 }
 
@@ -44,6 +47,7 @@ struct Coalesced {
     changed: bool,
     reconnected: bool,
     local: LocalStateSignals,
+    layout: std::collections::BTreeSet<Option<String>>,
 }
 
 fn coalesce(signals: impl IntoIterator<Item = SubscriptionSignal>) -> Coalesced {
@@ -53,6 +57,9 @@ fn coalesce(signals: impl IntoIterator<Item = SubscriptionSignal>) -> Coalesced 
             SubscriptionSignal::Changed => out.changed = true,
             SubscriptionSignal::Reconnected => out.reconnected = true,
             SubscriptionSignal::LocalState { space, snapshot } => out.local.add(space, snapshot),
+            SubscriptionSignal::PaneLayout { workspace_id } => {
+                out.layout.insert(workspace_id);
+            }
         }
     }
     out
@@ -96,14 +103,14 @@ pub fn run_linear(client: Box<dyn BoardClient>, start: LinearStart) -> Result<()
     run_driver(&mut driver)
 }
 
-/// The session side pane beside one agent: reads only, never a
-/// write, not even its own pane title.
-pub fn run_session(
+/// `board tui --session`: the Linear board starting at the split level
+/// beside one agent.
+pub fn run_linear_beside(
     client: Box<dyn BoardClient>,
     start: LinearStart,
     identity: crate::SessionIdentity,
 ) -> Result<()> {
-    let mut driver = Driver::session(client, Box::new(crate::RealPlatform), start, identity);
+    let mut driver = Driver::linear_beside(client, Box::new(crate::RealPlatform), start, identity);
     run_driver(&mut driver)
 }
 
@@ -193,6 +200,9 @@ fn event_loop(
             if !batch.local.is_empty() {
                 driver.on_local_state_changed(batch.local);
             }
+            if !batch.layout.is_empty() {
+                driver.on_pane_layout_changed(batch.layout);
+            }
         }
 
         if driver.app.should_quit {
@@ -209,6 +219,9 @@ fn forward_events(
         let signal = match event {
             Event::LocalStateChanged { space, snapshot } => {
                 SubscriptionSignal::LocalState { space, snapshot }
+            }
+            Event::PaneLayoutChanged { workspace_id, .. } => {
+                SubscriptionSignal::PaneLayout { workspace_id }
             }
             _ => SubscriptionSignal::Changed,
         };
@@ -297,6 +310,27 @@ mod tests {
                 SubscriptionSignal::Changed,
                 local(None, false)
             ]
+        );
+    }
+
+    #[test]
+    fn a_layout_event_is_its_own_signal_and_coalesces_by_workspace_without_a_board_change() {
+        let (tx, rx) = mpsc::channel();
+        let layout = |w: Option<&str>| Event::PaneLayoutChanged {
+            workspace_id: w.map(str::to_string),
+            tab_id: None,
+        };
+        forward_events(
+            Box::new(vec![layout(Some("w1")), layout(Some("w1")), layout(None)].into_iter()),
+            &tx,
+        );
+        drop(tx);
+        let batch = coalesce(rx.iter());
+        assert!(!batch.changed, "a focus change refetched the board");
+        assert!(batch.local.is_empty());
+        assert_eq!(
+            batch.layout,
+            [Some("w1".to_string()), None].into_iter().collect()
         );
     }
 

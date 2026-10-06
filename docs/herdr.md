@@ -494,6 +494,20 @@ one headless (no client attached), one with a client attached as
 - **Telling a full pane from a split** (for the board's level): from `pane.layout {"pane_id":<own>}`,
   the pane fills its tab when it is the only entry in `panes`, or when `zoomed` is true and
   `focused_pane_id` is the pane. Re-read the layout on `layout_updated` and on `pane_focused`/`tab_focused`.
+- **Telling an overlay from a tile** (observed 2026-10-06 on Herdr 0.9.0 in the sandbox, with a
+  throwaway plugin whose entrypoint dumps its environment). No field says how a plugin pane was
+  placed: `PaneInfo` has no placement, and `HERDR_PLUGIN_CONTEXT_JSON.invocation_source` was `"api"`
+  for an overlay opened by `herdr plugin pane open --placement overlay`, a split opened by
+  `plugin.pane.open`, and a manifest-default open alike. `HERDR_PLUGIN_ENTRYPOINT_ID` names the
+  entrypoint. The layout cannot tell either: with an overlay open, `pane.focus` on the pane beneath
+  left `zoomed: true` with `focused_pane_id` moved to that pane. The daemon therefore calls a board an
+  overlay when the TUI says it is the herdr-board `board` entrypoint (`plugin_pane`) and the daemon
+  holds no `board.pane.open` record for its pane, since every tab or split board is one the daemon
+  opened. A board someone opens by hand with `--placement split` reads as an overlay and shows the
+  space level.
+- **Level events.** `pane.context` subscribes the caller's session to `pane.focused`, `tab.focused`
+  and `layout.updated`, each `{"type": <kind>}` with no pane id, on the watcher's event connection
+  while any board client is subscribed. The daemon forwards each as `pane_layout_changed`.
 
 **Managed Codex readiness comes from the screen.** Herdr drops `pane.report_agent` state from
 the reserved `herdr:codex` source and keeps only its session reference (both 0.9.0 and 0.9.3), so

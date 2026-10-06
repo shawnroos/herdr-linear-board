@@ -230,7 +230,7 @@ fn pin_open(app: &mut App) -> Vec<Effect> {
     vec![]
 }
 
-fn close_open(state: &mut LinearState) {
+pub(super) fn close_open(state: &mut LinearState) {
     state.detail = None;
     state.detail_doc = None;
     state.detail_error = None;

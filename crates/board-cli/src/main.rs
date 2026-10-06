@@ -107,15 +107,16 @@ fn dispatch(cli: Cli) -> Result<()> {
             })?;
             let mut client = ctx.into_client()?;
             let daemon_version = client.daemon_status().ok().map(|status| status.version);
-            board_tui::run_session(
+            let herdr = board_tui::herdr_keys::from_environment();
+            board_tui::run_linear_beside(
                 Box::new(client),
                 board_tui::LinearStart {
                     workspace_id: identity.space.clone(),
                     origin: board_tui::OriginContext::from_environment(),
                     board_version: env!("CARGO_PKG_VERSION").to_string(),
                     daemon_version,
-                    herdr_keys: Vec::new(),
-                    theme: board_tui::herdr_keys::from_environment().theme,
+                    herdr_keys: herdr.keys,
+                    theme: herdr.theme,
                     show: board_tui::ShowContext::default(),
                 },
                 identity,

@@ -119,6 +119,7 @@ fn a_board_alone_in_its_tab_reads_as_alone_with_no_other_panes() {
     assert!(!ctx.overlay);
     assert!(ctx.panes.is_empty());
     assert_eq!(ctx.tab_id, "w1:t1");
+    assert_eq!(ctx.workspace_id, SPACE);
     assert_eq!(herdr.methods()[0], "ping", "the gated connect runs first");
 }
 

@@ -42,6 +42,7 @@ mod linear;
 mod linear_bar;
 mod linear_cursor;
 mod linear_issue;
+mod linear_level;
 mod linear_picker;
 mod mouse;
 mod move_column;
@@ -62,6 +63,7 @@ pub use linear_bar::{item_width, BarItem, BarLayout, BAR_GAP, BAR_HINT, CONTROLS
 pub use linear_cursor::{
     column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection, Page, Side,
 };
+pub use linear_level::LevelState;
 pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use session::{session_lane, SessionLane, SessionState, SessionView};
@@ -191,6 +193,9 @@ pub enum Msg {
     LinearArrived(Box<LinearArrival>),
     /// Linear mode: the `local_state_changed` events of one event-loop tick.
     LocalStateChanged(LocalStateSignals),
+    /// Linear mode: the workspaces of one tick's `pane_layout_changed`
+    /// events; `None` for an event that named none.
+    PaneLayoutChanged(std::collections::BTreeSet<Option<String>>),
 }
 
 /// The whole TUI state.
@@ -551,7 +556,10 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Refresh => vec![Effect::Refetch],
         Msg::Key(k) => on_key(app, k),
         Msg::Mouse(m) => mouse::on_mouse(app, m),
-        Msg::LinearRefresh | Msg::LinearArrived(_) | Msg::LocalStateChanged(_) => vec![],
+        Msg::LinearRefresh
+        | Msg::LinearArrived(_)
+        | Msg::LocalStateChanged(_)
+        | Msg::PaneLayoutChanged(_) => vec![],
     }
 }
 

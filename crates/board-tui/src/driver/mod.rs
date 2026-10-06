@@ -94,8 +94,38 @@ impl Driver {
         state.herdr_keys = start.herdr_keys;
         state.theme = start.theme;
         state.landing = Some(start.show);
+        state.level = level_for(&start.origin);
         let app = App::linear(state, start.origin.clone());
         Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
+    }
+
+    /// `board tui --session`: the Linear board, starting at the split level
+    /// beside the agent `identity` names. Its own session read picks that
+    /// agent's issue, so an older daemon without `pane.context` still shows it.
+    pub fn linear_beside(
+        client: Box<dyn BoardClient>,
+        platform: Box<dyn PlatformActions>,
+        start: LinearStart,
+        identity: crate::SessionIdentity,
+    ) -> Driver {
+        let mut state = LinearState::new(
+            start.workspace_id,
+            start.board_version,
+            start.daemon_version,
+        );
+        state.herdr_keys = start.herdr_keys;
+        state.theme = start.theme;
+        let own = start.origin.pane_id.clone().unwrap_or_default();
+        state.level = Some(crate::app::LevelState::new(own, false).starting_beside(identity));
+        let app = App::linear(state, start.origin.clone());
+        Driver::start_linear(
+            app,
+            client,
+            Box::new(RealEditor),
+            platform,
+            start.origin,
+            false,
+        )
     }
 
     /// The session side pane beside the agent `identity` names. Its first
@@ -318,4 +348,14 @@ impl Driver {
             }
         }
     }
+}
+
+/// A board that knows its own herdr pane and session picks its level.
+fn level_for(origin: &OriginContext) -> Option<crate::app::LevelState> {
+    origin.origin_socket.as_ref()?;
+    let pane = origin.pane_id.clone()?;
+    Some(crate::app::LevelState::new(
+        pane,
+        origin.board_plugin_pane(),
+    ))
 }

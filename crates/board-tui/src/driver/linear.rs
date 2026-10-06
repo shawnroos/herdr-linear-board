@@ -10,7 +10,7 @@ use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
     ActivityClaims, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
     LinearPrParams, LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams,
-    PaneFocusParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_PR_CLIENT_TIMEOUT,
+    PaneContextParams, PaneFocusParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_PR_CLIENT_TIMEOUT,
     LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
@@ -64,8 +64,17 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearShowAccept { .. }
             | Effect::LinearShowDismiss { .. }
             | Effect::LinearBind { .. }
+            | Effect::LinearSessionGet
+            | Effect::PaneContext
             | Effect::Quit
     )
+}
+
+/// At the split level the board reads and writes nothing but its own pane
+/// title (KTD11): no mark clear, bind or show answer leaves it.
+pub(super) fn split_allows(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    session_allows(eff) || matches!(eff, Effect::PaneContext | Effect::SetLinearPaneTitle(_))
 }
 
 /// The only effects the session pane executes: reads, and closing itself.
@@ -95,6 +104,7 @@ pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
         | Effect::Quit => false,
         Effect::LinearSnapshot { force } => *force,
         Effect::Refetch
+        | Effect::PaneContext
         | Effect::LinearList { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
@@ -166,9 +176,10 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::LinearShowAccept { .. }
         | Effect::LinearShowDismiss { .. }
         | Effect::LinearBind { .. }
+        | Effect::LinearSessionGet
+        | Effect::PaneContext
         | Effect::Quit => false,
-        Effect::LinearSessionGet
-        | Effect::LoadProjects
+        Effect::LoadProjects
         | Effect::LoadProjectPicker
         | Effect::LoadBoardPicker { .. }
         | Effect::SelectProject { .. }
@@ -353,13 +364,44 @@ impl Driver {
     }
 
     pub(super) fn fetch_session(&mut self) {
-        let Some(params) = self.app.session.as_ref().map(|s| s.identity.params()) else {
+        let identity = match self.app.session.as_ref() {
+            Some(session) => Some(&session.identity),
+            None => self
+                .app
+                .linear
+                .as_ref()
+                .and_then(|s| s.level.as_ref())
+                .and_then(|l| l.start.as_ref()),
+        };
+        let Some(params) = identity.map(crate::SessionIdentity::params) else {
             return;
         };
         self.run_linear_read(
             LINEAR_STATE_CLIENT_TIMEOUT,
             move |client| client.linear_session_get(&params),
             |result| LinearArrival::Session(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_pane_context(&mut self) {
+        let Some(state) = self.app.linear.as_ref() else {
+            return;
+        };
+        let (Some(level), Some(origin_socket)) =
+            (state.level.as_ref(), self.origin.origin_socket.clone())
+        else {
+            return;
+        };
+        let params = PaneContextParams {
+            origin_socket,
+            pane_id: level.own_pane.clone(),
+            space: state.workspace_id.clone(),
+            plugin_pane: level.plugin_pane,
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.pane_context(&params),
+            |result| LinearArrival::PaneContext(Box::new(result)),
         );
     }
 
@@ -548,6 +590,15 @@ impl Driver {
     /// iteration; the reducer decides whether any concern this space.
     pub fn on_local_state_changed(&mut self, signals: LocalStateSignals) {
         self.handle(Msg::LocalStateChanged(signals));
+    }
+
+    /// The runtime's coalesced `pane_layout_changed` workspaces for one loop
+    /// iteration.
+    pub fn on_pane_layout_changed(
+        &mut self,
+        workspaces: std::collections::BTreeSet<Option<String>>,
+    ) {
+        self.handle(Msg::PaneLayoutChanged(workspaces));
     }
 
     /// The runtime's coalesced subscription signals for one loop iteration.
@@ -779,6 +830,7 @@ mod tests {
             Effect::LinearSnapshot { force: false },
             Effect::LinearStateGet,
             Effect::LinearSessionGet,
+            Effect::PaneContext,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
                 id: None,
@@ -831,11 +883,45 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 17: the issue view's PR read and link opener joined the 15 the
-        // board's mark, show-request and bind writes made. The number is
-        // pinned so widening what this mode can do is a deliberate edit
-        // rather than a side effect of adding an effect.
-        assert_eq!(allowed, 17, "the allow set grew or shrank");
+        // 19: the level's pane-context read and the start beside an agent's
+        // session read joined the 17 of the issue view. The number is pinned
+        // so widening what this mode can do is a deliberate edit rather than
+        // a side effect of adding an effect.
+        assert_eq!(allowed, 19, "the allow set grew or shrank");
+    }
+
+    #[test]
+    fn the_split_level_allows_the_session_reads_its_level_read_and_its_own_title() {
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        let allowed: Vec<String> = effects
+            .iter()
+            .filter(|e| split_allows(e))
+            .map(|e| format!("{:?}", std::mem::discriminant(e)))
+            .collect();
+        assert_eq!(allowed.len(), 8, "the split allow set grew or shrank");
+        for write in [
+            Effect::LinearMarkClear {
+                ids: vec![1],
+                on_open: true,
+            },
+            Effect::LinearShowAccept {
+                id: 1,
+                issue: "WEB-1".into(),
+            },
+            Effect::LinearShowDismiss { id: 1 },
+            Effect::LinearBind {
+                mark: None,
+                issue: "WEB-1".into(),
+                cwd: "/w".into(),
+            },
+        ] {
+            assert!(
+                !split_allows(&write),
+                "{:?}",
+                std::mem::discriminant(&write)
+            );
+        }
     }
 
     #[test]

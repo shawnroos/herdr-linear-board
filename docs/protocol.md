@@ -514,7 +514,7 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
   socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
 - `pane.context {origin_socket, pane_id, space, plugin_pane?}` →
-  `{tab_id, alone, overlay, focused_pane_id?, panes: [{pane_id, cwd?, issue?}]}` — where the
+  `{workspace_id, tab_id, alone, overlay, focused_pane_id?, panes: [{pane_id, cwd?, issue?}]}` — where the
   caller's own pane sits in its tab, for the Linear board's level. One herdr `pane.layout` and one
   `pane.list`, after the protocol gate. `alone` is true when the pane is the tab's only pane, or the
   tab is zoomed on it. `overlay` is true when `plugin_pane` (the caller is the herdr-board `board`

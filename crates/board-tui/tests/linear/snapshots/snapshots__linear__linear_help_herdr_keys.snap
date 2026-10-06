@@ -16,7 +16,7 @@ expression: frame
 "               │  Esc          dismiss, keep last good                                                 ││               "
 "               │  Ctrl+Q       quit                                                                    ││               "
 "               │daemon older than board                                                                ││               "
-"               │  r / R        retry the snapshot                                                      █│               "
+"               │  r / R        retry the snapshot                                                      ││               "
 "               │  Ctrl+Q/Esc   quit                                                                    █│             → "
 "               │picker                                                                                 █│             3 "
 "               │  type / Bksp  filter text; ? r q too                                                  █│               "

@@ -32,5 +32,5 @@ expression: frame
 "               │  Ctrl+Q       quit (q does nothing)                                                   ││               "
 " Spaces with no│  s            focus the spaces strip                                                  ││               "
 "    Beta notes │  t            strip: spaces / tabs                                                    ▼│               "
-"    Gamma docs │↑/↓ k/j scroll · 49 more below · any other key closes                                   │               "
+"    Gamma docs │↑/↓ k/j scroll · 50 more below · any other key closes                                   │               "
 " ? bar  keys  / filter  esc deselect  ctrl+q quit   󰋽 Enter lists every key · ←→ chooses · ↑ back to the board          "

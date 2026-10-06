@@ -590,6 +590,8 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
             // The first snapshot is followed by one local-state read.
             "linear.state.get",
             "linear.list",
+            // The board knows its own pane, so it reads where that pane sits.
+            "pane.context",
             // Opening WEB-3302's page reads it; the point of this test is that
             // no `board.get` ever appears, not that the page reads nothing.
             "linear.issue",
@@ -4461,4 +4463,5 @@ mod focus;
 mod issue;
 mod landing;
 mod layout;
+mod levels;
 mod marks;
