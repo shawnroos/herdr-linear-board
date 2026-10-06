@@ -49,6 +49,15 @@ pub(crate) enum LinearCmd {
         /// The issue's identifier, e.g. `WEB-3318`.
         issue: String,
     },
+    /// One GitHub pull request's state: review, merge state, checks and size,
+    /// read through the daemon's `gh`.
+    Pr {
+        /// The pull request's GitHub URL.
+        url: String,
+        /// Read `gh` again even when the daemon's cached answer is fresh.
+        #[arg(long)]
+        force: bool,
+    },
     /// herdr spaces and their Linear binding state.
     Space {
         #[command(subcommand)]

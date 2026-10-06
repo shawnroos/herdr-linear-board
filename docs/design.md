@@ -1030,6 +1030,9 @@ that code as not retryable.
 the document as JSON either way. With no positional it reads the space from
 `HERDR_WORKSPACE_ID`, before it connects to the daemon, so a missing id never starts one.
 `board linear issue <ID>` is the issue read.
+`board linear pr <url> [--force]` reads one pull request through the daemon's `gh` and prints the
+`linear.pr` document as JSON; `gh` missing or logged out is protocol error `8`, a URL that is not a
+GitHub pull request is error `1`.
 
 **Lists.** `linear.list {kind, id?}` answers three lists: `spaces` (every herdr space of the
 caller's session with its binding state), `projects` (the Linear projects the person is a member

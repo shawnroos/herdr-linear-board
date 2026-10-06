@@ -193,6 +193,24 @@ fn issue_prints_the_one_call_document_and_refuses_a_bad_id() {
 }
 
 #[test]
+fn pr_refuses_a_bad_url_and_reports_a_missing_gh() {
+    let td = daemon();
+    let out = td.board(&["linear", "pr", "not a pr url", "--json"]);
+    assert_eq!(code(&out), 1);
+    assert_eq!(json_error(&out)["error"]["code"], 1);
+
+    let td = TestDaemon::start(&[("GH_BIN", "/nonexistent/gh")]);
+    let out = td.board(&[
+        "linear",
+        "pr",
+        "https://github.com/acme/widgets/pull/7",
+        "--force",
+        "--json",
+    ]);
+    assert_eq!(json_error(&out)["error"]["code"], 8, "{out:?}");
+}
+
+#[test]
 fn project_list_prints_a_table_and_its_json() {
     let td = daemon();
 
