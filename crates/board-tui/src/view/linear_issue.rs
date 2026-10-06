@@ -18,7 +18,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::issue_cards;
-use super::linear::{fit, line};
+use super::linear::{fit, line, FrameBar};
 use crate::app::{App, DetailError, IssueMode, LinearState, Mode, Screen};
 use crate::theme::Theme;
 
@@ -201,8 +201,8 @@ impl Page {
 
 /// The rows that sit between the issue and the bottom of `area`: the bar's,
 /// when the bar has room to draw.
-pub(super) fn bar_rows(state: &LinearState, area: Rect) -> u16 {
-    let rows = state.bar_layout(area.width).rows();
+pub(super) fn bar_rows(bar: &FrameBar<'_>, area: Rect) -> u16 {
+    let rows = bar.rows();
     if area.height >= rows + HEADER_ROWS + 4 {
         rows
     } else {
@@ -214,10 +214,19 @@ pub(super) fn bar_rows(state: &LinearState, area: Rect) -> u16 {
 /// the board when it is wide enough and a window was asked for, else over
 /// the whole board.
 pub fn open_rect(app: &App, state: &LinearState, area: Rect) -> (Rect, Look) {
+    open_rect_in(app, state, area, &FrameBar::new(state, area.width))
+}
+
+pub(super) fn open_rect_in(
+    app: &App,
+    state: &LinearState,
+    area: Rect,
+    bar: &FrameBar<'_>,
+) -> (Rect, Look) {
     if app.mode == Mode::Session {
         return (area, Look::Session);
     }
-    let bar = bar_rows(state, area);
+    let bar = bar_rows(bar, area);
     let full = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(bar));
     if area.width < MODAL_MIN || state.at_split() {
         return (full, Look::Narrow);

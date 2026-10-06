@@ -366,44 +366,65 @@ fn linear_issue(
 const DESCRIPTION_EXCERPT_CHARS: usize = 240;
 
 fn excerpt(description: &str) -> String {
-    description
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(DESCRIPTION_EXCERPT_CHARS)
-        .collect()
+    let mut out = String::new();
+    let mut chars = 0;
+    for word in description.split_whitespace() {
+        if chars > 0 {
+            if chars == DESCRIPTION_EXCERPT_CHARS {
+                break;
+            }
+            out.push(' ');
+            chars += 1;
+        }
+        for c in word.chars() {
+            if chars == DESCRIPTION_EXCERPT_CHARS {
+                return out;
+            }
+            out.push(c);
+            chars += 1;
+        }
+    }
+    out
 }
 
 const UNSUPPORTED_HOST: &str = "unsupported host";
 
 fn newest_pr(attachments: &Value, gh_host: Option<&str>) -> Option<LinearCardPr> {
-    let newest = |readable: bool| {
-        nodes(attachments)
-            .iter()
-            .filter_map(|a| {
-                let url = a["url"].as_str()?;
-                let (pr, gh_error) = match PrRef::parse(url, gh_host) {
-                    Some(pr) => (pr, None),
-                    None if !readable => (PrRef::shape(url)?, Some(UNSUPPORTED_HOST.to_string())),
-                    None => return None,
-                };
-                let card = LinearCardPr {
-                    repo: pr.repo(),
-                    number: pr.number,
-                    url: url.to_string(),
-                    status: text(&a["metadata"]["status"]),
-                    draft: a["metadata"]["draft"].as_bool(),
-                    gh_error,
-                    ..LinearCardPr::default()
-                };
-                Some((a["createdAt"].as_str().unwrap_or("").to_string(), card))
-            })
-            .max_by(|a, b| a.0.cmp(&b.0))
-            .map(|(_, pr)| pr)
-    };
+    type Candidate<'a> = (&'a str, &'a Value, &'a str, PrRef);
+    // `>=` keeps the last of equally new attachments, as `Iterator::max_by` does.
+    fn keep<'a>(best: &mut Option<Candidate<'a>>, next: Candidate<'a>) {
+        if best.as_ref().is_none_or(|b| next.0 >= b.0) {
+            *best = Some(next);
+        }
+    }
+    let mut readable: Option<Candidate<'_>> = None;
+    let mut unreadable: Option<Candidate<'_>> = None;
+    for a in nodes(attachments) {
+        let Some(url) = a["url"].as_str() else {
+            continue;
+        };
+        let created = a["createdAt"].as_str().unwrap_or("");
+        if let Some(pr) = PrRef::parse(url, gh_host) {
+            keep(&mut readable, (created, a, url, pr));
+        } else if let Some(pr) = PrRef::shape(url) {
+            keep(&mut unreadable, (created, a, url, pr));
+        }
+    }
     // A PR gh can read wins over a newer one on a host it may not be pointed at.
-    newest(true).or_else(|| newest(false))
+    let (gh_error, (_, a, url, pr)) = match (readable, unreadable) {
+        (Some(best), _) => (None, best),
+        (None, Some(best)) => (Some(UNSUPPORTED_HOST.to_string()), best),
+        (None, None) => return None,
+    };
+    Some(LinearCardPr {
+        repo: pr.repo(),
+        number: pr.number,
+        url: url.to_string(),
+        status: text(&a["metadata"]["status"]),
+        draft: a["metadata"]["draft"].as_bool(),
+        gh_error,
+        ..LinearCardPr::default()
+    })
 }
 
 /// Worktree bindings of listed issues, with their herdr tab and panes; tabs
@@ -906,4 +927,62 @@ fn issue_detail(node: &Value) -> (LinearIssueDetail, Vec<String>) {
             .collect(),
     };
     (detail, truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newest_pr_keeps_the_last_of_equally_new_attachments() {
+        let at = "2026-10-01T00:00:00Z";
+        let attachments = serde_json::json!({"nodes": [
+            {"url": "https://github.com/o/r/pull/1", "createdAt": at},
+            {"url": "https://github.com/o/r/pull/2", "createdAt": at},
+            {"url": "https://git.example/o/r/pull/3", "createdAt": "2027-01-01T00:00:00Z"},
+            {"url": "https://github.com/o/r/pull/4", "createdAt": "2026-09-01T00:00:00Z"},
+        ]});
+        let pr = newest_pr(&attachments, None).unwrap();
+        assert_eq!((pr.number, pr.gh_error), (2, None));
+        let unreadable = serde_json::json!({"nodes": [
+            {"url": "https://git.example/o/r/pull/5", "createdAt": at},
+            {"url": "https://git.example/o/r/pull/6", "createdAt": at},
+        ]});
+        let pr = newest_pr(&unreadable, None).unwrap();
+        assert_eq!(pr.number, 6);
+        assert_eq!(pr.gh_error.as_deref(), Some(UNSUPPORTED_HOST));
+    }
+
+    fn joined_then_cut(description: &str) -> String {
+        description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(DESCRIPTION_EXCERPT_CHARS)
+            .collect()
+    }
+
+    #[test]
+    fn excerpt_cuts_where_the_joined_description_would() {
+        let mut inputs = vec![
+            String::new(),
+            "   ".into(),
+            "one".into(),
+            "  lead\tand\n\ntrail  ".into(),
+        ];
+        for word in ["a", "ab", "abcdefg", "é", "日本語", "x\u{301}"] {
+            for gap in [" ", "  \n\t"] {
+                for n in [1, 59, 60, 79, 80, 119, 120, 239, 240, 241, 400] {
+                    inputs.push(vec![word; n].join(gap));
+                }
+            }
+        }
+        inputs.push(format!("{} tail", "z".repeat(239)));
+        inputs.push(format!("{} tail", "z".repeat(240)));
+        inputs.push(format!("{} tail", "z".repeat(241)));
+        for input in &inputs {
+            assert_eq!(excerpt(input), joined_then_cut(input), "{input:?}");
+        }
+    }
 }

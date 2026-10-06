@@ -85,12 +85,13 @@ pub fn decide(
     Some(current) == default || Some(current) == stored
 }
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use board_core::db::{herdr_session, resolve_worktree, LabelKind};
+use board_core::db::{herdr_session, resolve_worktree, Db, LabelKind};
 use board_herdr::{PaneInfo, PaneRenameParams, TabInfo, TabRenameParams};
 
 use crate::linear::SpaceKey;
@@ -315,7 +316,7 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
     let _labels = d.naming.labels();
     let tabs = client.tab_list(None)?;
     let panes = client.pane_list(None)?;
-    let (stored, boards) = {
+    let (stored, plan) = {
         let store = d.store.lock();
         let stored: Stored = store
             .generated_labels(&key)?
@@ -327,11 +328,12 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
             .into_iter()
             .map(|row| row.pane_id)
             .collect();
-        (stored, boards)
+        let memo = PassMemo::default();
+        let plan = plan(&spaces, &tabs, &panes, &boards, &stored, |pane| {
+            scope_of(d, &store, &memo, &session, pane)
+        });
+        (stored, plan)
     };
-    let plan = plan(&spaces, &tabs, &panes, &boards, &stored, |pane| {
-        scope_of(d, &session, pane)
-    });
     for (kind, id, label) in plan.renames {
         let renamed = match kind {
             LabelKind::Tab => client.tab_rename(&TabRenameParams {
@@ -360,38 +362,84 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
     for (kind, id) in plan.forget {
         store.forget_generated_label(&key, kind, &id)?;
     }
-    let live_tabs: Vec<String> = tabs.into_iter().map(|t| t.tab_id).collect();
-    let live_panes: Vec<String> = panes.into_iter().map(|p| p.pane_id).collect();
-    store.prune_generated_labels(&key, LabelKind::Tab, &live_tabs)?;
-    store.prune_generated_labels(&key, LabelKind::Pane, &live_panes)?;
+    // `stored` was read before this pass's writes, which only touch live
+    // targets, and the labels lock keeps any other writer out meanwhile.
+    let live_tabs: HashSet<&str> = tabs.iter().map(|t| t.tab_id.as_str()).collect();
+    let live_panes: HashSet<&str> = panes.iter().map(|p| p.pane_id.as_str()).collect();
+    for (kind, id) in stored.keys() {
+        let live = match kind {
+            LabelKind::Tab => &live_tabs,
+            LabelKind::Pane => &live_panes,
+        };
+        if !live.contains(id.as_str()) {
+            store.forget_generated_label(&key, *kind, id)?;
+        }
+    }
     Ok(true)
 }
 
-fn scope_of(d: &Arc<Daemon>, session: &str, pane: &PaneInfo) -> Scope {
+/// One pass's lookups, so panes sharing a directory or an issue share them.
+#[derive(Default)]
+struct PassMemo {
+    issues: RefCell<HashMap<String, Option<String>>>,
+    titles: RefCell<HashMap<(String, String), Option<String>>>,
+    folders: RefCell<HashMap<String, Option<String>>>,
+}
+
+fn memoized<K: Eq + std::hash::Hash, V: Clone>(
+    cell: &RefCell<HashMap<K, V>>,
+    key: K,
+    make: impl FnOnce() -> V,
+) -> V {
+    if let Some(value) = cell.borrow().get(&key) {
+        return value.clone();
+    }
+    let value = make();
+    cell.borrow_mut().insert(key, value.clone());
+    value
+}
+
+fn scope_of(d: &Arc<Daemon>, store: &Db, memo: &PassMemo, session: &str, pane: &PaneInfo) -> Scope {
     let cwd = pane.working_dir();
-    let issue = cwd
-        .and_then(|cwd| resolve_worktree(cwd).ok())
-        .and_then(|path| d.store.lock().worktree_binding(&path).ok().flatten())
-        .map(|binding| binding.issue)
-        .filter(|issue| !issue.is_empty());
-    let title = issue.as_deref().and_then(|issue| {
-        let key = SpaceKey {
-            session: session.to_string(),
-            space: pane.workspace_id.clone(),
-        };
-        d.linear.cache.find_good(&key, |read| {
-            read.issues
-                .iter()
-                .find(|node| node["identifier"].as_str() == Some(issue))
-                .and_then(|node| node["title"].as_str())
-                .map(str::to_string)
+    let issue = cwd.and_then(|cwd| {
+        memoized(&memo.issues, cwd.to_string(), || {
+            resolve_worktree(cwd)
+                .ok()
+                .and_then(|path| store.worktree_binding(&path).ok().flatten())
+                .map(|binding| binding.issue)
+                .filter(|issue| !issue.is_empty())
         })
     });
+    let title = issue.as_deref().and_then(|issue| {
+        memoized(
+            &memo.titles,
+            (pane.workspace_id.clone(), issue.to_string()),
+            || {
+                let key = SpaceKey {
+                    session: session.to_string(),
+                    space: pane.workspace_id.clone(),
+                };
+                d.linear.cache.find_good(&key, |read| {
+                    read.issues
+                        .iter()
+                        .find(|node| node["identifier"].as_str() == Some(issue))
+                        .and_then(|node| node["title"].as_str())
+                        .map(str::to_string)
+                })
+            },
+        )
+    });
+    // `derive` reads the folder only when the issue cleans to nothing.
+    let folder = if clean(issue.as_deref()).is_none() {
+        cwd.and_then(|cwd| memoized(&memo.folders, cwd.to_string(), || folder_of(cwd)))
+    } else {
+        None
+    };
     Scope {
         issue,
         title,
         agent: pane.agent.clone(),
-        folder: cwd.and_then(folder_of),
+        folder,
     }
 }
 

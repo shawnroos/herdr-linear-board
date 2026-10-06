@@ -15,8 +15,8 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    sanitise, App, BarItem, CardOverlay, CardOverlays, Density, Focus, LinearState, Page, Screen,
-    Side, BAR_GAP, BAR_HINT, CONTROLS,
+    sanitise, App, BarItem, BarLayout, CardOverlay, CardOverlays, Density, Focus, LaneRow,
+    LinearState, Page, Screen, Side, BAR_GAP, BAR_HINT, CONTROLS,
 };
 use crate::theme::Theme;
 use crate::widgets::{HitMap, Zone};
@@ -97,16 +97,17 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         return;
     };
     f.render_widget(Block::default().style(state.theme.app()), area);
+    let bar = FrameBar::new(state, area.width);
     match app.screen {
         Screen::LinearNotBound => draw_not_bound(app, state, f, area),
         Screen::LinearStaleDaemon => draw_stale_daemon(state, f, area),
         Screen::LinearError => {
-            draw_board(app, state, f, area);
+            draw_board(app, state, f, area, &bar);
             draw_error(state, f, area);
         }
-        Screen::LinearDetail => draw_issue_screen(app, state, f, area),
+        Screen::LinearDetail => draw_issue_screen(app, state, f, area, &bar),
         Screen::Help => {
-            draw_backdrop(app, state, f, area, app.help_return_to);
+            draw_backdrop(app, state, f, area, app.help_return_to, &bar);
             draw_help(app, state, f, area);
         }
         Screen::LinearPicker => {
@@ -117,12 +118,13 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
                 f,
                 area,
                 return_to.unwrap_or(Screen::LinearBoard),
+                &bar,
             );
             super::linear_picker::draw_linear_picker(app, state, f, area);
         }
-        _ => draw_board(app, state, f, area),
+        _ => draw_board(app, state, f, area, &bar),
     }
-    draw_bottom(app, f, area);
+    draw_bottom(app, f, area, &bar);
     scrub(f);
 }
 
@@ -145,28 +147,46 @@ pub(super) fn scrub(f: &mut Frame) {
 
 /// What an overlay covers: the not-bound screen when it opened there, the
 /// board otherwise.
-fn draw_backdrop(app: &App, state: &LinearState, f: &mut Frame, area: Rect, under: Screen) {
+fn draw_backdrop(
+    app: &App,
+    state: &LinearState,
+    f: &mut Frame,
+    area: Rect,
+    under: Screen,
+    bar: &FrameBar<'_>,
+) {
     match under {
         Screen::LinearNotBound => draw_not_bound(app, state, f, area),
-        Screen::LinearDetail => draw_issue_screen(app, state, f, area),
-        _ => draw_board(app, state, f, area),
+        Screen::LinearDetail => draw_issue_screen(app, state, f, area, bar),
+        _ => draw_board(app, state, f, area, bar),
     }
 }
 
 /// The open issue: a modal over the board faded behind it, or the issue over
 /// the whole board. The bar is drawn after, unfaded, either way.
-fn draw_issue_screen(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
-    use super::linear_issue::{open_rect, open_slot, Look};
+fn draw_issue_screen(
+    app: &App,
+    state: &LinearState,
+    f: &mut Frame,
+    area: Rect,
+    bar: &FrameBar<'_>,
+) {
+    use super::linear_issue::{open_rect_in, open_slot, Look};
     let Some(slot) = open_slot(state) else {
-        return draw_board(app, state, f, area);
+        return draw_board(app, state, f, area, bar);
     };
-    let (rect, look) = open_rect(app, state, area);
+    let (rect, look) = open_rect_in(app, state, area, bar);
     if look == Look::Modal {
-        draw_board(app, state, f, area);
+        draw_board(app, state, f, area, bar);
         // The board under a modal takes no clicks.
         app.hit_map.borrow_mut().clear();
-        let bar = super::linear_issue::bar_rows(state, area);
-        let behind = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(bar));
+        let bar_h = super::linear_issue::bar_rows(bar, area);
+        let behind = Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            area.height.saturating_sub(bar_h),
+        );
         fade_outside(state, f, behind, rect);
     }
     super::linear_issue::draw(app, state, &slot, f, rect, look);
@@ -562,6 +582,17 @@ fn card_header(
     clip(out, inner)
 }
 
+/// The assignee and milestone a card's first meta row shows.
+fn people(issue: &LinearIssue) -> (Option<&str>, Option<&str>) {
+    let who = issue.assignee.as_ref().and_then(|a| a.name.as_deref());
+    let milestone = issue
+        .milestone
+        .as_ref()
+        .and_then(|m| m.name.as_deref())
+        .filter(|n| !n.trim().is_empty());
+    (who, milestone)
+}
+
 /// One row per meta group with data: assignee and milestone, then the PR.
 fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> Vec<Vec<Span<'static>>> {
     let t = &state.theme;
@@ -571,12 +602,7 @@ fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> Vec<Ve
     } else {
         t.card_detail()
     };
-    let who = issue.assignee.as_ref().and_then(|a| a.name.as_deref());
-    let milestone = issue
-        .milestone
-        .as_ref()
-        .and_then(|m| m.name.as_deref())
-        .filter(|n| !n.trim().is_empty());
+    let (who, milestone) = people(issue);
     let mut rows = vec![];
     if who.is_some() || milestone.is_some() {
         let who = who.map_or_else(|| " unassigned".to_string(), |n| format!(" @{}", line(n)));
@@ -600,9 +626,10 @@ fn card_meta(state: &LinearState, issue: &LinearIssue, look: CardLook) -> Vec<Ve
 
 /// A card's rows, each starting with the 2-cell inset, sized to its content
 /// (supersedes the fixed 5-row card of the 2026-09-16 pickers-and-layout
-/// plan). The board measures cards with this, so its length is the card's
-/// height. Selection changes only the title colour and the rule rows roomy
-/// cards reserve, so no text moves and no height changes.
+/// plan). Its length is the card's height, which `card_height` counts
+/// without building it; a change here must change both. Selection changes
+/// only the title colour and the rule rows roomy cards reserve, so no text
+/// moves and no height changes.
 fn card_lines(
     state: &LinearState,
     overlay: CardOverlay<'_>,
@@ -668,6 +695,47 @@ fn card_lines(
         lines.push(Line::default());
     }
     lines
+}
+
+/// `card_lines(..).len()` without building the rows: `bands()` measures
+/// every card of every column on each frame.
+fn card_height(
+    overlay: CardOverlay<'_>,
+    issue: &LinearIssue,
+    width: u16,
+    density: Density,
+) -> usize {
+    let inner = width.saturating_sub(2 * CARD_INSET) as usize;
+    let title = title_lines(&line(&issue.title), inner).len();
+    let description = description_lines(issue, overlay, inner).len();
+    let (who, milestone) = people(issue);
+    let meta = usize::from(who.is_some() || milestone.is_some()) + usize::from(issue.pr.is_some());
+    let mut rows = 1 + title + description + meta;
+    if density == Density::Roomy {
+        // The top blank, the rule under the header and the bottom blank, plus
+        // the meta rule and the blank above it when there is a description.
+        rows += 3;
+        if meta > 0 {
+            rows += 1 + usize::from(description > 0);
+        }
+    }
+    rows
+}
+
+fn card_rows_height(
+    state: &LinearState,
+    overlays: &CardOverlays<'_>,
+    identifier: &str,
+    width: u16,
+) -> u16 {
+    let rows = match state.snapshot().and_then(|s| s.issues.get(identifier)) {
+        Some(issue) => card_height(overlays.get(identifier), issue, width, state.density),
+        None => match state.density {
+            Density::Roomy => 3,
+            Density::Compact => 1,
+        },
+    };
+    rows as u16
 }
 
 /// `card_lines` for the card `identifier`, or one `(missing)` row, padded as
@@ -738,16 +806,43 @@ fn draw_too_short(state: &LinearState, f: &mut Frame, area: Rect) {
 }
 
 /// Whether `area` holds the header, one full card and the bar.
-fn board_fits(state: &LinearState, area: Rect) -> bool {
+fn board_fits(state: &LinearState, area: Rect, bar: &FrameBar<'_>) -> bool {
     let card = match state.density {
         Density::Roomy => FULL_CARD_H,
         Density::Compact => FULL_COMPACT_CARD_H,
     };
-    area.height >= HEADER_ROWS + card + state.bar_layout(area.width).rows()
+    area.height >= HEADER_ROWS + card + bar.rows()
 }
 
-fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
-    if !board_fits(state, area) {
+/// The bar's layout for one frame, worked out on first use, so every part of
+/// the frame that sizes itself around the bar reads the same one.
+pub(super) struct FrameBar<'a> {
+    state: &'a LinearState,
+    width: u16,
+    layout: std::cell::OnceCell<BarLayout>,
+}
+
+impl<'a> FrameBar<'a> {
+    pub(super) fn new(state: &'a LinearState, width: u16) -> Self {
+        FrameBar {
+            state,
+            width,
+            layout: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn layout(&self) -> &BarLayout {
+        self.layout
+            .get_or_init(|| self.state.bar_layout(self.width))
+    }
+
+    pub(super) fn rows(&self) -> u16 {
+        self.layout().rows()
+    }
+}
+
+fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect, bar: &FrameBar<'_>) {
+    if !board_fits(state, area, bar) {
         draw_too_short(state, f, area);
         return;
     }
@@ -774,7 +869,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     };
     let strip = strip_lines(state, snapshot, area.width as usize);
     let strip_h = strip.len() as u16;
-    let footer_h = state.bar_layout(area.width).rows();
+    let footer_h = bar.rows();
     let mut y = area.y + HEADER_ROWS;
     let mut body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
     let board_w = state.board_width(area.width);
@@ -795,7 +890,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     );
     draw_strip(app, strip, f, area, body.bottom());
     if let (Some(rect), Some(slot)) = (
-        pinned_rect(state, area),
+        pinned_rect_in(state, area, bar),
         super::linear_issue::pinned_slot(state),
     ) {
         let look = super::linear_issue::Look::Pinned;
@@ -807,12 +902,16 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
 /// the right, from under the board's header to above the strip and the bar.
 /// `None` while nothing is pinned or the board has no room for it.
 pub(super) fn pinned_rect(state: &LinearState, area: Rect) -> Option<Rect> {
-    if !state.pin_shown(area.width) || !board_fits(state, area) {
+    pinned_rect_in(state, area, &FrameBar::new(state, area.width))
+}
+
+fn pinned_rect_in(state: &LinearState, area: Rect, bar: &FrameBar<'_>) -> Option<Rect> {
+    if !state.pin_shown(area.width) || !board_fits(state, area, bar) {
         return None;
     }
     let snapshot = state.snapshot()?;
     let strip_h = strip_lines(state, snapshot, area.width as usize).len() as u16;
-    let footer_h = state.bar_layout(area.width).rows();
+    let footer_h = bar.rows();
     let board_w = state.board_width(area.width);
     Some(Rect::new(
         area.x + board_w,
@@ -960,11 +1059,10 @@ fn stack(heights: &[u16], ups: usize) -> (Vec<(u16, u16)>, u16) {
 fn bands<'a>(
     state: &'a LinearState,
     overlays: &CardOverlays<'_>,
+    rows: &[Vec<LaneRow<'a>>],
     ups: usize,
     card_w: u16,
 ) -> Vec<Band<'a>> {
-    let groups = state.groups();
-    let rows: Vec<_> = groups.iter().map(|g| state.lane_rows(g, None)).collect();
     let lanes = state.lanes();
     let keys: Vec<(&str, Option<&str>)> = if lanes.is_empty() {
         vec![("", None)]
@@ -973,10 +1071,6 @@ fn bands<'a>(
             .into_iter()
             .map(|(key, label)| (key, Some(label)))
             .collect()
-    };
-    let measure = CardLook {
-        selected: false,
-        muted: false,
     };
     let lane_gap = match state.density {
         Density::Roomy => 1,
@@ -1007,7 +1101,7 @@ fn bands<'a>(
                 .map(|column| {
                     let heights: Vec<u16> = column
                         .iter()
-                        .map(|id| card_rows(state, overlays, id, card_w, measure).len() as u16)
+                        .map(|id| card_rows_height(state, overlays, id, card_w))
                         .collect();
                     let (cards, h) = stack(&heights, ups);
                     tallest = tallest.max(h);
@@ -1126,15 +1220,11 @@ fn draw_columns(
     // and slots differ by a cell, which would break lane alignment.
     let narrowest = slots.iter().map(|&(_, w, _)| w).min().unwrap_or(0);
     let (ups, card_w) = grid(narrowest.saturating_sub(2 * SLOT_PAD));
-    let bands = bands(state, overlays, ups, card_w);
-    let counts: Vec<usize> = (0..groups.len())
-        .map(|g| {
-            state
-                .lane_rows(&groups[g], None)
-                .iter()
-                .map(|row| row.count)
-                .sum()
-        })
+    let rows: Vec<_> = groups.iter().map(|g| state.lane_rows(g, None)).collect();
+    let bands = bands(state, overlays, &rows, ups, card_w);
+    let counts: Vec<usize> = rows
+        .iter()
+        .map(|column| column.iter().map(|row| row.count).sum())
         .collect();
 
     let titles = slots
@@ -1694,7 +1784,7 @@ fn on_issue(app: &App) -> bool {
         || (app.screen == Screen::Help && app.help_return_to == Screen::LinearDetail)
 }
 
-fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
+fn draw_bottom(app: &App, f: &mut Frame, area: Rect, bar: &FrameBar<'_>) {
     let Some(state) = app.linear.as_ref() else {
         return;
     };
@@ -1703,12 +1793,12 @@ fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
     }
     if shows_bar(app) {
         let fits = if on_issue(app) {
-            super::linear_issue::bar_rows(state, area) > 0
+            super::linear_issue::bar_rows(bar, area) > 0
         } else {
-            board_fits(state, area)
+            board_fits(state, area, bar)
         };
         if fits {
-            draw_bar(app, state, f, area);
+            draw_bar(app, state, f, area, bar.layout());
         }
         return;
     }
@@ -1771,10 +1861,9 @@ fn tip_text(app: &App, state: &LinearState, width: u16) -> String {
 
 /// Controls left, the tip centred and alerts right on one row; three
 /// centred rows (tip, alerts, controls) when they do not fit side by side.
-fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
+fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect, layout: &BarLayout) {
     let t = &state.theme;
     let w = usize::from(area.width);
-    let layout = state.bar_layout(area.width);
     let selected = match &state.focus {
         Focus::Bar(item) => Some(item),
         _ => None,
@@ -1797,7 +1886,8 @@ fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let mut alerts: Vec<Span<'static>> = layout
         .alerts()
         .iter()
-        .map(|item| bar_item(state, item, state.bar_label(item), selected == Some(item)))
+        .zip(layout.alert_labels())
+        .map(|(item, label)| bar_item(state, item, label.clone(), selected == Some(item)))
         .collect();
     if layout.hidden() > 0 {
         alerts.push(bar_item(
@@ -1856,6 +1946,144 @@ fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         Paragraph::new(lines).style(t.app()),
         Rect::new(area.x, top, area.width, rows.min(area.height)),
     );
+}
+
+#[cfg(test)]
+mod card_height_tests {
+    use super::*;
+    use board_core::protocol::LinearState as LocalState;
+    use board_core::protocol::{LinearAssignee, LinearCardPr, LinearNamed, Note};
+
+    fn note(issue: &str) -> Note {
+        Note {
+            id: 1,
+            space: "w1".into(),
+            issue: issue.into(),
+            body: "a note an agent left on the card".into(),
+            author: "agent".into(),
+            created_at: "2026-10-01T00:00:00Z".into(),
+            owner_herdr_socket: None,
+            owner_herdr_pane_id: None,
+            owner_claude_session_id: None,
+        }
+    }
+
+    fn issues() -> Vec<LinearIssue> {
+        let titles = [
+            "",
+            "Short title",
+            "A title long enough that it wraps onto a second row of the card",
+            "An extremely long title that wraps past two rows and is cut with an ellipsis at the end of the second",
+        ];
+        let descriptions = [
+            None,
+            Some(""),
+            Some("One short line."),
+            Some("A description that runs on for long enough to fill every row the card gives it and then some more words after that so it is cut"),
+        ];
+        let people = [
+            (None, None),
+            (Some("Ada"), None),
+            (None, Some("M1")),
+            (None, Some("  ")),
+            (Some("Ada"), Some("Milestone one")),
+        ];
+        let mut out = vec![];
+        let mut n = 0;
+        for title in titles {
+            for description in descriptions {
+                for (who, milestone) in people {
+                    for pr in [false, true] {
+                        n += 1;
+                        out.push(LinearIssue {
+                            identifier: format!("WEB-{n}"),
+                            title: title.into(),
+                            description: description.map(str::to_string),
+                            assignee: who.map(|name: &str| LinearAssignee {
+                                id: None,
+                                name: Some(name.into()),
+                            }),
+                            milestone: milestone.map(|name: &str| LinearNamed {
+                                name: Some(name.into()),
+                                ..LinearNamed::default()
+                            }),
+                            pr: pr.then(|| LinearCardPr {
+                                number: 12,
+                                ..LinearCardPr::default()
+                            }),
+                            ..LinearIssue::default()
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn card_height_is_the_built_card_length() {
+        let mut state = LinearState::new("w1".into(), "0".into(), None);
+        let issues = issues();
+        let mut snapshot = LinearSnapshot::default();
+        for issue in &issues {
+            snapshot
+                .issues
+                .insert(issue.identifier.clone(), issue.clone());
+        }
+        state.last_good = Some(snapshot);
+        state.local = Some(LocalState {
+            space: "w1".into(),
+            notes: issues
+                .iter()
+                .step_by(2)
+                .map(|issue| note(&issue.identifier))
+                .collect(),
+            space_bindings: vec![],
+            worktree_bindings: vec![],
+            grouping: None,
+            marks: vec![],
+            show_requests: vec![],
+            resolved_show_requests: vec![],
+        });
+        let mut checked = 0;
+        let overlays = state.overlays();
+        for density in [Density::Roomy, Density::Compact] {
+            for width in [12, 26, 40, 64] {
+                for issue in &issues {
+                    let overlay = overlays.get(&issue.identifier);
+                    let height = card_height(overlay, issue, width, density);
+                    for (selected, muted) in [(false, false), (true, false), (false, true)] {
+                        let look = CardLook { selected, muted };
+                        let built = card_lines(&state, overlay, issue, width, look, density);
+                        assert_eq!(
+                            height,
+                            built.len(),
+                            "{} at width {width}, {density:?}",
+                            issue.identifier
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000, "{checked}");
+        drop(overlays);
+        for density in [Density::Roomy, Density::Compact] {
+            state.density = density;
+            let overlays = state.overlays();
+            let look = CardLook {
+                selected: false,
+                muted: false,
+            };
+            for id in ["WEB-1", "WEB-7", "NOT-THERE"] {
+                assert_eq!(
+                    usize::from(card_rows_height(&state, &overlays, id, 40)),
+                    card_rows(&state, &overlays, id, 40, look).len(),
+                    "{id}, {density:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

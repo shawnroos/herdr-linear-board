@@ -217,20 +217,30 @@ impl LinearState {
     /// mark, and the text is a case-insensitive substring of its identifier
     /// and title, as the pickers match.
     pub fn filter_matches(&self, identifier: &str) -> bool {
+        self.matches_needle(identifier, self.filter_needle().as_deref())
+    }
+
+    /// The filter text as [`Self::matches_needle`] compares it, built once
+    /// for a pass over many cards. `None` while the text is empty.
+    fn filter_needle(&self) -> Option<String> {
+        (!self.filter.is_empty())
+            .then(|| super::state::collapse_spaces(&self.filter.to_lowercase()))
+    }
+
+    fn matches_needle(&self, identifier: &str, needle: Option<&str>) -> bool {
         if let Some(kind) = self.filter_chip {
             if !self.marks_for(identifier).any(|m| m.kind == kind) {
                 return false;
             }
         }
-        if self.filter.is_empty() {
+        let Some(needle) = needle else {
             return true;
-        }
-        let needle = super::state::collapse_spaces(&self.filter.to_lowercase());
+        };
         let title = self
             .issue(identifier)
             .map_or("", |issue| issue.title.as_str());
         super::state::collapse_spaces(&format!("{identifier} {title}").to_lowercase())
-            .contains(&needle)
+            .contains(needle)
     }
 
     pub fn folded(&self, lane: &str) -> bool {
@@ -247,11 +257,12 @@ impl LinearState {
         };
         let mut lanes = tab_lanes(tab);
         if self.filtering() {
+            let needle = self.filter_needle();
             lanes.retain(|(key, _)| {
                 tab.groups.iter().any(|group| {
                     column_cards(group)
                         .iter()
-                        .any(|(lane, id)| lane == key && self.filter_matches(id))
+                        .any(|(lane, id)| lane == key && self.matches_needle(id, needle.as_deref()))
                 })
             });
         }
@@ -260,10 +271,12 @@ impl LinearState {
 
     fn visible_in<'a>(&'a self, tab: &str, group: &'a LinearGroup) -> Vec<(&'a str, &'a str)> {
         let folds = self.folds.get(tab);
+        let needle = self.filter_needle();
         column_cards(group)
             .into_iter()
             .filter(|(lane, id)| {
-                !folds.is_some_and(|folds| folds.contains(*lane)) && self.filter_matches(id)
+                !folds.is_some_and(|folds| folds.contains(*lane))
+                    && self.matches_needle(id, needle.as_deref())
             })
             .collect()
     }
@@ -282,12 +295,13 @@ impl LinearState {
     pub fn lane_rows<'a>(&'a self, group: &'a LinearGroup, keep: Option<&str>) -> Vec<LaneRow<'a>> {
         let sections = lane_sections(group);
         let lanes = self.lanes();
+        let needle = self.filter_needle();
         let matching = |section: &LaneSection<'a>| -> Vec<&'a str> {
             section
                 .issues
                 .iter()
                 .copied()
-                .filter(|id| self.filter_matches(id))
+                .filter(|id| self.matches_needle(id, needle.as_deref()))
                 .collect()
         };
         let mut rows = vec![];

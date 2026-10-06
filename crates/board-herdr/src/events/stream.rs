@@ -72,7 +72,7 @@ impl Subscription {
         Subscription::global("pane.closed")
     }
 
-    /// An event kind herdr reports for every pane, so no `pane_id`.
+    /// A session-wide event kind: no `pane_id`.
     pub fn global(kind: &str) -> Subscription {
         Subscription(json!({ "type": kind }))
     }

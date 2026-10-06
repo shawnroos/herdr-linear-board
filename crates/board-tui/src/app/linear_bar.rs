@@ -2,6 +2,8 @@
 //! and board-wide alerts. Items are kept by identity, so an alert list that
 //! changes under the cursor re-finds the item rather than an index.
 
+use std::collections::{HashMap, HashSet};
+
 use board_core::protocol::{MarkKind, CI_FAIL, GH_UNAVAILABLE};
 use crossterm::event::{KeyCode, KeyEvent};
 use unicode_width::UnicodeWidthStr;
@@ -51,6 +53,8 @@ pub struct BarLayout {
     pub stacked: bool,
     pub hint: bool,
     pub all: Vec<BarItem>,
+    /// Each of `all`'s labels, in order.
+    pub labels: Vec<String>,
     pub from: usize,
     pub shown: usize,
 }
@@ -66,6 +70,10 @@ impl BarLayout {
 
     pub fn alerts(&self) -> &[BarItem] {
         &self.all[self.from..self.from + self.shown]
+    }
+
+    pub fn alert_labels(&self) -> &[String] {
+        &self.labels[self.from..self.from + self.shown]
     }
 
     pub fn hidden(&self) -> usize {
@@ -117,21 +125,62 @@ fn window(widths: &[usize], from: usize, selected: Option<usize>, room: usize) -
     (from, fits(from))
 }
 
+/// What the alerts count, read in one pass over the board.
+#[derive(Default)]
+struct BarFacts<'a> {
+    attention: Vec<&'a str>,
+    question: Vec<&'a str>,
+    failing: Vec<&'a str>,
+}
+
 impl LinearState {
     /// Every identifier the snapshot's tabs draw, in tab, column and lane
     /// order, once each.
     fn board_ids(&self) -> Vec<&str> {
+        let mut seen = HashSet::new();
         let mut ids: Vec<&str> = vec![];
         for tab in self.tabs() {
             for group in &tab.groups {
                 for (_, id) in column_cards(group) {
-                    if !ids.contains(&id) {
+                    if seen.insert(id) {
                         ids.push(id);
                     }
                 }
             }
         }
         ids
+    }
+
+    fn fails_ci(&self, id: &str) -> bool {
+        self.issue(id)
+            .and_then(|issue| issue.pr.as_ref()?.ci.as_ref())
+            .is_some_and(|ci| ci.state == CI_FAIL)
+    }
+
+    fn bar_facts(&self) -> BarFacts<'_> {
+        let mut kinds: HashMap<&str, (bool, bool)> = HashMap::new();
+        for mark in self.local.iter().flat_map(|l| &l.marks) {
+            let entry = kinds.entry(mark.issue.as_str()).or_default();
+            match mark.kind {
+                MarkKind::Attention => entry.0 = true,
+                MarkKind::Question => entry.1 = true,
+                _ => {}
+            }
+        }
+        let mut facts = BarFacts::default();
+        for id in self.board_ids() {
+            let (attention, question) = kinds.get(id).copied().unwrap_or_default();
+            if attention {
+                facts.attention.push(id);
+            }
+            if question {
+                facts.question.push(id);
+            }
+            if self.fails_ci(id) {
+                facts.failing.push(id);
+            }
+        }
+        facts
     }
 
     fn marked(&self, kind: MarkKind) -> Vec<&str> {
@@ -144,11 +193,7 @@ impl LinearState {
     fn failing_ci(&self) -> Vec<&str> {
         self.board_ids()
             .into_iter()
-            .filter(|id| {
-                self.issue(id)
-                    .and_then(|issue| issue.pr.as_ref()?.ci.as_ref())
-                    .is_some_and(|ci| ci.state == CI_FAIL)
-            })
+            .filter(|id| self.fails_ci(id))
             .collect()
     }
 
@@ -170,16 +215,16 @@ impl LinearState {
 
     /// Show-requests oldest first, then needs-you, questions and failing CI:
     /// one per PR, or one for all of them when `collapse`.
-    pub fn bar_alerts(&self, collapse: bool) -> Vec<BarItem> {
+    fn bar_alerts(&self, facts: &BarFacts<'_>, collapse: bool) -> Vec<BarItem> {
         let mut alerts: Vec<BarItem> = self
             .pending_requests()
             .iter()
             .map(|r| BarItem::Request(r.id))
             .collect();
-        if !self.marked(MarkKind::Attention).is_empty() {
+        if !facts.attention.is_empty() {
             alerts.push(BarItem::NeedsYou);
         }
-        if !self.marked(MarkKind::Question).is_empty() {
+        if !facts.question.is_empty() {
             alerts.push(BarItem::Question);
         }
         // CI data gh could not read is never counted, passing or failing.
@@ -187,21 +232,25 @@ impl LinearState {
             alerts.push(BarItem::GhUnavailable);
             return alerts;
         }
-        let failing = self.failing_ci();
+        let failing = &facts.failing;
         if collapse && !failing.is_empty() {
             alerts.push(BarItem::CiCollapsed);
         } else {
-            alerts.extend(
-                failing
-                    .into_iter()
-                    .map(|id| BarItem::CiFailing(id.to_string())),
-            );
+            alerts.extend(failing.iter().map(|id| BarItem::CiFailing(id.to_string())));
         }
         alerts
     }
 
     /// An item's text; `More`'s count comes from the layout instead.
     pub fn bar_label(&self, item: &BarItem) -> String {
+        let facts = match item {
+            BarItem::NeedsYou | BarItem::Question | BarItem::CiCollapsed => self.bar_facts(),
+            _ => BarFacts::default(),
+        };
+        self.label_with(&facts, item)
+    }
+
+    fn label_with(&self, facts: &BarFacts<'_>, item: &BarItem) -> String {
         match item {
             BarItem::Keys => "keys".into(),
             BarItem::Filter => "/ filter".into(),
@@ -211,13 +260,13 @@ impl LinearState {
                 Some((who, issue)) => format!("◉ {} {issue}", fit(&who, WHO_MAX)),
                 None => "◉".into(),
             },
-            BarItem::NeedsYou => format!("! {} needs you", self.marked(MarkKind::Attention).len()),
-            BarItem::Question => match self.marked(MarkKind::Question).len() {
+            BarItem::NeedsYou => format!("! {} needs you", facts.attention.len()),
+            BarItem::Question => match facts.question.len() {
                 1 => "? 1 question".into(),
                 n => format!("? {n} questions"),
             },
             BarItem::CiFailing(id) => format!("✗ {id} CI failing"),
-            BarItem::CiCollapsed => format!("✗ {} CI failing", self.failing_ci().len()),
+            BarItem::CiCollapsed => format!("✗ {} CI failing", facts.failing.len()),
             BarItem::GhUnavailable => "gh unavailable".into(),
             BarItem::More => "more".into(),
         }
@@ -225,15 +274,17 @@ impl LinearState {
 
     pub fn bar_layout(&self, width: u16) -> BarLayout {
         let w = usize::from(width);
-        let widths = |items: &[BarItem]| -> Vec<usize> {
-            items
-                .iter()
-                .map(|i| item_width(&self.bar_label(i)))
-                .collect()
+        let facts = self.bar_facts();
+        let labels = |items: &[BarItem]| -> Vec<String> {
+            items.iter().map(|i| self.label_with(&facts, i)).collect()
         };
-        let left = item_width(BAR_HINT) + widths(&CONTROLS).iter().sum::<usize>();
-        let collapsed = self.bar_alerts(true);
-        let collapsed_widths = widths(&collapsed);
+        let widths = |labels: &[String]| -> Vec<usize> {
+            labels.iter().map(|label| item_width(label)).collect()
+        };
+        let left = item_width(BAR_HINT) + widths(&labels(&CONTROLS)).iter().sum::<usize>();
+        let collapsed = self.bar_alerts(&facts, true);
+        let collapsed_labels = labels(&collapsed);
+        let collapsed_widths = widths(&collapsed_labels);
         let alerts_w = match collapsed_widths.iter().sum::<usize>() {
             0 => 0,
             n => BAR_GAP + n,
@@ -244,12 +295,13 @@ impl LinearState {
         } else {
             w.saturating_sub(left + 2 * BAR_GAP + TIP_MIN)
         };
-        let expanded = self.bar_alerts(false);
-        let expanded_widths = widths(&expanded);
-        let (all, all_widths) = if expanded_widths.iter().sum::<usize>() <= room {
-            (expanded, expanded_widths)
+        let expanded = self.bar_alerts(&facts, false);
+        let expanded_labels = labels(&expanded);
+        let expanded_widths = widths(&expanded_labels);
+        let (all, labels, all_widths) = if expanded_widths.iter().sum::<usize>() <= room {
+            (expanded, expanded_labels, expanded_widths)
         } else {
-            (collapsed, collapsed_widths)
+            (collapsed, collapsed_labels, collapsed_widths)
         };
         let at = match &self.focus {
             Focus::Bar(item) => all.iter().position(|a| a == item),
@@ -260,6 +312,7 @@ impl LinearState {
             stacked,
             hint: !stacked || left <= w,
             all,
+            labels,
             from,
             shown,
         }
