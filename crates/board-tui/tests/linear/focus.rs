@@ -121,7 +121,7 @@ fn esc_from_the_filter_leaves_nothing_selected_and_keeps_its_text() {
 #[test]
 fn up_from_the_top_card_selects_the_lane_line_then_opens_the_filter() {
     let mut d = tabs_driver();
-    let frame = render_at(&mut d, 140, 40);
+    let frame = without_bar(&render_at(&mut d, 140, 40), 1);
     assert!(!frame.contains(" / "), "the filter is hidden:\n{frame}");
     press(&mut d, KeyCode::Char('k'));
     assert_eq!(selected_id(&d), None);

@@ -72,6 +72,7 @@ fn sections_for(file: &str) -> Option<Vec<&'static str>> {
         "reorder_card.rs" => vec!["ReorderCard"],
         "comment_history.rs" => vec!["CommentHistory"],
         "session.rs" => vec!["SessionPane"],
+        "linear_bar.rs" => vec!["LinearBoard"],
         "linear.rs" => vec![
             "LinearBoard",
             "LinearDetail",

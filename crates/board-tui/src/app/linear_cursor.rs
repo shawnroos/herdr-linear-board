@@ -107,6 +107,7 @@ pub enum Focus {
     LaneLine(String),
     Filter,
     Pager(Side, Box<Focus>),
+    Bar(super::BarItem),
     None,
 }
 
@@ -546,7 +547,7 @@ impl LinearState {
         self.focus = stops[step_clamped(at, delta, stops.len() - 1)].clone();
     }
 
-    fn remember_card(&mut self) {
+    pub(super) fn remember_card(&mut self) {
         if matches!(self.focus.board(), Focus::Card(_)) {
             self.last_card = Some(self.cursor());
         }

@@ -39,6 +39,7 @@ mod effect;
 mod forms;
 mod help;
 mod linear;
+mod linear_bar;
 mod linear_cursor;
 mod linear_picker;
 mod mouse;
@@ -56,6 +57,7 @@ pub use linear::{
     LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
     StripView, WriteFailure,
 };
+pub use linear_bar::{item_width, BarItem, BarLayout, BAR_GAP, BAR_HINT, CONTROLS};
 pub use linear_cursor::{
     column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection, Page, Side,
 };

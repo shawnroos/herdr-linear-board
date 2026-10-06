@@ -73,6 +73,18 @@ fn press(d: &mut Driver, code: KeyCode) {
     d.handle(key(code));
 }
 
+/// `?` opens the bar on its first item, `keys`, which opens the help sheet.
+fn open_help(d: &mut Driver) {
+    press(d, KeyCode::Char('?'));
+    press(d, KeyCode::Enter);
+}
+
+/// A frame without its last `n` rows, the bottom bar.
+fn without_bar(frame: &str, n: usize) -> String {
+    let rows: Vec<&str> = frame.lines().collect();
+    rows[..rows.len() - n].join("\n")
+}
+
 fn toast(d: &Driver) -> String {
     d.app
         .toast
@@ -414,7 +426,7 @@ fn stale_daemon_screen_hides_equal_versions() {
 #[test]
 fn help_sheet_lists_the_linear_keys_and_any_key_closes_it() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start_with_herdr_fixture());
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     assert_eq!(d.app.screen, Screen::Help);
     let frame = render_at(&mut d, W, H);
     assert!(frame.contains("Help — Linear mode"), "{frame}");
@@ -449,7 +461,7 @@ fn the_board_keeps_the_theme_it_starts_with() {
 
 fn help_scrolled_to_the_end(start: LinearStart) -> (Driver, String) {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start);
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     render_at(&mut d, W, H);
     for _ in 0..200 {
         press(&mut d, KeyCode::Char('j'));
@@ -967,7 +979,7 @@ fn a_key_is_handled_while_a_snapshot_is_in_flight_and_the_result_replaces_the_bo
         waiting.contains("waiting for the first snapshot"),
         "{waiting}"
     );
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     assert_eq!(d.app.screen, Screen::Help);
     let help = draw(&d.app, BW, H);
     assert!(help.contains("Help — Linear mode"), "{help}");
@@ -1492,7 +1504,7 @@ fn a_column_of_zero_cards_renders_its_title_and_says_no_issues() {
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
     let title = rows.iter().position(|r| r.contains("BACKLOG  0")).unwrap();
     assert_eq!(rows[title + 2].trim(), "no issues", "{rows:#?}");
-    for row in &rows[title + 3..rows.len() - 1] {
+    for row in &rows[title + 3..rows.len() - 3] {
         assert_eq!(row.trim(), "", "{rows:#?}");
     }
 }
@@ -1668,7 +1680,11 @@ fn a_pane_shorter_than_the_header_a_card_and_the_bar_says_pane_too_short() {
         "{frame}"
     );
     insta::assert_snapshot!("linear_pane_too_short", frame);
-    assert!(render_at(&mut d, 70, 16).contains("WEB-"));
+    assert!(
+        render_at(&mut d, 70, 17).contains("pane too short"),
+        "the stacked bar takes three rows"
+    );
+    assert!(render_at(&mut d, 70, 18).contains("WEB-"));
 }
 
 #[test]
@@ -1895,7 +1911,7 @@ fn a_reconnect_leaves_the_picker_open() {
 #[test]
 fn a_help_sheet_open_when_a_snapshot_lands_stays_open() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     d.handle(Msg::LinearRefresh);
     assert_eq!(d.app.screen, Screen::Help);
     press(&mut d, KeyCode::Char('x'));
@@ -2450,7 +2466,7 @@ fn strip_client() -> FakeBoardClient {
 }
 
 fn strip_lines(frame: &str) -> Vec<String> {
-    frame
+    without_bar(frame, 1)
         .lines()
         .map(backend_row)
         .skip_while(|row| {
@@ -4395,7 +4411,7 @@ fn an_issue_in_two_lanes_keeps_the_lane_it_was_selected_in() {
     assert_eq!(selected_lane(&d), "ln-beta");
     arrive(&mut d, web_104_in_two_lanes());
     assert_eq!(selected_lane(&d), "ln-beta");
-    let frame = render_at(&mut d, 140, 120);
+    let frame = without_bar(&render_at(&mut d, 140, 120), 1);
     let highlighted = frame.matches("WEB-104").count();
     assert_eq!(highlighted, 2, "drawn once per lane:\n{frame}");
     // Its lane gone, the card is found again in the first lane that lists it.
@@ -4429,6 +4445,7 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
     assert_eq!(selected_lane(&d), "ln-beta");
 }
 
+mod bar;
 mod focus;
 mod landing;
 mod layout;

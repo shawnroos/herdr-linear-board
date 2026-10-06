@@ -3,7 +3,7 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearCardPr, LinearGhSource, LinearIssue, LinearSnapshot};
+use board_core::protocol::{LinearCardPr, LinearGhSource, LinearIssue, LinearSnapshot, MarkKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,7 +12,8 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    sanitise, App, CardOverlay, CardOverlays, Focus, LinearState, Page, Screen, Side,
+    sanitise, App, BarItem, CardOverlay, CardOverlays, Focus, LinearState, Page, Screen, Side,
+    BAR_GAP, BAR_HINT, CONTROLS,
 };
 use crate::theme::Theme;
 use crate::widgets::{HitMap, Zone};
@@ -49,6 +50,7 @@ mod icon {
     pub const FILTER: &str = "\u{f0232}";
     pub const FILTER_OUTLINE: &str = "\u{f0233}";
     pub const SLANT: &str = "\u{e0bc}";
+    pub const INFO: &str = "\u{f02fd}";
 }
 const DEFAULT_VIEW_LABEL: &str = "view: project issues (default)";
 
@@ -625,8 +627,13 @@ fn draw_too_short(state: &LinearState, f: &mut Frame, area: Rect) {
     );
 }
 
+/// Whether `area` holds the header, one card and the bar.
+fn board_fits(state: &LinearState, area: Rect) -> bool {
+    area.height >= HEADER_ROWS + CARD_H + state.bar_layout(area.width).rows()
+}
+
 fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
-    if area.height < HEADER_ROWS + CARD_H + 1 {
+    if !board_fits(state, area) {
         draw_too_short(state, f, area);
         return;
     }
@@ -653,13 +660,9 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     };
     let strip = strip_lines(state, snapshot, area.width as usize);
     let strip_h = strip.len() as u16;
-    let pinned = pinned_line(state, area.width as usize);
-    let pinned_h = u16::from(pinned.is_some());
-    let footer_h: u16 = 1;
+    let footer_h = state.bar_layout(area.width).rows();
     let mut y = area.y + HEADER_ROWS;
-    let mut body_h = area
-        .height
-        .saturating_sub(HEADER_ROWS + pinned_h + strip_h + footer_h);
+    let mut body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
     let overlays = state.overlays();
     let rows = [
         tab_row(state, &overlays, area.width as usize),
@@ -682,15 +685,7 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         body,
         &mut app.hit_map.borrow_mut(),
     );
-    if let Some(pinned) = pinned {
-        if body.bottom() < area.bottom() {
-            f.render_widget(
-                Paragraph::new(pinned),
-                Rect::new(area.x, body.bottom(), area.width, 1),
-            );
-        }
-    }
-    draw_strip(app, strip, f, area, body.bottom() + pinned_h);
+    draw_strip(app, strip, f, area, body.bottom());
 }
 
 /// One powerline bar: each segment's text on its colour, a `/` cut where the
@@ -937,7 +932,7 @@ fn draw_columns(
     let page = state.page(body.width);
     let visible = page.visible as u16;
     let board_focus = state.focus.board();
-    let nothing_selected = *board_focus == Focus::None;
+    let nothing_selected = matches!(board_focus, Focus::None | Focus::Bar(_));
     // Columns share the width, the remainder spread one cell at a time, so
     // the last column's outer gap ends at the board's edge.
     let slot_x =
@@ -1169,47 +1164,6 @@ fn draw_pager(state: &LinearState, f: &mut Frame, view: Rect, page: Page) {
             Rect::new(x, view.y, SLOT_PAD, view.height),
         );
     }
-}
-
-/// While a card with a suggestion is selected, the footer names `a` and `x`.
-fn suggestion_selected(state: &LinearState) -> bool {
-    state.selected_suggestion().is_some()
-}
-
-/// The oldest pending show-request: who asked, the issue, its title and how
-/// many more wait. Only the title and then the head give way to a narrow
-/// pane; the count is never cut.
-fn pinned_line(state: &LinearState, width: usize) -> Option<Line<'static>> {
-    let requests = state.pending_requests();
-    let oldest = requests.first()?;
-    let more = match requests.len() - 1 {
-        0 => String::new(),
-        n => format!(" +{n}"),
-    };
-    let who = oldest
-        .requested_by
-        .as_deref()
-        .map(line)
-        .filter(|w| !w.trim().is_empty())
-        .unwrap_or_else(|| "an agent".to_string());
-    let title = state
-        .issue(&oldest.issue)
-        .map(|i| line(&i.title))
-        .or_else(|| oldest.reason.as_deref().map(line))
-        .unwrap_or_default();
-    let tail = more.width();
-    let room = width.saturating_sub(tail + 2);
-    let head = fit(&format!("◉ {who} · {} ", line(&oldest.issue)), room);
-    let title = fit(&title, room.saturating_sub(head.width()));
-    let gap = width
-        .saturating_sub(head.width() + title.width() + tail)
-        .max(1);
-    Some(Line::from(vec![
-        Span::styled(head, state.theme.show_mark()),
-        Span::raw(title),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(more, state.theme.accent()),
-    ]))
 }
 
 /// ` !N` for the cards among `identifiers` that need attention, or nothing.
@@ -1516,38 +1470,149 @@ fn draw_help(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     }
 }
 
+/// Whether `screen` draws the board, and so the bar under it.
+fn shows_bar(app: &App) -> bool {
+    let under = match app.screen {
+        Screen::Help => app.help_return_to,
+        Screen::LinearPicker => app
+            .picker
+            .as_ref()
+            .map_or(Screen::LinearBoard, |p| p.return_to),
+        other => other,
+    };
+    matches!(under, Screen::LinearBoard | Screen::LinearError)
+}
+
 fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
+    let Some(state) = app.linear.as_ref() else {
+        return;
+    };
     if area.height == 0 {
         return;
     }
-    let rect = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    let Some(theme) = app.linear.as_ref().map(|state| &state.theme) else {
-        return;
-    };
-    let Some(toast) = &app.toast else {
-        let cue = app.screen == Screen::LinearBoard
-            && app.linear.as_ref().is_some_and(suggestion_selected);
-        if cue {
-            f.render_widget(
-                Paragraph::new(Span::styled(
-                    fit(" a bind · x dismiss", area.width as usize),
-                    theme.accent(),
-                )),
-                rect,
-            );
+    if shows_bar(app) {
+        if board_fits(state, area) {
+            draw_bar(app, state, f, area);
         }
         return;
+    }
+    let Some(toast) = &app.toast else {
+        return;
     };
-    let style = theme.toast(toast.is_error);
     f.render_widget(
         Paragraph::new(Span::styled(
             fit(
                 &format!(" {} ", line(&sanitise(&toast.text))),
                 area.width as usize,
             ),
-            style,
+            state.theme.toast(toast.is_error),
         )),
-        rect,
+        Rect::new(area.x, area.bottom() - 1, area.width, 1),
+    );
+}
+
+fn bar_item(state: &LinearState, item: &BarItem, label: String, selected: bool) -> Span<'static> {
+    let t = &state.theme;
+    let style = if selected {
+        t.column_title_active()
+    } else {
+        match item {
+            BarItem::Request(_) => t.show_mark(),
+            BarItem::NeedsYou => t.mark(MarkKind::Attention).add_modifier(Modifier::BOLD),
+            BarItem::Question => t.mark(MarkKind::Question),
+            BarItem::CiFailing(_) | BarItem::CiCollapsed => t.error(),
+            BarItem::More => t.accent(),
+            _ => t.dim(),
+        }
+    };
+    Span::styled(format!(" {label} "), style)
+}
+
+/// Controls left, the tip centred and alerts right on one row; three
+/// centred rows (tip, alerts, controls) when they do not fit side by side.
+fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
+    let t = &state.theme;
+    let w = usize::from(area.width);
+    let layout = state.bar_layout(area.width);
+    let selected = match &state.focus {
+        Focus::Bar(item) => Some(item),
+        _ => None,
+    };
+    let mut controls = vec![];
+    if layout.hint {
+        let (key, rest) = BAR_HINT.split_at(1);
+        controls.push(Span::styled(format!(" {key}"), t.text()));
+        controls.push(Span::styled(format!("{rest} "), t.dim()));
+    }
+    for item in &CONTROLS {
+        controls.push(bar_item(
+            state,
+            item,
+            state.bar_label(item),
+            selected == Some(item),
+        ));
+    }
+    let mut alerts: Vec<Span<'static>> = layout
+        .alerts()
+        .iter()
+        .map(|item| bar_item(state, item, state.bar_label(item), selected == Some(item)))
+        .collect();
+    if layout.hidden() > 0 {
+        alerts.push(bar_item(
+            state,
+            &BarItem::More,
+            layout.more_label(),
+            selected == Some(&BarItem::More),
+        ));
+    }
+    let tip = |room: usize| -> Vec<Span<'static>> {
+        match &app.toast {
+            Some(toast) => vec![Span::styled(
+                fit(&format!(" {} ", line(&sanitise(&toast.text))), room),
+                t.toast(toast.is_error),
+            )],
+            None => clip(
+                vec![
+                    Span::styled(icon::INFO, t.accent()),
+                    Span::styled(
+                        format!(" {}", line(&state.bar_tip(area.width))),
+                        t.secondary(),
+                    ),
+                ],
+                room,
+            ),
+        }
+    };
+    let rows = layout.rows();
+    let top = area.bottom().saturating_sub(rows);
+    let centred = |spans: Vec<Span<'static>>| {
+        let spans = clip(spans, w);
+        let mut out = vec![Span::raw(
+            " ".repeat(w.saturating_sub(spans_width(&spans)) / 2),
+        )];
+        out.extend(spans);
+        Line::from(out)
+    };
+    let lines = if layout.stacked {
+        vec![centred(tip(w)), centred(alerts), centred(controls)]
+    } else {
+        let (lw, rw) = (spans_width(&controls), spans_width(&alerts));
+        let room = w.saturating_sub(lw + rw + 2 * BAR_GAP);
+        let tip = tip(room);
+        let cw = spans_width(&tip);
+        let start = (w.saturating_sub(cw) / 2)
+            .min(w.saturating_sub(rw + BAR_GAP + cw))
+            .max(lw + BAR_GAP);
+        let mut spans = controls;
+        spans.push(Span::raw(" ".repeat(start.saturating_sub(lw))));
+        spans.extend(tip);
+        spans.push(Span::raw(" ".repeat(w.saturating_sub(start + cw + rw))));
+        spans.extend(alerts);
+        vec![Line::from(spans)]
+    };
+    f.render_widget(
+        Paragraph::new(lines).style(t.app()),
+        Rect::new(area.x, top, area.width, rows.min(area.height)),
     );
 }
 

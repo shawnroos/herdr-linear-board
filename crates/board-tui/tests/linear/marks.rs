@@ -55,7 +55,7 @@ impl SharedFake {
     }
 
     /// A reported `save_issue` the store could not link: a `◇` naming `cwd`.
-    fn suggest(&self, issue: &str, cwd: Option<&std::path::Path>) -> i64 {
+    pub(super) fn suggest(&self, issue: &str, cwd: Option<&std::path::Path>) -> i64 {
         self.known(issue);
         self.inner
             .lock()
@@ -74,7 +74,7 @@ impl SharedFake {
             .id
     }
 
-    fn ask(&self, issue: &str, by: &str) -> i64 {
+    pub(super) fn ask(&self, issue: &str, by: &str) -> i64 {
         self.known(issue);
         self.inner
             .lock()
@@ -96,7 +96,7 @@ impl SharedFake {
     }
 
     /// Closes a request behind the board, as a withdraw or another board would.
-    fn close(&self, id: i64) {
+    pub(super) fn close(&self, id: i64) {
         self.inner.lock().unwrap().linear_show_dismiss(id).unwrap();
     }
 
@@ -125,7 +125,7 @@ pub(super) fn board(shared: &SharedFake) -> (Driver, RequestLog) {
     (d, log)
 }
 
-fn params(log: &RequestLog, method: &str) -> Vec<Value> {
+pub(super) fn params(log: &RequestLog, method: &str) -> Vec<Value> {
     log.lock()
         .unwrap()
         .iter()
@@ -613,21 +613,21 @@ fn ae6_a_sidebar_board_counts_attention_on_other_tabs() {
 }
 
 #[test]
-fn with_a_suggestion_selected_the_footer_names_bind() {
+fn with_a_suggestion_selected_the_tip_names_bind() {
     let shared = SharedFake::quiet(tabs_lanes());
     let worktree = Worktree::new("cue");
     shared.suggest("WEB-101", Some(&worktree.0));
     shared.ask("WEB-105", "agent-b");
     let (mut d, _) = board(&shared);
     let buf = buffer(&mut d, 80, 30);
-    assert!(buffer_row(&buf, 29).contains("a bind · x dismiss"));
+    assert!(buffer_row(&buf, 27).contains("a binds it · x dismisses it"));
     press(&mut d, KeyCode::Char('j'));
     let buf = buffer(&mut d, 80, 30);
-    assert!(!buffer_row(&buf, 29).contains("a bind"));
+    assert!(!buffer_row(&buf, 27).contains("a binds"));
 }
 
 #[test]
-fn the_pinned_line_truncates_the_title_and_keeps_the_count_at_44_cells() {
+fn requests_at_44_cells_show_the_oldest_first_then_a_count_of_the_rest() {
     let mut snapshot = tabs_lanes();
     snapshot.issues.get_mut("WEB-105").unwrap().title = NINETY.into();
     let shared = SharedFake::quiet(snapshot);
@@ -638,14 +638,10 @@ fn the_pinned_line_truncates_the_title_and_keeps_the_count_at_44_cells() {
     let frame = render_at(&mut d, 44, 30);
     let line = row_with(&frame, "◉ agent-b");
     assert!(line.contains("WEB-105"), "oldest first:\n{frame}");
-    assert!(line.trim_end().ends_with(" +2"), "{frame}");
-    assert!(
-        !line.contains("dismiss"),
-        "a and x no longer answer it:\n{frame}"
-    );
-    assert!(line.contains('…'), "{frame}");
+    assert!(line.trim_end().ends_with("more"), "{frame}");
+    assert!(!line.contains("WEB-107"), "{frame}");
     assert!(unicode_width::UnicodeWidthStr::width(line.trim_end()) <= 44);
-    insta::assert_snapshot!("linear_pinned_44", frame);
+    insta::assert_snapshot!("linear_requests_44", frame);
 }
 
 #[test]

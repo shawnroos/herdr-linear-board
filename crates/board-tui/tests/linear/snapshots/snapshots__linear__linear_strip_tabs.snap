@@ -33,4 +33,4 @@ expression: frame
 "                                                                                                                        "
 " Unmapped tabs (live tabs no binding claims)                                                                            "
 "  Elsewhere (wA:t2) · no_binding · panes: wA:p9 working                                                                 "
-"                                                                                                                        "
+" ? bar  keys  / filter  esc deselect  ctrl+q quit   󰋽 Enter opens WEB-3308 · Tab changes column                         "

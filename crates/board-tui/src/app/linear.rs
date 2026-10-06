@@ -258,6 +258,13 @@ pub struct LinearState {
     /// The first column the board shows. Paging moves only this, so a
     /// paging button can leave the focused column off the page.
     pub page_start: usize,
+    /// The first alert the bar shows; alerts before it sit behind `+N more`.
+    pub bar_from: usize,
+    /// Where the selected bar item sat, the fallback when it vanishes.
+    pub bar_at: usize,
+    /// The selected show-request vanished and its place was taken: the next
+    /// `a` or `x` refuses rather than answering the item now under the cursor.
+    pub bar_vanished: bool,
     /// The board filter's text; it hides cards it does not match.
     pub filter: String,
     /// Folded lane keys by tab key.
@@ -389,6 +396,9 @@ impl LinearState {
             sel_group: 0,
             focus: Focus::default(),
             page_start: 0,
+            bar_from: 0,
+            bar_at: 0,
+            bar_vanished: false,
             filter: String::new(),
             folds: Default::default(),
             last_card: None,
@@ -1049,6 +1059,7 @@ pub(super) fn request_local_state(app: &mut App) -> Vec<Effect> {
 /// background read, and a daemon that predates it must not cost the board
 /// its screen.
 fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>) -> Vec<Effect> {
+    let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -1064,6 +1075,7 @@ fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>)
                 || last.worktree_bindings != local.worktree_bindings
         });
         state.local = Some(local);
+        state.refind_bar(width);
     }
     let mut effects = vec![];
     if bindings_changed {
@@ -1109,6 +1121,7 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
             state.last_good = Some(snapshot);
             state.refind(&cursor);
             state.refit(app.last_area.width);
+            state.refind_bar(app.last_area.width);
             state.clamp_strip();
             state.home_screen()
         }
@@ -1174,6 +1187,7 @@ fn write_arrived(
     write: LinearWrite,
     result: Result<(), WriteFailure>,
 ) -> Vec<Effect> {
+    let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -1191,10 +1205,12 @@ fn write_arrived(
         }
         (LinearWrite::AcceptShow { id, issue }, Ok(())) => {
             state.forget_request(id);
+            state.refind_bar(width);
             show_target(app, &issue)
         }
         (LinearWrite::DismissShow { id }, Ok(())) => {
             state.forget_request(id);
+            state.refind_bar(width);
             vec![]
         }
         (
@@ -1350,6 +1366,10 @@ pub(super) fn linear_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     {
         return filter_key(app, k);
     }
+    if k.code == KeyCode::Char('?') && app.screen == Screen::LinearBoard {
+        super::linear_bar::open(app);
+        return vec![];
+    }
     if k.code == KeyCode::Char('?') && app.screen != Screen::Help {
         app.help_return_to = app.screen;
         app.help_scroll = 0;
@@ -1446,6 +1466,9 @@ fn strip_owned_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
 
 fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     if let Some(effects) = strip_owned_key(app, k) {
+        return effects;
+    }
+    if let Some(effects) = super::linear_bar::bar_key(app, k) {
         return effects;
     }
     let Some(state) = app.linear.as_mut() else {
