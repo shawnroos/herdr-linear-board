@@ -641,14 +641,15 @@ fn card_lines(
         lines.push(inset(vec![Span::styled(text, title_style)]));
     }
     let description = description_lines(issue, overlay, inner);
-    if roomy && !description.is_empty() {
-        lines.push(Line::default());
-    }
+    let described = !description.is_empty();
     for text in description {
         lines.push(inset(vec![Span::styled(text, detail)]));
     }
     let meta = card_meta(state, issue, look);
     if roomy && !meta.is_empty() {
+        if described {
+            lines.push(Line::default());
+        }
         lines.push(rule("─ ".repeat(inner / 2)));
     }
     for row in meta {

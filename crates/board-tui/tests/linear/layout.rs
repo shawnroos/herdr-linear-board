@@ -210,15 +210,44 @@ fn a_selected_card_at_the_bottom_of_a_tall_lane_scrolls_into_full_view() {
 }
 
 #[test]
+fn the_description_follows_the_title_and_a_blank_row_sets_off_the_footer() {
+    let mut d = driver_for(sized_cards());
+    let buf = buffer_at(&mut d, 200, 80);
+    let (x, y) = at(&buf, "WEB-101");
+    let row = |dy: u16| slice(&buf, y + dy, x, 40);
+    let desc = (1..12)
+        .find(|dy| row(*dy).starts_with("When you"))
+        .expect("description");
+    assert!(
+        !row(desc - 1).trim().is_empty(),
+        "the row above the description is the title:\n{}",
+        dump(&buf)
+    );
+    let meta = (desc..13)
+        .find(|dy| row(*dy).contains("Example User"))
+        .expect("meta");
+    assert!(
+        row(meta - 2).trim().is_empty(),
+        "a blank row between description and footer:\n{}",
+        dump(&buf)
+    );
+    assert_eq!(
+        card_height(&buf, "WEB-101"),
+        13,
+        "a full card keeps its height"
+    );
+}
+
+#[test]
 fn a_card_with_a_note_shows_it_in_place_of_the_last_description_line() {
     let shared = SharedFake::quiet(described(tabs_lanes()));
     shared.note("WEB-101", "pushed the fix to the branch", "agent-a");
     let (mut d, _) = board(&shared);
     let buf = buffer_at(&mut d, 200, 80);
     let (x, y) = at(&buf, "WEB-101");
-    assert!(slice(&buf, y + 5, x, 10).starts_with("When you"));
+    assert!(slice(&buf, y + 4, x, 10).starts_with("When you"));
     assert!(
-        slice(&buf, y + 7, x, 40).starts_with("› pushed the fix"),
+        slice(&buf, y + 6, x, 40).starts_with("› pushed the fix"),
         "{}",
         dump(&buf)
     );
@@ -363,8 +392,8 @@ fn outside_text_with_escape_and_osc8_renders_as_plain_text() {
     let buf = buffer_at(&mut d, 200, 80);
     let frame = dump(&buf);
     let (x, y) = at(&buf, "WEB-101");
-    assert!(slice(&buf, y + 5, x, 40).contains("the link"), "{frame}");
-    assert!(slice(&buf, y + 7, x, 40).contains("here"), "{frame}");
+    assert!(slice(&buf, y + 4, x, 40).contains("the link"), "{frame}");
+    assert!(slice(&buf, y + 6, x, 40).contains("here"), "{frame}");
     assert!(
         !frame.contains(['\u{1b}', '\u{7}', '\u{9c}']),
         "a control byte reached the backend:\n{frame:?}"

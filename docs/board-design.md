@@ -63,8 +63,8 @@ Cards are sized to their content (Shawn, 2026-10-06). Widths are unchanged in bo
 | header | `WEB-101 P0 ⧉2`, left-aligned. Marks and `▶` right-aligned | 1 |
 | rule | blank; a solid rule when selected | 1 |
 | title | bold, wrapped; `yellow` when selected | 1–2 |
-| blank | only when a description follows | 0–1 |
-| description | wrapped, ends in `…`; only when the issue has one | 0–3 |
+| description | wrapped, ends in `…`; only when the issue has one; directly under the title | 0–3 |
+| blank | only when both a description and meta are present (Shawn, 2026-10-06) | 0–1 |
 | rule | blank; a dashed rule when selected; only when meta follows | 0–1 |
 | meta | Nerd Font icon items, one row per group with data: assignee and milestone; PR, preview, diff, CI | 0–2 |
 | padding | blank (bottom) | 1 |
