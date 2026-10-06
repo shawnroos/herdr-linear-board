@@ -611,6 +611,8 @@ daemon start).
     contains `/pull/`; only a `https://github.com/<owner>/<repo>/pull/<number>` URL becomes `pr`,
     with `repo` and `number` taken from the URL and `status` and `draft` from the attachment's
     metadata as Linear sends them. A PR on the host named by boardd's `GH_HOST` is accepted too.
+    When no attachment is such a PR, the newest `https://<host>/<owner>/<repo>/pull/<number>` on
+    any other host becomes `pr` with `gh_error: "unsupported host"`; `gh` never reads it.
   - **`gh` fields** on each `pr`, all additive and absent until boardd's `gh` has read the PR:
     `state` (`OPEN`, `CLOSED`, `MERGED`), `ci` (`{state, passed, pending, failed, skipped}`, the
     latest run of each check name, `state` one of `pass`, `pending`, `fail`, `none`), `additions`,

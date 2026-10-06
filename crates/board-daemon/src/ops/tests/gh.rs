@@ -269,6 +269,39 @@ fn a_pr_gh_cannot_read_records_its_error_and_leaves_the_others_intact() {
 }
 
 #[test]
+fn a_pr_on_a_host_the_board_does_not_read_shows_linears_data_and_why() {
+    const ELSEWHERE: &str = "https://git.example.com/acme/web/pull/9";
+    let mut readable = issue("WEB-2", Some(PR_A));
+    readable["attachments"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "url": ELSEWHERE, "sourceType": "github", "createdAt": "2026-09-21T00:00:00Z",
+            "metadata": {"status": "open"}
+        }));
+    let rows = vec![issue("WEB-1", Some(ELSEWHERE)), readable];
+    let mut board = Board::new(linear(rows.clone(), rows)).with_gh(false);
+
+    board.snapshot();
+    assert_eq!(board.wait_for_event(), announced());
+    let doc = board.snapshot();
+
+    let pr = doc.issues["WEB-1"]
+        .pr
+        .clone()
+        .expect("Linear's PR data stays");
+    assert_eq!((pr.repo.as_str(), pr.number), ("acme/web", 9));
+    assert_eq!(pr.gh_error.as_deref(), Some("unsupported host"));
+    assert_eq!(pr.ci, None);
+    assert_eq!(board.views_of("9"), 0, "gh never reads it");
+    let newer = doc.issues["WEB-2"].pr.clone().unwrap();
+    assert_eq!(
+        newer.number, 4212,
+        "a readable PR wins over a newer unreadable one"
+    );
+}
+
+#[test]
 fn gh_missing_is_code_8_on_the_pr_read_and_the_board_read_still_succeeds() {
     let rows = vec![issue("WEB-1", Some(PR_A))];
     let mut board = Board::new(linear(rows.clone(), rows));
@@ -337,7 +370,8 @@ fn a_card_pr_on_a_foreign_host_is_not_enriched() {
     let board = Board::new(linear(rows.clone(), rows)).with_gh(false);
 
     let doc = board.snapshot();
-    assert!(doc.issues["WEB-1"].pr.is_none());
+    let pr = doc.issues["WEB-1"].pr.clone().unwrap();
+    assert_eq!(pr.gh_error.as_deref(), Some("unsupported host"));
     std::thread::sleep(Duration::from_millis(200));
     assert!(!board.gh.path().join("argv.log").exists());
 }

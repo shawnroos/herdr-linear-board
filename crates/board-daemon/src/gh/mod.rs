@@ -54,12 +54,20 @@ impl PrRef {
     /// `extra_host`, and nothing else, so a commit or file link under a PR is
     /// not one. Linear attachment URLs are written by anyone in the workspace.
     pub fn parse(url: &str, extra_host: Option<&str>) -> Option<PrRef> {
+        let pr = PrRef::shape(url)?;
+        let allowed = pr.host == GITHUB_HOST
+            || extra_host
+                .is_some_and(|extra| host_ok(extra) && extra.eq_ignore_ascii_case(&pr.host));
+        allowed.then_some(pr)
+    }
+
+    /// A pull request URL on any host: what [`PrRef::parse`] accepts before it
+    /// checks the host. Never passed to `gh`.
+    pub fn shape(url: &str) -> Option<PrRef> {
         let rest = url.strip_prefix("https://")?;
         let (host, path) = rest.split_once('/')?;
         let host = host.to_ascii_lowercase();
-        let allowed = host == GITHUB_HOST
-            || extra_host.is_some_and(|extra| host_ok(extra) && extra.eq_ignore_ascii_case(&host));
-        if !allowed {
+        if !host_ok(&host) {
             return None;
         }
         let path = path.split(['?', '#']).next()?.trim_end_matches('/');

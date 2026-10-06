@@ -1184,7 +1184,6 @@ fn attachments_that_are_not_pull_requests_leave_the_card_pr_empty() {
 #[test]
 fn a_pull_request_url_of_the_wrong_shape_is_not_a_card_pr() {
     let bad = [
-        "https://gitlab.com/acme/web/pull/3",
         "http://github.com/acme/web/pull/3",
         "https://github.com/acme/../pull/3",
         "https://github.com/-acme/web/pull/3",

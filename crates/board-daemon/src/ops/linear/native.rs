@@ -378,24 +378,35 @@ fn excerpt(description: &str) -> String {
         .collect()
 }
 
+const UNSUPPORTED_HOST: &str = "unsupported host";
+
 fn newest_pr(attachments: &Value, gh_host: Option<&str>) -> Option<LinearCardPr> {
-    nodes(attachments)
-        .iter()
-        .filter_map(|a| {
-            let url = a["url"].as_str()?;
-            let pr = PrRef::parse(url, gh_host)?;
-            let card = LinearCardPr {
-                repo: pr.repo(),
-                number: pr.number,
-                url: url.to_string(),
-                status: text(&a["metadata"]["status"]),
-                draft: a["metadata"]["draft"].as_bool(),
-                ..LinearCardPr::default()
-            };
-            Some((a["createdAt"].as_str().unwrap_or("").to_string(), card))
-        })
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, pr)| pr)
+    let newest = |readable: bool| {
+        nodes(attachments)
+            .iter()
+            .filter_map(|a| {
+                let url = a["url"].as_str()?;
+                let (pr, gh_error) = match PrRef::parse(url, gh_host) {
+                    Some(pr) => (pr, None),
+                    None if !readable => (PrRef::shape(url)?, Some(UNSUPPORTED_HOST.to_string())),
+                    None => return None,
+                };
+                let card = LinearCardPr {
+                    repo: pr.repo(),
+                    number: pr.number,
+                    url: url.to_string(),
+                    status: text(&a["metadata"]["status"]),
+                    draft: a["metadata"]["draft"].as_bool(),
+                    gh_error,
+                    ..LinearCardPr::default()
+                };
+                Some((a["createdAt"].as_str().unwrap_or("").to_string(), card))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, pr)| pr)
+    };
+    // A PR gh can read wins over a newer one on a host it may not be pointed at.
+    newest(true).or_else(|| newest(false))
 }
 
 /// Worktree bindings of listed issues, with their herdr tab and panes; tabs
