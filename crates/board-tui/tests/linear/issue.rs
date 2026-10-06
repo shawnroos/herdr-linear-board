@@ -4,7 +4,7 @@
 use super::*;
 
 use board_core::protocol::{LinearIssueDetail, LinearIssueDocument};
-use board_tui::testkit::buffer_at;
+use board_tui::testkit::{buffer_at, UnknownMethods};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -276,4 +276,368 @@ fn the_faded_backdrop_takes_no_clicks() {
     d.handle(left_down(1, 6));
     assert_eq!(state(&d).detail.as_deref(), Some("WEB-101"));
     assert_eq!(d.app.screen, Screen::LinearDetail);
+}
+
+const OPEN_PR: &str = "https://github.com/acme/web/pull/2128";
+const MERGED_PR: &str = "https://github.com/acme/web/pull/2100";
+
+fn attachment(
+    source: &str,
+    title: &str,
+    subtitle: &str,
+    url: &str,
+) -> board_core::protocol::LinearAttachment {
+    board_core::protocol::LinearAttachment {
+        id: Some(format!("a-{title}")),
+        source_type: Some(source.into()),
+        title: title.into(),
+        subtitle: Some(subtitle.into()),
+        url: url.into(),
+        created_at: Some("2026-10-01T10:00:00.000Z".into()),
+        metadata: serde_json::Value::Null,
+    }
+}
+
+fn pr_attachment(
+    url: &str,
+    title: &str,
+    status: &str,
+    at: &str,
+) -> board_core::protocol::LinearAttachment {
+    board_core::protocol::LinearAttachment {
+        id: Some(format!("pr-{url}")),
+        source_type: Some("github".into()),
+        title: title.into(),
+        subtitle: None,
+        url: url.into(),
+        created_at: Some(at.into()),
+        metadata: serde_json::json!({ "status": status, "branch": "task/export-folder", "targetBranch": "develop" }),
+    }
+}
+
+fn doc_with_attachments() -> LinearIssueDocument {
+    let mut d = doc("WEB-101");
+    d.issue.as_mut().unwrap().attachments = vec![
+        attachment(
+            "github",
+            "fix: remember the last export folder",
+            "feature/web-101",
+            "https://github.com/acme/web/commit/4f2a9c1",
+        ),
+        attachment(
+            "slack",
+            "Export folder keeps resetting",
+            "#design-feedback",
+            "https://acme.slack.com/archives/C0/p1",
+        ),
+        attachment(
+            "upload",
+            "Screen recording",
+            "export-dialog.mp4",
+            "https://uploads.linear.app/x/export-dialog.mp4",
+        ),
+        attachment(
+            "notion",
+            "Saved filters spec",
+            "notion.so",
+            "https://www.notion.so/acme/spec",
+        ),
+        pr_attachment(
+            OPEN_PR,
+            "Remember the export folder",
+            "open",
+            "2026-10-02T10:00:00.000Z",
+        ),
+        pr_attachment(
+            MERGED_PR,
+            "Add the export dialog",
+            "merged",
+            "2026-09-20T10:00:00.000Z",
+        ),
+    ];
+    d
+}
+
+fn pr_doc(url: &str, number: u64) -> board_core::protocol::LinearPrDocument {
+    use board_core::protocol::*;
+    LinearPrDocument {
+        schema: 1,
+        status: "ok".into(),
+        message: None,
+        fetched_at: Some(1),
+        pr: Some(LinearPrDetail {
+            repo: "acme/web".into(),
+            number,
+            url: url.into(),
+            title: Some("Remember the export folder per project".into()),
+            state: Some("OPEN".into()),
+            additions: Some(352),
+            deletions: Some(87),
+            changed_files: Some(14),
+            head_ref: Some("task/export-folder".into()),
+            ci: Some(LinearPrCi {
+                state: "pending".into(),
+                passed: 11,
+                pending: 1,
+                failed: 0,
+                skipped: 3,
+            }),
+            blocker: Some("E2E Verification Required (required) is pending".into()),
+            reviews: vec![LinearPrReview {
+                author: Some("coderabbitai".into()),
+                state: Some("COMMENTED".into()),
+                submitted_at: None,
+            }],
+            preview: Some("https://pr-2128.preview.example.dev".into()),
+            ..LinearPrDetail::default()
+        }),
+    }
+}
+
+fn merged_doc() -> board_core::protocol::LinearPrDocument {
+    let mut d = pr_doc(MERGED_PR, 2100);
+    let pr = d.pr.as_mut().unwrap();
+    pr.state = Some("MERGED".into());
+    pr.title = Some("Add the export dialog".into());
+    pr.additions = Some(288);
+    pr.deletions = Some(36);
+    d
+}
+
+fn cards_client() -> FakeBoardClient {
+    fake_with(tabs_lanes())
+        .with_linear_list(spaces(vec![]))
+        .with_linear_issue("WEB-101", doc_with_attachments())
+}
+
+fn expanded(c: impl BoardClient + 'static, h: u16) -> (Driver, String) {
+    let (mut d, _, _) = linear_driver(c, linear_start());
+    d.app.last_area = Rect::new(0, 0, WIDE, h);
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('e'));
+    let frame = render_at(&mut d, WIDE, h);
+    (d, frame)
+}
+
+fn row_of<'a>(frame: &'a str, needle: &str) -> &'a str {
+    frame
+        .lines()
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no row with {needle:?}:\n{frame}"))
+}
+
+#[test]
+fn the_main_column_runs_title_description_attachments_pull_requests_then_activity() {
+    let c = cards_client()
+        .with_linear_pr(OPEN_PR, pr_doc(OPEN_PR, 2128))
+        .with_linear_pr(MERGED_PR, merged_doc());
+    let (_, frame) = expanded(c, 120);
+    let at = |needle: &str| {
+        frame
+            .find(needle)
+            .unwrap_or_else(|| panic!("no {needle:?}:\n{frame}"))
+    };
+    assert!(at("body of WEB-101") < at("ATTACHMENTS  4"));
+    assert!(at("ATTACHMENTS  4") < at("PULL REQUESTS  2"));
+    assert!(at("PULL REQUESTS  2") < at("ACTIVITY"));
+    assert!(row_of(&frame, "PULL REQUESTS").contains("1 open · 1 merged"));
+    assert!(
+        row_of(&frame, "ATTACHMENTS").starts_with("\"  ─ ATTACHMENTS"),
+        "a lane-style section line"
+    );
+}
+
+#[test]
+fn an_open_pr_card_shows_checks_the_blocker_diff_reviews_and_preview() {
+    let c = cards_client()
+        .with_linear_pr(OPEN_PR, pr_doc(OPEN_PR, 2128))
+        .with_linear_pr(MERGED_PR, merged_doc());
+    let (_, frame) = expanded(c, 120);
+    assert!(row_of(&frame, "#2128").contains("OPEN"), "{frame}");
+    assert!(
+        frame.contains("Remember the export folder per project"),
+        "gh's title"
+    );
+    assert!(row_of(&frame, "task/export-folder").contains("→ develop"));
+    let diff = row_of(&frame, "+352");
+    assert!(diff.contains("−87") && diff.contains("14 files"), "{diff}");
+    let checks = row_of(&frame, "11 passed");
+    assert!(
+        checks.contains("1 pending") && checks.contains("3 skipped"),
+        "{checks}"
+    );
+    assert!(
+        frame.contains("■ Blocked: E2E Verification Required (required) is pending"),
+        "{frame}"
+    );
+    assert!(row_of(&frame, "coderabbitai").contains("commented"));
+    assert!(frame.contains("pr-2128.preview.example.dev"), "{frame}");
+
+    let merged = row_of(&frame, "#2100");
+    assert!(
+        merged.contains("acme/web") && merged.contains("Add the export dialog"),
+        "{merged}"
+    );
+    assert!(
+        merged.contains("+288") && merged.contains("−36"),
+        "one line, diff aligned: {merged}"
+    );
+}
+
+#[test]
+fn with_gh_unavailable_the_pr_card_shows_linears_status_and_says_why() {
+    let c = cards_client()
+        .with_linear_pr_unavailable(OPEN_PR, "gh is not installed")
+        .with_linear_pr_unavailable(MERGED_PR, "gh is not installed");
+    let (d, frame) = expanded(c, 120);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert!(
+        row_of(&frame, "#2128").contains("OPEN"),
+        "Linear's status: {frame}"
+    );
+    assert!(
+        frame.contains("Remember the export folder"),
+        "Linear's title"
+    );
+    assert!(frame.contains("Linear: open"), "{frame}");
+    assert!(
+        frame.contains("gh unavailable: gh is not installed"),
+        "{frame}"
+    );
+    assert!(!frame.contains("passed"), "no checks without gh: {frame}");
+}
+
+#[test]
+fn an_older_daemon_without_the_pr_read_shows_linear_only_cards_not_the_stale_screen() {
+    let (c, log) = RecordingClient::new(UnknownMethods(cards_client(), "linear.pr"));
+    let (mut d, frame) = expanded(c, 120);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    assert!(state(&d).pr_read_missing);
+    assert!(row_of(&frame, "#2128").contains("OPEN"), "{frame}");
+    assert!(
+        frame.contains("checks need a newer board daemon"),
+        "{frame}"
+    );
+    assert!(!frame.contains("gh unavailable"), "{frame}");
+    let reads = methods(&log).iter().filter(|m| *m == "linear.pr").count();
+    // Back and in again: no further PR read once the daemon said it has none.
+    press(&mut d, KeyCode::Esc);
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        methods(&log).iter().filter(|m| *m == "linear.pr").count(),
+        reads
+    );
+}
+
+#[test]
+fn attachment_cards_show_kind_title_detail_and_link() {
+    let (_, frame) = expanded(
+        cards_client().with_linear_pr(OPEN_PR, pr_doc(OPEN_PR, 2128)),
+        140,
+    );
+    for (kind, chip, title, detail, link) in [
+        (
+            "Commit",
+            "COMMIT",
+            "fix: remember the last export folder",
+            "feature/web-101",
+            "github.com/acme/web/commit/4f2a9c1",
+        ),
+        (
+            "Slack thread",
+            "SLACK",
+            "Export folder keeps resetting",
+            "#design-feedback",
+            "acme.slack.com/archives/C0/p1",
+        ),
+        (
+            "Upload",
+            "FILE",
+            "Screen recording",
+            "export-dialog.mp4",
+            "uploads.linear.app/x/export-dialog.mp4",
+        ),
+        (
+            "Link",
+            "LINK",
+            "Saved filters spec",
+            "notion.so",
+            "notion.so/acme/spec",
+        ),
+    ] {
+        let head = row_of(&frame, &format!(" {kind} "));
+        assert!(head.contains(chip), "{kind}: {head}");
+        assert!(frame.contains(title), "{kind} title");
+        assert!(frame.contains(detail), "{kind} detail");
+        assert!(frame.contains(link), "{kind} link:\n{frame}");
+    }
+}
+
+#[test]
+fn return_on_a_card_opens_its_link() {
+    let (mut d, opened, _) = linear_driver(cards_client(), linear_start());
+    d.app.last_area = Rect::new(0, 0, 120, TALL);
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        state(&d).detail_selection,
+        None,
+        "no pane to start on, so the first row: the commit card"
+    );
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        opened.lock().unwrap().as_slice(),
+        ["https://github.com/acme/web/commit/4f2a9c1".to_string()]
+    );
+}
+
+#[test]
+fn pr_text_with_escape_sequences_reaches_the_frame_as_plain_text() {
+    let mut hostile = pr_doc(OPEN_PR, 2128);
+    let pr = hostile.pr.as_mut().unwrap();
+    pr.title = Some("Fix\u{1b}[31m red\u{1b}]8;;https://evil\u{7}link".into());
+    pr.blocker = Some("Unit\u{1b}[2J tests".into());
+    pr.checks = vec![board_core::protocol::LinearPrCheck {
+        name: "lint\u{1b}]0;owned\u{7}".into(),
+        bucket: "fail".into(),
+        ..Default::default()
+    }];
+    let c = cards_client().with_linear_pr(OPEN_PR, hostile);
+    let (mut d, _) = expanded(c, 120);
+    let buf = buffer_at(&mut d, WIDE, 120);
+    for cell in buf.content() {
+        assert!(
+            !cell.symbol().chars().any(|c| c.is_control()),
+            "control byte reached the frame: {:?}",
+            cell.symbol()
+        );
+    }
+    let read = state(&d).prs.get(OPEN_PR).cloned();
+    let Some(board_tui::app::PrRead::Read(doc)) = read else {
+        panic!("the PR read landed: {read:?}");
+    };
+    let pr = doc.pr.unwrap();
+    assert!(!pr.title.unwrap().contains('\u{1b}'));
+    assert!(!pr.checks[0].name.contains('\u{1b}'));
+}
+
+#[test]
+fn two_columns_from_100_cells_and_one_below() {
+    let mut d = driver_with(client(), 100);
+    press(&mut d, KeyCode::Enter);
+    let wide = render_at(&mut d, 100, TALL);
+    let props = row_of(&wide, "PROPERTIES");
+    assert!(
+        props.find("PROPERTIES").unwrap() > 50,
+        "sidebar on the right at 100: {props}"
+    );
+    let narrow = render_at(&mut d, 99, TALL);
+    let title_row = narrow.lines().position(|l| l.contains("ACTIVITY")).unwrap();
+    let props_row = narrow
+        .lines()
+        .position(|l| l.contains("PROPERTIES"))
+        .unwrap();
+    assert!(
+        props_row > title_row,
+        "one column at 99: the sidebar follows:\n{narrow}"
+    );
 }

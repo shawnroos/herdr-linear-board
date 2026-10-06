@@ -605,6 +605,28 @@ impl BoardClient for MethodNotFoundClient {
     }
 }
 
+/// A client that answers `method` as a daemon that predates it does, and
+/// passes every other call to the wrapped client.
+pub struct UnknownMethods<C>(pub C, pub &'static str);
+
+impl<C: BoardClient> BoardClient for UnknownMethods<C> {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        if method == self.1 {
+            return Err(anyhow::Error::new(RpcClientError::new(
+                1,
+                None,
+                format!("bad request: unknown method: {method}"),
+                None,
+            )));
+        }
+        self.0.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.0.subscribe()
+    }
+}
+
 /// Records URL opens and clipboard writes instead of touching the platform.
 #[derive(Default)]
 pub struct FakePlatform {
