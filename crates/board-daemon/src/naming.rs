@@ -220,6 +220,7 @@ pub(crate) fn folder_of(cwd: &str) -> Option<String> {
 pub(crate) struct Plan {
     pub renames: Vec<(LabelKind, String, String)>,
     pub forget: Vec<(LabelKind, String)>,
+    pub adopt: Vec<(LabelKind, String, String)>,
 }
 
 type Stored = HashMap<(LabelKind, String), String>;
@@ -239,7 +240,11 @@ impl Plan {
             self.renames.push((kind, id.to_string(), derived));
         } else if let Some(mine) = mine {
             let current = current.map(str::trim).unwrap_or_default();
-            if current != mine && current != derived {
+            if current == derived {
+                if current != mine {
+                    self.adopt.push((kind, id.to_string(), derived));
+                }
+            } else if current != mine {
                 self.forget.push((kind, id.to_string()));
             }
         }
@@ -352,6 +357,9 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
         }
     }
     let store = d.store.lock();
+    for (kind, id, label) in plan.adopt {
+        store.set_generated_label(&key, kind, &id, &label)?;
+    }
     for (kind, id) in plan.forget {
         store.forget_generated_label(&key, kind, &id)?;
     }

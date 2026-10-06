@@ -267,6 +267,32 @@ fn a_tab_still_carrying_the_boards_label_follows_its_binding() {
 }
 
 #[test]
+fn a_label_already_matching_its_new_name_is_still_the_boards_next_time() {
+    let fx = Fx::new();
+    let web = fx.worktree("web");
+    fx.bind(&web, "WEB-101");
+    fx.titles(&[
+        ("WEB-101", "Fix login"),
+        ("WEB-202", "Ship it"),
+        ("WEB-303", "Polish"),
+    ]);
+    let s = session(
+        vec![tab("w1:t2", "w1", 2, "2")],
+        vec![pane("w1:p2", "w1:t2", &web, Some("claude"), None)],
+    );
+    fx.sweep(&s);
+    assert_eq!(s.tab_label("w1:t2"), "WEB-101 · Fix login");
+    s.set_tab_label("w1:t2", "WEB-202 · Ship it");
+    fx.unbind(&web);
+    fx.bind(&web, "WEB-202");
+    fx.sweep(&s);
+    fx.unbind(&web);
+    fx.bind(&web, "WEB-303");
+    fx.sweep(&s);
+    assert_eq!(s.tab_label("w1:t2"), "WEB-303 · Polish");
+}
+
+#[test]
 fn a_tab_in_an_unbound_space_is_never_renamed() {
     let fx = Fx::new();
     let web = fx.worktree("web");

@@ -63,7 +63,7 @@ Two reads (`crates/board-daemon/src/linear/queries.rs`):
 - Anything beyond the caps (50 per connection, 10 labels).
 - Already fetched but dropped in mapping: `team`, `branchName`, label groups, user ids, relation ids.
 
-## 3. Board local state (SQLite v16, `schema.sql:186-318`, read via `linear.state.get`)
+## 3. Board local state (SQLite v17, `schema.sql:186-330`, read via `linear.state.get`)
 
 | Table | Fields | Shown |
 |---|---|---|
