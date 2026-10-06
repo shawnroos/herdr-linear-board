@@ -276,6 +276,9 @@ pub struct LinearState {
     pub bar_vanished: bool,
     /// The board filter's text; it hides cards it does not match.
     pub filter: String,
+    /// The mark a group alert filters by; a card shows only when it carries
+    /// this mark and matches the text.
+    pub filter_chip: Option<MarkKind>,
     /// Folded lane keys by tab key.
     pub folds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     /// The card selected when the focus last left a card, which Esc and the
@@ -410,6 +413,7 @@ impl LinearState {
             bar_at: 0,
             bar_vanished: false,
             filter: String::new(),
+            filter_chip: None,
             folds: Default::default(),
             last_card: None,
             tab_cursors: Default::default(),
@@ -1612,12 +1616,15 @@ fn filter_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         return vec![];
     };
     match k.code {
+        KeyCode::Esc if state.filtering() => state.leave_filter_cleared(width),
         KeyCode::Esc => state.deselect(),
         KeyCode::Enter | KeyCode::Tab | KeyCode::Down => state.reselect(),
         KeyCode::Left => state.move_column(-1, width),
         KeyCode::Right => state.move_column(1, width),
         KeyCode::Backspace => {
-            state.filter.pop();
+            if state.filter.pop().is_none() {
+                state.filter_chip = None;
+            }
             state.clamp();
         }
         KeyCode::Char(c) => {

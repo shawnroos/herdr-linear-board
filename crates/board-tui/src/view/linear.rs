@@ -1118,7 +1118,7 @@ fn draw_columns(
     };
 
     let inset = SLOT_PAD + CARD_INSET;
-    if !state.filter.is_empty() && counts.iter().all(|&n| n == 0) {
+    if state.filtering() && counts.iter().all(|&n| n == 0) {
         f.render_widget(
             Paragraph::new(Span::styled(
                 fit(
@@ -1270,10 +1270,11 @@ fn attention_count<'a>(
     }
 }
 
-/// The board filter, shown while it is selected or holds text.
+/// The board filter, shown while it is selected or filters anything. A
+/// group alert's chip leads in its mark's colour and is never cut.
 fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
     let selected = state.focus == Focus::Filter;
-    if !selected && state.filter.is_empty() {
+    if !selected && !state.filtering() {
         return None;
     }
     let caret = if selected { "▏" } else { "" };
@@ -1282,10 +1283,27 @@ fn filter_row(state: &LinearState, width: usize) -> Option<Line<'static>> {
     } else {
         state.theme.dim()
     };
-    Some(Line::from(Span::styled(
-        fit(&format!(" / {}{caret}", line(&state.filter)), width),
+    let mut spans = vec![Span::styled(" / ", style)];
+    let mut used = 3;
+    if let Some(kind) = state.filter_chip {
+        let chip = match kind {
+            MarkKind::Attention => "! needs you",
+            MarkKind::Question => "? question",
+            MarkKind::Suggestion => "◇ suggestion",
+            MarkKind::Done => "✓ done",
+        };
+        spans.push(Span::styled(chip, state.theme.mark(kind)));
+        spans.push(Span::styled(" ", style));
+        used += chip.width() + 1;
+    }
+    spans.push(Span::styled(
+        fit(
+            &format!("{}{caret}", line(&state.filter)),
+            width.saturating_sub(used),
+        ),
         style,
-    )))
+    ));
+    Some(Line::from(spans))
 }
 
 fn boxed(f: &mut Frame, area: Rect, title: &str, border: Style, lines: Vec<Line<'static>>) {

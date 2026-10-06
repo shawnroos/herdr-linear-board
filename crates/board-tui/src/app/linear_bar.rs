@@ -382,7 +382,7 @@ impl LinearState {
             return false;
         };
         if !self.filter_matches(identifier) {
-            self.filter.clear();
+            self.clear_filter();
         }
         if let Some(folds) = self.folds.get_mut(&tab) {
             folds.remove(&lane);
@@ -395,10 +395,30 @@ impl LinearState {
         found
     }
 
+    /// A group alert: the filter takes `kind`'s chip and keeps its text, and
+    /// the first of `marked` it still shows is selected. With none shown the
+    /// filter stays selected over the empty board.
+    fn filter_by(&mut self, kind: MarkKind, marked: &[String], width: u16) {
+        self.filter_chip = Some(kind);
+        let first = marked.iter().find(|id| self.filter_matches(id));
+        match first.cloned() {
+            Some(id) => {
+                self.jump_to(&id, width);
+            }
+            None => {
+                self.focus = Focus::Filter;
+                self.refit(width);
+            }
+        }
+    }
+
     /// The bar's tip for what is selected at `width` cells.
     pub fn bar_tip(&self, width: u16) -> String {
         match &self.focus {
             Focus::Bar(item) => self.item_tip(item),
+            Focus::Filter if self.filter_chip.is_some() => {
+                "Type to narrow by id or title · Backspace drops the chip · Esc clears".into()
+            }
             Focus::Filter => {
                 "Type to filter cards by id or title · Enter or ↓ returns to the board".into()
             }
@@ -481,6 +501,13 @@ impl LinearState {
                 format!("{n} {many}")
             }
         };
+        let go = |n: usize| {
+            if n > 1 {
+                "Enter filters the board to them"
+            } else {
+                "Enter goes to it"
+            }
+        };
         match item {
             BarItem::Keys => "Enter lists every key · ←→ chooses · ↑ back to the board".into(),
             BarItem::Filter => "Enter opens the filter".into(),
@@ -492,22 +519,18 @@ impl LinearState {
                 ),
                 None => "request no longer pending".into(),
             },
-            BarItem::NeedsYou => format!(
-                "{} you · Enter goes to the first",
-                count(
-                    self.marked(MarkKind::Attention).len(),
-                    "card needs",
-                    "cards need"
+            BarItem::NeedsYou => {
+                let n = self.marked(MarkKind::Attention).len();
+                format!("{} you · {}", count(n, "card needs", "cards need"), go(n))
+            }
+            BarItem::Question => {
+                let n = self.marked(MarkKind::Question).len();
+                format!(
+                    "{} · {}",
+                    count(n, "card has a question", "cards have questions"),
+                    go(n)
                 )
-            ),
-            BarItem::Question => format!(
-                "{} · Enter goes to the first",
-                count(
-                    self.marked(MarkKind::Question).len(),
-                    "card has a question",
-                    "cards have questions"
-                )
-            ),
+            }
             BarItem::CiFailing(id) => {
                 format!("{id}'s pull request is failing CI · Enter goes to it")
             }
@@ -601,14 +624,19 @@ fn run(app: &mut App, item: BarItem) -> Vec<Effect> {
             return vec![];
         }
         BarItem::Request(id) => state.request_issue_of(*id).map(|(_, issue)| issue),
-        BarItem::NeedsYou => state
-            .marked(MarkKind::Attention)
-            .first()
-            .map(|s| s.to_string()),
-        BarItem::Question => state
-            .marked(MarkKind::Question)
-            .first()
-            .map(|s| s.to_string()),
+        BarItem::NeedsYou | BarItem::Question => {
+            let kind = if item == BarItem::NeedsYou {
+                MarkKind::Attention
+            } else {
+                MarkKind::Question
+            };
+            let marked: Vec<String> = state.marked(kind).into_iter().map(str::to_string).collect();
+            if marked.len() > 1 {
+                state.filter_by(kind, &marked, width);
+                return vec![];
+            }
+            marked.into_iter().next()
+        }
         BarItem::CiFailing(id) => Some(id.clone()),
         BarItem::CiCollapsed => state.failing_ci().first().map(|s| s.to_string()),
     };

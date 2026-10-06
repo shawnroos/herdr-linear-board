@@ -102,18 +102,24 @@ fn return_after_esc_from_a_lane_line_selects_and_opens_nothing() {
 }
 
 #[test]
-fn esc_from_the_filter_leaves_nothing_selected_and_keeps_its_text() {
+fn esc_from_a_filter_holding_text_clears_it_and_returns_to_the_last_card() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('j'));
+    press(&mut d, KeyCode::Char('/'));
+    type_text(&mut d, "web-102");
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.linear.as_ref().unwrap().filter, "");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    let frame = without_bar(&render_at(&mut d, 140, 40), 1);
+    assert!(!frame.contains(" / "), "the filter line closes:\n{frame}");
+}
+
+#[test]
+fn esc_from_an_empty_filter_leaves_nothing_selected() {
     let mut d = tabs_driver();
     press(&mut d, KeyCode::Char('/'));
-    type_text(&mut d, "web");
     press(&mut d, KeyCode::Esc);
     assert_eq!(focus(&d), Focus::None);
-    assert_eq!(d.app.linear.as_ref().unwrap().filter, "web");
-    let frame = render_at(&mut d, 140, 40);
-    assert!(
-        frame.contains(" / web"),
-        "a filter holding text stays:\n{frame}"
-    );
     press(&mut d, KeyCode::Down);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
 }

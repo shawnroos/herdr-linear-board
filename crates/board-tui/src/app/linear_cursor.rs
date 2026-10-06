@@ -201,9 +201,25 @@ impl LinearState {
             .unwrap_or(&[])
     }
 
-    /// Whether `identifier` passes the board filter: a case-insensitive
-    /// substring of its identifier and title, as the pickers match.
+    /// Whether the filter hides anything: it holds text or a mark chip.
+    pub fn filtering(&self) -> bool {
+        self.filter_chip.is_some() || !self.filter.is_empty()
+    }
+
+    pub(super) fn clear_filter(&mut self) {
+        self.filter.clear();
+        self.filter_chip = None;
+    }
+
+    /// Whether `identifier` passes the board filter: it carries the chip's
+    /// mark, and the text is a case-insensitive substring of its identifier
+    /// and title, as the pickers match.
     pub fn filter_matches(&self, identifier: &str) -> bool {
+        if let Some(kind) = self.filter_chip {
+            if !self.marks_for(identifier).any(|m| m.kind == kind) {
+                return false;
+            }
+        }
         if self.filter.is_empty() {
             return true;
         }
@@ -228,7 +244,7 @@ impl LinearState {
             return vec![];
         };
         let mut lanes = tab_lanes(tab);
-        if !self.filter.is_empty() {
+        if self.filtering() {
             lanes.retain(|(key, _)| {
                 tab.groups.iter().any(|group| {
                     column_cards(group)
@@ -397,7 +413,7 @@ impl LinearState {
             .or(lanes.first())
         {
             Some((key, _)) => Focus::LaneLine(key.to_string()),
-            None if self.filter.is_empty() => Focus::Card(0),
+            None if !self.filtering() => Focus::Card(0),
             None => Focus::Filter,
         }
     }
@@ -577,6 +593,17 @@ impl LinearState {
         });
         self.focus = Focus::Card(last.unwrap_or(0));
         self.clamp();
+    }
+
+    /// Esc on a filter that hides anything: it clears, and the card selected
+    /// before the filter opened is selected again wherever it now sits.
+    pub(super) fn leave_filter_cleared(&mut self, width: u16) {
+        self.clear_filter();
+        let last = self.last_card.as_ref().and_then(|c| c.identifier.clone());
+        if !last.is_some_and(|id| self.select_identifier(&id)) {
+            self.reselect();
+        }
+        self.refit(width);
     }
 
     /// ← / → / Tab at `width` cells: the column `delta` away, clamped. A lane

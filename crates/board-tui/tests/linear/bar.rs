@@ -406,3 +406,199 @@ fn where_the_zones_do_not_fit_the_bar_stacks_tip_alerts_and_controls_centred() {
         assert!(lead > 0, "centred, not flush left: {row:?}\n{frame}");
     }
 }
+
+/// Every identifier the active tab shows, column by column.
+fn shown(d: &Driver) -> Vec<String> {
+    let state = d.app.linear.as_ref().unwrap();
+    (0..state.groups().len())
+        .flat_map(|c| {
+            state
+                .visible_cards(c)
+                .into_iter()
+                .map(|(_, id)| id.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn chip(d: &Driver) -> Option<MarkKind> {
+    d.app.linear.as_ref().unwrap().filter_chip
+}
+
+fn filter_text(d: &Driver) -> String {
+    d.app.linear.as_ref().unwrap().filter.clone()
+}
+
+/// WEB-101, WEB-103 and WEB-107 need you; the frontend tab shows eight cards.
+fn three_need_you() -> SharedFake {
+    let shared = SharedFake::quiet(tabs_lanes());
+    for id in ["WEB-101", "WEB-103", "WEB-107"] {
+        shared.mark_kind(id, MarkKind::Attention, "look", "agent-a");
+    }
+    shared
+}
+
+fn run_alert(d: &mut Driver, item: BarItem) {
+    render_at(d, 240, 40);
+    bar_to(d, item);
+    press(d, KeyCode::Enter);
+}
+
+#[test]
+fn return_on_a_group_alert_filters_the_board_to_its_cards_and_selects_the_first() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    render_at(&mut d, 240, 40);
+    bar_to(&mut d, BarItem::NeedsYou);
+    let frame = render_at(&mut d, 240, 40);
+    assert!(
+        bar_rows(&frame, 1)[0].contains("3 cards need you · Enter filters the board to them"),
+        "{frame}"
+    );
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(shown(&d), ["WEB-101", "WEB-103", "WEB-107"]);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    assert_eq!(chip(&d), Some(MarkKind::Attention));
+    assert_eq!(filter_text(&d), "");
+    let frame = render_at(&mut d, 240, 40);
+    assert!(
+        frame.contains(" / ! needs you"),
+        "the filter line shows the chip:\n{frame}"
+    );
+    let buf = board_tui::testkit::buffer_at(&mut d, 240, 40);
+    let (x, y) = (0..buf.area.height)
+        .find_map(|y| {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            row.find("/ ! needs you")
+                .map(|at| (row[..at].chars().count() as u16 + 2, y))
+        })
+        .expect("the chip is drawn");
+    assert_eq!(
+        buf[(x, y)].fg,
+        board_tui::theme::Theme::default().palette.red
+    );
+}
+
+#[test]
+fn text_typed_after_the_chip_narrows_to_marked_cards_matching_it() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Char('/'));
+    for c in "page".chars() {
+        press(&mut d, KeyCode::Char(c));
+    }
+    assert_eq!(
+        shown(&d),
+        ["WEB-107"],
+        "WEB-108 matches the text but not the chip"
+    );
+}
+
+#[test]
+fn backspace_on_empty_text_drops_the_chip_and_keeps_the_filter_selected() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Char('/'));
+    let frame = render_at(&mut d, 240, 40);
+    assert!(
+        bar_rows(&frame, 1)[0].contains("Backspace drops the chip · Esc clears"),
+        "{frame}"
+    );
+    press(&mut d, KeyCode::Char('d'));
+    press(&mut d, KeyCode::Backspace);
+    assert_eq!(filter_text(&d), "");
+    assert_eq!(chip(&d), Some(MarkKind::Attention), "the text goes first");
+    press(&mut d, KeyCode::Backspace);
+    assert_eq!(chip(&d), None);
+    assert_eq!(focus(&d), Focus::Filter);
+    assert_eq!(shown(&d).len(), 8);
+}
+
+#[test]
+fn esc_on_the_filter_clears_chip_and_text_and_keeps_the_selected_card() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Char('j'));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    press(&mut d, KeyCode::Char('/'));
+    press(&mut d, KeyCode::Char('w'));
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(chip(&d), None);
+    assert_eq!(filter_text(&d), "");
+    assert_eq!(shown(&d).len(), 8);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    let frame = without_bar(&render_at(&mut d, 240, 40), 1);
+    assert!(!frame.contains(" / "), "the filter line closes:\n{frame}");
+}
+
+#[test]
+fn alert_counts_stay_board_wide_while_the_chip_filters() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Char('/'));
+    for c in "page".chars() {
+        press(&mut d, KeyCode::Char(c));
+    }
+    let frame = render_at(&mut d, 240, 40);
+    assert!(bar_rows(&frame, 1)[0].contains("! 3 needs you"), "{frame}");
+}
+
+#[test]
+fn a_single_card_alert_jumps_without_filtering() {
+    let mut snapshot = tabs_lanes();
+    failing_pr(&mut snapshot, "WEB-102", 7);
+    snapshot.gh = gh("ok");
+    let shared = SharedFake::quiet(snapshot);
+    shared.mark_kind("WEB-107", MarkKind::Attention, "look", "agent-a");
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-107"));
+    assert_eq!(chip(&d), None, "! 1 needs you is one card");
+    assert_eq!(shown(&d).len(), 8);
+    run_alert(&mut d, BarItem::CiFailing("WEB-102".into()));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    assert_eq!(chip(&d), None);
+}
+
+#[test]
+fn a_single_card_alert_whose_card_the_chip_hides_clears_the_chip() {
+    let mut snapshot = tabs_lanes();
+    failing_pr(&mut snapshot, "WEB-102", 7);
+    snapshot.gh = gh("ok");
+    let shared = SharedFake::quiet(snapshot);
+    for id in ["WEB-101", "WEB-103"] {
+        shared.mark_kind(id, MarkKind::Attention, "look", "agent-a");
+    }
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    assert_eq!(chip(&d), Some(MarkKind::Attention));
+    run_alert(&mut d, BarItem::CiFailing("WEB-102".into()));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    assert_eq!(chip(&d), None);
+}
+
+#[test]
+fn a_group_alert_keeps_text_that_excludes_its_cards_and_leaves_the_filter_selected() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    for id in ["WEB-101", "WEB-104"] {
+        shared.mark_kind(id, MarkKind::Question, "which?", "agent-a");
+    }
+    let (mut d, _) = board(&shared);
+    press(&mut d, KeyCode::Char('/'));
+    for c in "WEB-102".chars() {
+        press(&mut d, KeyCode::Char(c));
+    }
+    press(&mut d, KeyCode::Enter);
+    run_alert(&mut d, BarItem::Question);
+    assert_eq!(chip(&d), Some(MarkKind::Question));
+    assert_eq!(filter_text(&d), "WEB-102");
+    assert_eq!(focus(&d), Focus::Filter);
+    assert!(shown(&d).is_empty());
+    let frame = render_at(&mut d, 240, 40);
+    assert!(frame.contains(" / ? question WEB-102"), "{frame}");
+    assert!(frame.contains("no matching issues"), "{frame}");
+}
