@@ -169,7 +169,7 @@ fn known_sockets(d: &Arc<Daemon>) -> BTreeSet<PathBuf> {
             );
         }
     }
-    sockets.extend(d.watch.lock().unwrap().level_sockets.iter().cloned());
+    sockets.extend(locked(&d.watch).level_sockets.iter().cloned());
     sockets
         .into_iter()
         .filter_map(|socket| socket.canonicalize().ok())
@@ -187,7 +187,7 @@ pub(crate) fn sweep_all(d: &Arc<Daemon>) {
             Err(error) => tracing::debug!(error = %error, "naming pass skipped a session"),
         }
     }
-    d.watch.lock().unwrap().name_sockets = named;
+    locked(&d.watch).name_sockets = named;
 }
 
 /// The repo a worktree belongs to, else the folder: a linked worktree's
@@ -216,9 +216,17 @@ pub(crate) fn folder_of(cwd: &str) -> Option<String> {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Plan {
-    pub renames: Vec<(LabelKind, String, String)>,
+    pub renames: Vec<Rename>,
     pub forget: Vec<(LabelKind, String)>,
     pub adopt: Vec<(LabelKind, String, String)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Rename {
+    pub kind: LabelKind,
+    pub id: String,
+    pub label: String,
+    pub observed: Option<String>,
 }
 
 type Stored = HashMap<(LabelKind, String), String>;
@@ -235,7 +243,12 @@ impl Plan {
     ) {
         let mine = stored.get(&(kind, id.to_string())).map(String::as_str);
         if decide(current, default, mine, &derived) {
-            self.renames.push((kind, id.to_string(), derived));
+            self.renames.push(Rename {
+                kind,
+                id: id.to_string(),
+                label: derived,
+                observed: current.map(str::to_string),
+            });
         } else if let Some(mine) = mine {
             let current = current.map(str::trim).unwrap_or_default();
             if current == derived {
@@ -336,7 +349,17 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
     let plan = plan(&spaces, &tabs, &panes, &boards, &stored, |pane| {
         scope_of(d, &memo, &session, pane)
     });
-    for (kind, id, label) in plan.renames {
+    let now = current_labels(&mut client, &plan.renames)?;
+    for Rename {
+        kind,
+        id,
+        label,
+        observed,
+    } in plan.renames
+    {
+        if now.get(&(kind, id.clone())) != Some(&observed) {
+            continue;
+        }
         let renamed = match kind {
             LabelKind::Tab => client.tab_rename(&TabRenameParams {
                 tab_id: id.clone(),
@@ -378,6 +401,26 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
         }
     }
     Ok(true)
+}
+
+/// The planning lookups take long enough for a hand rename to land, so each
+/// target's label is read again right before the writes.
+fn current_labels(
+    client: &mut board_herdr::HerdrClient,
+    renames: &[Rename],
+) -> anyhow::Result<HashMap<(LabelKind, String), Option<String>>> {
+    let mut now = HashMap::new();
+    if renames.iter().any(|r| r.kind == LabelKind::Tab) {
+        for tab in client.tab_list(None)? {
+            now.insert((LabelKind::Tab, tab.tab_id), Some(tab.label));
+        }
+    }
+    if renames.iter().any(|r| r.kind == LabelKind::Pane) {
+        for pane in client.pane_list(None)? {
+            now.insert((LabelKind::Pane, pane.pane_id), pane.label);
+        }
+    }
+    Ok(now)
 }
 
 /// One pass's lookups, so panes sharing a directory or an issue share them.

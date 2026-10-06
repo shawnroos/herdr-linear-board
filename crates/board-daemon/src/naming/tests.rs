@@ -1,5 +1,6 @@
 use super::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use board_core::db::{BoardPanePlacement, NewBoardPane, SpaceBinding};
@@ -13,6 +14,10 @@ use crate::testkit::{self, FakeHerdr};
 struct Session {
     tabs: Arc<Mutex<Vec<Value>>>,
     panes: Arc<Mutex<Vec<Value>>>,
+    refuse: Arc<AtomicBool>,
+    /// Applied right after the next `tab.list` reply leaves: a hand rename
+    /// landing between a pass's read and its write.
+    hand_rename: Arc<Mutex<Option<(String, String)>>>,
     herdr: FakeHerdr,
 }
 
@@ -34,13 +39,18 @@ fn pane(id: &str, tab: &str, cwd: &str, agent: Option<&str>, label: Option<&str>
 fn session(tabs: Vec<Value>, panes: Vec<Value>) -> Session {
     let tabs = Arc::new(Mutex::new(tabs));
     let panes = Arc::new(Mutex::new(panes));
+    let refuse = Arc::new(AtomicBool::new(false));
+    let hand_rename: Arc<Mutex<Option<(String, String)>>> = Arc::default();
     let (t1, t2, p1, p2) = (tabs.clone(), tabs.clone(), panes.clone(), panes.clone());
+    let (r1, r2, h1) = (refuse.clone(), refuse.clone(), hand_rename.clone());
     let herdr = testkit::herdr_server()
         .on("tab.list", move |req| {
-            testkit::reply(
-                req,
-                json!({"type": "tab_list", "tabs": *t1.lock().unwrap()}),
-            )
+            let mut tabs = t1.lock().unwrap();
+            let response = testkit::reply(req, json!({"type": "tab_list", "tabs": *tabs}));
+            if let Some((id, label)) = h1.lock().unwrap().take() {
+                tabs.iter_mut().find(|t| t["tab_id"] == id).unwrap()["label"] = json!(label);
+            }
+            response
         })
         .on("pane.list", move |req| {
             testkit::reply(
@@ -49,6 +59,9 @@ fn session(tabs: Vec<Value>, panes: Vec<Value>) -> Session {
             )
         })
         .on("tab.rename", move |req| {
+            if r1.load(Ordering::SeqCst) {
+                return testkit::error(req, "refused", "no");
+            }
             let mut tabs = t2.lock().unwrap();
             let tab = tabs
                 .iter_mut()
@@ -58,6 +71,9 @@ fn session(tabs: Vec<Value>, panes: Vec<Value>) -> Session {
             testkit::reply(req, json!({"type": "tab_info", "tab": tab.clone()}))
         })
         .on("pane.rename", move |req| {
+            if r2.load(Ordering::SeqCst) {
+                return testkit::error(req, "refused", "no");
+            }
             let mut panes = p2.lock().unwrap();
             let pane = panes
                 .iter_mut()
@@ -67,7 +83,13 @@ fn session(tabs: Vec<Value>, panes: Vec<Value>) -> Session {
             testkit::reply(req, json!({"type": "pane_info", "pane": pane.clone()}))
         })
         .serve();
-    Session { tabs, panes, herdr }
+    Session {
+        tabs,
+        panes,
+        refuse,
+        hand_rename,
+        herdr,
+    }
 }
 
 impl Session {
@@ -290,6 +312,54 @@ fn a_label_already_matching_its_new_name_is_still_the_boards_next_time() {
     fx.bind(&web, "WEB-303");
     fx.sweep(&s);
     assert_eq!(s.tab_label("w1:t2"), "WEB-303 · Polish");
+}
+
+#[test]
+fn a_hand_rename_landing_after_the_read_is_not_overwritten() {
+    let fx = Fx::new();
+    let web = fx.worktree("web");
+    fx.bind(&web, "WEB-101");
+    let s = session(
+        vec![tab("w1:t2", "w1", 2, "2")],
+        vec![pane("w1:p2", "w1:t2", &web, Some("claude"), None)],
+    );
+    *s.hand_rename.lock().unwrap() = Some(("w1:t2".into(), "scratch".into()));
+    fx.sweep(&s);
+    assert_eq!(s.tab_label("w1:t2"), "scratch");
+    assert_eq!(s.pane_label("w1:p2"), "WEB-101 · claude");
+    let mine =
+        fx.d.store
+            .lock()
+            .generated_labels(&s.socket().to_string_lossy())
+            .unwrap();
+    assert!(
+        !mine.iter().any(|(kind, _, _)| *kind == LabelKind::Tab),
+        "a hand-set tab label is not the board's: {mine:?}"
+    );
+}
+
+#[test]
+fn a_refused_rename_leaves_the_stored_label_unchanged() {
+    let fx = Fx::new();
+    let web = fx.worktree("web");
+    fx.bind(&web, "WEB-101");
+    let s = session(
+        vec![tab("w1:t2", "w1", 2, "2")],
+        vec![pane("w1:p2", "w1:t2", &web, Some("claude"), None)],
+    );
+    fx.sweep(&s);
+    let key = s.socket().to_string_lossy().into_owned();
+    let before = fx.d.store.lock().generated_labels(&key).unwrap();
+    assert_eq!(before.len(), 2);
+    s.refuse.store(true, Ordering::SeqCst);
+    fx.unbind(&web);
+    fx.bind(&web, "WEB-202");
+    fx.sweep(&s);
+    assert_eq!(s.herdr.count("tab.rename"), 2);
+    assert_eq!(s.herdr.count("pane.rename"), 2);
+    assert_eq!(s.tab_label("w1:t2"), "WEB-101");
+    assert_eq!(s.pane_label("w1:p2"), "WEB-101 · claude");
+    assert_eq!(fx.d.store.lock().generated_labels(&key).unwrap(), before);
 }
 
 #[test]

@@ -373,7 +373,9 @@ impl Daemon {
     }
 
     pub fn watch_levels(&self, socket: PathBuf) {
-        self.watch.lock().unwrap().level_sockets.insert(socket);
+        crate::sync::locked(&self.watch)
+            .level_sockets
+            .insert(socket);
     }
 
     #[cfg(test)]

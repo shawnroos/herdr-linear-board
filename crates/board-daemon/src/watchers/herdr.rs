@@ -227,7 +227,7 @@ pub(super) struct Want {
 /// first `pane.context` read.
 fn wanted_watches(d: &Arc<Daemon>) -> HashMap<PathBuf, Want> {
     let subscribed = d.subscribed();
-    let mut watch = d.watch.lock().unwrap();
+    let mut watch = crate::sync::locked(&d.watch);
     if !subscribed {
         watch.level_sockets.clear();
     }
