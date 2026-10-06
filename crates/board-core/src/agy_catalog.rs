@@ -64,6 +64,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::capability::ModelInfo;
+use crate::cli_child::{kill_group_and_reap, spawn_in_own_group};
 use crate::protocol::Effort;
 
 /// Hard cap on catalog entries parsed from one CLI run.
@@ -206,8 +207,9 @@ pub fn load_from_cli(agy_bin: &str) -> Option<Vec<ModelInfo>> {
 /// [`CLI_TIMEOUT`]).
 ///
 /// The run is bounded in both dimensions a pathological CLI could exhaust:
-/// - **wall clock**: the child is killed (and reaped) when the deadline
-///   passes, so a hung `agy` cannot block the daemon forever;
+/// - **wall clock**: the child's process group is killed (and the child
+///   reaped) when the deadline passes, so a hung `agy`, or a process it
+///   started that still holds stdout, cannot block the daemon forever;
 /// - **stdout**: a reader thread drains stdout into a buffer capped at
 ///   [`MAX_OUTPUT_BYTES`] (stdin/stderr are null, so no other pipe can fill
 ///   and deadlock the child), so an unparsable firehose cannot exhaust
@@ -217,13 +219,14 @@ pub fn load_from_cli(agy_bin: &str) -> Option<Vec<ModelInfo>> {
 /// read, a non-zero exit, or a lost reader thread.
 pub fn load_from_cli_bounded(agy_bin: &str, timeout: Duration) -> Option<Vec<ModelInfo>> {
     let argv = models_argv(agy_bin);
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = spawn_in_own_group(
+        Command::new(&argv[0])
+            .args(&argv[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
@@ -250,12 +253,12 @@ pub fn load_from_cli_bounded(agy_bin: &str, timeout: Duration) -> Option<Vec<Mod
     let deadline = Instant::now() + timeout;
     let stdout = match rx.recv_timeout(timeout) {
         Ok(Some(buffer)) => buffer,
-        // Timeout, oversized output, or read failure: kill the child so its
-        // pipe closes, reap it, and join the reader. The channel is dropped
-        // first so a reader blocked on a final send cannot hang the join.
+        // Timeout, oversized output, or read failure: kill the child's process
+        // group so every pipe writer dies, reap it, and join the reader. The
+        // channel is dropped first so a reader blocked on a final send cannot
+        // hang the join.
         Ok(None) | Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group_and_reap(&mut child);
             drop(rx);
             let _ = reader.join();
             return None;
@@ -278,8 +281,7 @@ pub fn load_from_cli_bounded(agy_bin: &str, timeout: Duration) -> Option<Vec<Mod
     let status = match status {
         Some(status) => status,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group_and_reap(&mut child);
             return None;
         }
     };

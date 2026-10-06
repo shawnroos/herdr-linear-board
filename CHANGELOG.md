@@ -29,6 +29,10 @@ All notable changes to this project are documented here. The format is based on
 
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The board works with Herdr 0.9.0 through 0.9.3.
 
+### Fixed
+
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) fix: An opencode or agy model lookup that hangs can no longer stall the board when the CLI left a helper process running.
+
 ## [0.17.0] - 2026-09-13
 
 ### Added

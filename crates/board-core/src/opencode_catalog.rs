@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::capability::ModelInfo;
+use crate::cli_child::{kill_group_and_reap, spawn_in_own_group};
 use crate::protocol::Effort;
 
 /// Hard cap on catalog entries parsed from one CLI run.
@@ -285,8 +286,9 @@ pub fn load_from_cli(opencode_bin: &str) -> Option<Vec<ModelInfo>> {
 /// [`CLI_TIMEOUT`]).
 ///
 /// The run is bounded in both dimensions a pathological CLI could exhaust:
-/// - **wall clock**: the child is killed (and reaped) when the deadline
-///   passes, so a hung `opencode` cannot block the daemon forever;
+/// - **wall clock**: the child's process group is killed (and the child
+///   reaped) when the deadline passes, so a hung `opencode`, or a process it
+///   started that still holds stdout, cannot block the daemon forever;
 /// - **stdout**: a reader thread drains stdout into a buffer capped at
 ///   [`MAX_OUTPUT_BYTES`] (stdin/stderr are null, so no other pipe can fill
 ///   and deadlock the child), so an unparsable firehose cannot exhaust memory.
@@ -295,13 +297,14 @@ pub fn load_from_cli(opencode_bin: &str) -> Option<Vec<ModelInfo>> {
 /// or a lost reader thread — the caller keeps the static fallback either way.
 pub fn load_from_cli_bounded(opencode_bin: &str, timeout: Duration) -> Option<Vec<ModelInfo>> {
     let argv = models_argv(opencode_bin);
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = spawn_in_own_group(
+        Command::new(&argv[0])
+            .args(&argv[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
@@ -328,12 +331,12 @@ pub fn load_from_cli_bounded(opencode_bin: &str, timeout: Duration) -> Option<Ve
     let deadline = Instant::now() + timeout;
     let stdout = match rx.recv_timeout(timeout) {
         Ok(Some(buffer)) => buffer,
-        // Timeout, oversized output, or read failure: kill the child so its
-        // pipe closes, reap it, and join the reader. The channel is dropped
-        // first so a reader blocked on a final send cannot hang the join.
+        // Timeout, oversized output, or read failure: kill the child's process
+        // group so every pipe writer dies, reap it, and join the reader. The
+        // channel is dropped first so a reader blocked on a final send cannot
+        // hang the join.
         Ok(None) | Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group_and_reap(&mut child);
             drop(rx);
             let _ = reader.join();
             return None;
@@ -356,8 +359,7 @@ pub fn load_from_cli_bounded(opencode_bin: &str, timeout: Duration) -> Option<Ve
     let status = match status {
         Some(status) => status,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group_and_reap(&mut child);
             return None;
         }
     };

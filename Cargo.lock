@@ -143,6 +143,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "directories",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

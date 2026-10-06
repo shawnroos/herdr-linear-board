@@ -358,6 +358,60 @@ fn load_from_cli_bounded_times_out_and_kills_the_child() {
     panic!("fixture PID file missing after 3 attempts");
 }
 
+/// `ps` reports a zombie as `Z`; an orphaned grandchild is reaped by init, not
+/// by the loader, so a zombie counts as gone here.
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|out| {
+            let stat = String::from_utf8_lossy(&out.stdout);
+            let stat = stat.trim();
+            !stat.is_empty() && !stat.starts_with('Z')
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+#[test]
+fn load_from_cli_bounded_kills_a_grandchild_holding_stdout() {
+    // The CLI backgrounds a grandchild that inherits stdout, then hangs. Killing
+    // only the direct child would leave the grandchild holding the pipe, and
+    // the loader would wait for it instead of returning at its deadline.
+    // Retried for the same starvation reason as the timeout test.
+    for attempt in 1..=3u32 {
+        let dir = tempfile::tempdir().unwrap();
+        let gc_file = dir.path().join("grandchild.pid");
+        let bin = dir.path().join("agy-grandchild-fixture");
+        write_fixture(
+            &bin,
+            &format!(
+                "sleep 60 &\necho \"$!\" > \"{}\"\nexec sleep 60\n",
+                gc_file.display()
+            ),
+        );
+        let started = Instant::now();
+        let models = load_from_cli_bounded(bin.to_str().unwrap(), Duration::from_secs(2));
+        let elapsed = started.elapsed();
+        assert!(models.is_none(), "a hung CLI must yield None");
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "a grandchild holding stdout must not stall the loader (took {elapsed:?})"
+        );
+        if let Some(gc) = wait_for_pid_file(&gc_file) {
+            assert!(
+                !process_running(gc),
+                "the grandchild (pid {gc}) must be killed with the CLI's process group"
+            );
+            return;
+        }
+        eprintln!("attempt {attempt}/3: grandchild PID file never appeared; retrying");
+    }
+    panic!("grandchild PID file missing after 3 attempts");
+}
+
 #[cfg(unix)]
 #[test]
 fn load_from_cli_bounded_rejects_oversized_stdout_and_kills_the_child() {
