@@ -210,7 +210,7 @@ flowchart TB
 |---|---|---|
 | 1 | U1, U2, U3, U5 | Separate areas: the `board-herdr` gate, a new theme module, daemon + protocol fields, and the reducer. No shared files except `CHANGELOG.md`, where each adds its own line |
 | 2 | U4, U6 | U4 is daemon-only and U6 is TUI views; they touch no common file |
-| 3 | U7 → U8 → U12 → U9 | Sequential: all three edit `view/linear.rs` and `app/linear.rs`, so parallel branches would conflict on every merge |
+| 3 | U7 → U8 → U12 → U13 → U9 | Sequential: all three edit `view/linear.rs` and `app/linear.rs`, so parallel branches would conflict on every merge |
 | 4 | U10 | Needs U1's probe findings and U9's narrow issue view |
 | 5 | U11 | Edits `watchers/herdr.rs` after U10 and uses U1's recorded default tab label |
 
@@ -539,6 +539,35 @@ Each wave-1 and wave-2 unit runs in its own worktree. `CHANGELOG.md` and `docs/t
 - At 50 rows, a compact column shows more cards than the default.
 
 **Verification:** layout, snapshot and contract tests pass; classic snapshots unchanged.
+
+### U13. Filter the board from a group alert
+
+**Goal:** Return on a group alert (`! N needs you`, `? N question`) filters the board to those cards.
+
+**Requirements:** R9 (as extended by Shawn, 2026-10-06), R7.
+
+**Dependencies:** U12. Runs before U9.
+
+**Files:**
+- `crates/board-tui/src/app/linear.rs`, `crates/board-tui/src/app/linear_bar.rs` (alert action), the filter model U5 added
+- `crates/board-tui/src/view/linear.rs` (chip on the filter line)
+- `crates/board-tui/tests/linear/bar.rs`, `tests/linear/focus.rs`, snapshots
+- `docs/tui-interactions.md`, `CHANGELOG.md`
+
+**Approach:**
+- The filter gains an optional mark chip (needs-you or question) alongside its text. Matching is chip AND text.
+- A single-card alert keeps U8's jump. A group alert sets the chip, clears nothing else, selects the first matching card in board order, and opens the filter line.
+- Esc on the filter clears chip and text; Backspace on an empty text clears the chip. Clearing restores the board and keeps the selected card.
+- Alert counts ignore the filter.
+
+**Test scenarios:**
+- Return on `! 3 needs you` leaves exactly the three `!` cards visible and selects the first.
+- Typing `login` after the chip narrows to `!` cards matching `login`.
+- Backspace on empty text removes the chip; Esc clears both and the selection stays on the same card.
+- With the chip set, the alert still reads `! 3 needs you`.
+- A single-card alert still jumps without filtering.
+
+**Verification:** bar and focus tests pass; snapshots re-recorded and listed.
 
 ### U9. Issue view
 

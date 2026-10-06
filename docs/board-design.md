@@ -112,7 +112,7 @@ When nothing is selected, an arrow key, Tab or Return selects again in the last 
 
 - **Zones:** global controls (left), context tip (centre, with `md-information_outline`), board-wide alerts (right).
 - **Tip:** follows the selection. It shows the card's signals ("needs you and has a question · Enter opens it"), the lane fold action, the filter help, or "nothing selected".
-- **Alerts:** cards with `!`, cards with `?`, failing CI. Each one jumps to its card and unfolds its lane.
+- **Alerts:** cards with `!`, cards with `?`, failing CI. An alert for one card jumps to it and unfolds its lane. A group alert (`! 3 needs you`, `? 2 question`) filters the board to those cards instead (Shawn, 2026-10-06): the filter line shows a chip (`! needs you`), only matching cards stay, the first is selected, and text typed after the chip narrows further. Esc on the filter or Backspace on the chip clears it. Alert counts stay board-wide while filtered.
 - **`?` focuses the bar.** ←→ move between items, Return runs one, ↑ goes back, Esc clears the selection. It always opens on the first item.
 - **Narrow screens:** when the three zones don't fit on one row, the bar stacks into three centred rows: tip, alerts, controls.
 
