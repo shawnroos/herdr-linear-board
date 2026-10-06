@@ -108,7 +108,6 @@ impl Default for WatchTiming {
 /// changing or losing one session never resets a healthy session's stream.
 pub(super) struct SocketWatch {
     pub(super) panes: Vec<String>,
-    /// Also subscribed to focus and layout events for a board's level.
     pub(super) levels: bool,
     pub(super) generation: u64,
     pub(super) events: Option<Box<dyn WatchEventStream>>,

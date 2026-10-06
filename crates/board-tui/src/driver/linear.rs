@@ -592,8 +592,6 @@ impl Driver {
         self.handle(Msg::LocalStateChanged(signals));
     }
 
-    /// The runtime's coalesced `pane_layout_changed` workspaces for one loop
-    /// iteration.
     pub fn on_pane_layout_changed(
         &mut self,
         workspaces: std::collections::BTreeSet<Option<String>>,

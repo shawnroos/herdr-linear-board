@@ -69,7 +69,6 @@ impl LevelState {
         resolved.cloned()
     }
 
-    /// The issue the board should show, or `None` for the space board.
     pub fn wanted(&self) -> Option<String> {
         if self.dismissed {
             return None;

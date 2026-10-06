@@ -142,6 +142,10 @@ fn a_board_split_beside_a_bound_agent_shows_its_issue_narrow_and_read_only() {
     assert_eq!(l.split_issue().as_deref(), Some("WEB-3302"));
     assert_eq!(l.d.app.screen, Screen::LinearDetail);
     assert!(
+        render_at(&mut l.d, 200, 50).contains("Read only beside a split"),
+        "the bar tip does not say the split level is read only"
+    );
+    assert!(
         !board_tui::view::issue_buttons_shown(&l.d.app),
         "a 200-cell split level drew the wide view's buttons"
     );

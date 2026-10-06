@@ -1739,6 +1739,10 @@ fn tip_text(app: &App, state: &LinearState, width: u16) -> String {
     if !on_issue(app) {
         return state.bar_tip(width);
     }
+    if state.at_split() {
+        return "Read only beside a split · Enter opens a linked issue · Esc shows the space board"
+            .into();
+    }
     if width < super::linear_issue::MODAL_MIN {
         return format!(
             "Esc goes back · Enter opens the row · e and o need {} cells",
