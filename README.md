@@ -1,7 +1,7 @@
 # herdr-board
 
 ![Rust](https://img.shields.io/badge/rust-edition%202021-orange.svg)
-![herdr 0.9.0](https://img.shields.io/badge/herdr-0.9.0-8a2be2)
+![herdr 0.9.0–0.9.3](https://img.shields.io/badge/herdr-0.9.0--0.9.3-8a2be2)
 ![board protocol v1 · schema v17](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v17-blue.svg)
 ![platforms: linux, macOS](https://img.shields.io/badge/platforms-linux%2C%20macOS-informational)
 

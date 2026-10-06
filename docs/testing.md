@@ -1,7 +1,7 @@
 # Testing
 
 How herdr-board is tested, and how to add tests for a change. The final contract is board
-protocol v1, SQLite schema v17, and Herdr 0.9.0 / protocol 22. Four layers, cheap and hermetic
+protocol v1, SQLite schema v17, and Herdr 0.9.0–0.9.3 / protocol 22. Four layers, cheap and hermetic
 first, expensive and live last:
 
 ```
@@ -38,7 +38,7 @@ The stable ownership layout is responsibility-oriented, not a file manifest:
 
 The public core suites cover deterministic engine decisions, schema-v14 migrations and atomic
 run units of work, protocol-v1 serde, typed client boundaries, configuration, prompt assembly,
-harness planning, and scoped-board behavior. Herdr suites cover the Herdr 0.9.0 / protocol 22
+harness planning, and scoped-board behavior. Herdr suites cover the Herdr 0.9.0–0.9.3 / protocol 22
 event and socket contract against an in-process fake server. Daemon private suites cover queue
 claims, spawn/finalization atomicity, pane placement, configured and managed launch
 characterization, request routing, watcher signals, timeout handling, per-session recovery, and
@@ -67,7 +67,7 @@ a dozen near-identical hand-rolled setups that drift apart and then hide bugs in
 
 ### Compatibility-gate coverage
 
-The Herdr 0.9.0 / protocol 22 upgrade is tested at every compatibility-sensitive boundary, not
+The Herdr 0.9.0–0.9.3 / protocol 22 upgrade is tested at every compatibility-sensitive boundary, not
 only at daemon startup: `daemon.status` checks the reported connection state; the supervisor checks
 compatibility before `events.subscribe` and its acknowledgement/snapshot generation; detached
 notifications check before `notification.show`; dispatch checks before workspace resolution and
@@ -132,7 +132,7 @@ The current parity/schema-v14 change is specified test-first:
   card move that leaves the selection untouched, and scenario 36 covers the managed Antigravity
   launch contract (self-minted conversation capture, `--conversation` retry/rescue, pinned
   permission modes, fixed-effort models, anchorless tabs). The managed and configured
-  scenarios use the current Herdr 0.9.0 / protocol 22 contract; their files,
+  scenarios use the current Herdr 0.9.0–0.9.3 / protocol 22 contract; their files,
   `16-managed-p17.sh` and `17-configured-p17-runner.sh`, retain the historical `p17` names.
   CRUD/audit semantics stay in hermetic core/daemon/CLI tests; the live suite does not duplicate
   every management RPC.
@@ -459,7 +459,7 @@ E2E_REAL_CODEX=1 e2e/real-codex-smoke.sh  # one authorized Codex/low attempt; ma
 E2E_REAL_OPENCODE=1 e2e/real-opencode-smoke.sh  # one authorized OpenCode attempt; effort only via E2E_REAL_OPENCODE_EFFORT (default none — nemotron has no variants; effort rides the OPENCODE_CONFIG_CONTENT agent config, never argv); may incur cost
 ```
 
-- Standard suite requires **Herdr 0.9.0–0.9.3 / socket protocol 22**, `python3`, Bash ≥4, and `cargo`. It supports Linux and macOS; `run-all.sh` resolves Herdr and Bash absolutely before narrowing `PATH`. Every scenario preflights both `herdr --version` and a socket `ping`; older and unknown/future protocols fail before dispatch. The forced-build standard suite is configured to exercise scenarios 01–46 (41 excepted: it starts the real `claude`) without provider calls; this is coverage guidance, not a claim that a full live run has passed. The real-Pi smoke additionally verifies Pi's runtime default model, current Herdr integration, and WezTerm. The real-Claude smoke is an intended-contract validation only: it requires a logged-in real Claude CLI plus current Herdr Claude integration v7, stages minimal completed onboarding/theme, exact workspace trust, the current Claude integration hook, credentials, and approved `remote-settings.json` under `/tmp` so startup dialogs cannot consume `agent.prompt`; no broad personal Claude state is copied, and it has   no retry or fallback. The real-Codex smoke is the same intended-contract shape for the Codex built-in: it requires the current Herdr Codex integration and hook, stages only codex auth/config/hook under a disposable `CODEX_HOME`, and authorizes one low-effort attempt with no retry or fallback. The real-OpenCode smoke is the same intended-contract shape for the OpenCode built-in: it requires the current Herdr OpenCode integration, stages only opencode config/auth under disposable `XDG_CONFIG_HOME`/`XDG_DATA_HOME` dirs, uses the env-selected model (default `opencode/nemotron-3-ultra-free`, which declares no variants — so no effort is passed by default and the model stays `-m`) and the permission mode to `--auto`; an effort can be opted into via `E2E_REAL_OPENCODE_EFFORT` (the root/TUI has no `--variant`, so the effort is transported through the `OPENCODE_CONFIG_CONTENT` agent-config env persisted in the run's launch spec, which the smoke validates as the exact `herdr-board` model+variant JSON; the default model has no variants, so only a model that supports the chosen effort works — override `E2E_REAL_OPENCODE_MODEL` accordingly). It authorizes one attempt with no retry or fallback. Their independent identity implementations remain Linux-only and are outside the portable provider-free gate. All four opt-ins compare user/repository state and clean exact resources. `run-all.sh` builds
+- Standard suite requires **Herdr 0.9.0–0.9.3 / socket protocol 22**, `python3`, Bash ≥4, and `cargo`. It supports Linux and macOS; `run-all.sh` resolves Herdr and Bash absolutely before narrowing `PATH`. Every scenario preflights both `herdr --version` and a socket `ping`; older and unknown/future protocols fail before dispatch. The forced-build standard suite is configured to exercise scenarios 01–47 (41 excepted: it starts the real `claude`) without provider calls; this is coverage guidance, not a claim that a full live run has passed. The real-Pi smoke additionally verifies Pi's runtime default model, current Herdr integration, and WezTerm. The real-Claude smoke is an intended-contract validation only: it requires a logged-in real Claude CLI plus current Herdr Claude integration v7, stages minimal completed onboarding/theme, exact workspace trust, the current Claude integration hook, credentials, and approved `remote-settings.json` under `/tmp` so startup dialogs cannot consume `agent.prompt`; no broad personal Claude state is copied, and it has   no retry or fallback. The real-Codex smoke is the same intended-contract shape for the Codex built-in: it requires the current Herdr Codex integration and hook, stages only codex auth/config/hook under a disposable `CODEX_HOME`, and authorizes one low-effort attempt with no retry or fallback. The real-OpenCode smoke is the same intended-contract shape for the OpenCode built-in: it requires the current Herdr OpenCode integration, stages only opencode config/auth under disposable `XDG_CONFIG_HOME`/`XDG_DATA_HOME` dirs, uses the env-selected model (default `opencode/nemotron-3-ultra-free`, which declares no variants — so no effort is passed by default and the model stays `-m`) and the permission mode to `--auto`; an effort can be opted into via `E2E_REAL_OPENCODE_EFFORT` (the root/TUI has no `--variant`, so the effort is transported through the `OPENCODE_CONFIG_CONTENT` agent-config env persisted in the run's launch spec, which the smoke validates as the exact `herdr-board` model+variant JSON; the default model has no variants, so only a model that supports the chosen effort works — override `E2E_REAL_OPENCODE_MODEL` accordingly). It authorizes one attempt with no retry or fallback. Their independent identity implementations remain Linux-only and are outside the portable provider-free gate. All four opt-ins compare user/repository state and clean exact resources. `run-all.sh` builds
   the release binary once; scenarios reuse it. Every scenario boots and cleans its own ephemeral
   session; scenario 03 additionally owns an independently tokened secondary session.
 - Exit codes: scenario `0` = PASS, `3` = SKIP, other = FAIL; `run-all.sh` exits

@@ -22,8 +22,8 @@ in root Cargo.toml. Never edit another crate. Phase A creates all five crates co
 
 ## Contract versions and source ownership
 
-The final compatibility matrix is: board protocol **v1**, SQLite schema **v17**, and exactly
-Herdr **0.9.0 / socket protocol 22**. The versioned source of truth is `schema.sql` for fresh
+The final compatibility matrix is: board protocol **v1**, SQLite schema **v17**, and
+Herdr **0.9.0–0.9.3 / socket protocol 22**. The versioned source of truth is `schema.sql` for fresh
 SQLite databases and `board-core::db` migrations for upgrades; `board-core::protocol` owns the
 board wire DTOs; `board-herdr` owns only the verified Herdr socket surface; and `docs/design.md`
 and `docs/protocol.md` explain behavior rather than defining duplicate serde shapes. Schema v15 adds

@@ -1,6 +1,6 @@
 -- herdr-board SQLite schema (WAL mode; boardd is the only writer).
 -- This file is the CURRENT (schema v17) shape: a fresh DB is created directly
--- from it and stamped `PRAGMA user_version = 16`. Existing databases are upgraded
+-- from it and stamped `PRAGMA user_version = 17`. Existing databases are upgraded
 -- by migrations in board-core/src/db/migrations.rs (kept in sync with this file).
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
