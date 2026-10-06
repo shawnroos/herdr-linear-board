@@ -494,8 +494,10 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   in one pane's border, in the **caller's own** herdr session. `origin_socket` names that session
   exactly as it does for `run.focus` (only the caller knows which Herdr it runs inside); the path is
   canonicalized and then opened through the same gated connect as every other operation, so the
-  pinned Herdr 0.9.0 / protocol 22 check runs before the rename. Maps to herdr `pane.rename`, and
-  touches no board state — the daemon exists here only because it owns every Herdr call. The
+  pinned Herdr 0.9.0 / protocol 22 check runs before the rename. Maps to herdr `pane.rename`. The
+  one board state it touches is the generated-label store: from then on the pane's label belongs to
+  its client, and the daemon's tab and split naming never renames that pane (`docs/herdr.md`, "Tab
+  and split names"). The
   daemon strips control and format characters (escapes, newlines, bidi overrides, zero-width marks)
   from `title` before the rename, because any socket client can send one; brackets are kept.
   Error 1 for an empty `pane_id`, error 4 for an unavailable socket, a socket that fails the

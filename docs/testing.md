@@ -137,7 +137,7 @@ The current parity/schema-v14 change is specified test-first:
   CRUD/audit semantics stay in hermetic core/daemon/CLI tests; the live suite does not duplicate
   every management RPC.
 
-The authoritative [`e2e/README.md`](../e2e/README.md) catalog currently covers scenarios 01–46,
+The authoritative [`e2e/README.md`](../e2e/README.md) catalog currently covers scenarios 01–47,
 and `e2e/run-all.sh` includes every numbered script. Scenarios 18–32 extend the live coverage with
 nullable/validation, late-start and recovery, active-run timing, TUI layout and board transfers,
 pane rescue, Pi catalog behavior, diagnostics, pane reuse, the managed Codex launch contract

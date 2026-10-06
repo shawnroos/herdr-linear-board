@@ -942,7 +942,9 @@ notes, show-requests and Linear activity — in SQLite, and is the only writer o
 [board-owns-the-store.md](board-owns-the-store.md)). The TUI's own writes are the person's
 answers to agents (clearing the marks a card's detail showed, accepting or rejecting a
 show-request, accepting a suggestion), binding a space to a project or view, and binding a
-worktree. Its only herdr writes are its own pane title and focusing a pane the person chose.
+worktree. Its only herdr writes are its own pane title and focusing a pane the person chose. The
+daemon names every tab and split in a bound space from its scope and never replaces a label set by
+hand (`docs/herdr.md`, "Tab and split names").
 
 **Local state and the import.** Bindings and the grouping config used to live in the work
 plugin's store, `~/.claude/work`. `board import work-store [--dry-run]` copies them into the

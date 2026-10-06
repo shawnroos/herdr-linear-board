@@ -368,6 +368,48 @@ never used as a space identity.
 connecting to the `origin_socket` the client sends, so the board needs no session setting of
 its own.
 
+## Tab and split names
+
+The daemon names every tab and pane in a Linear-bound space from its scope
+(`crates/board-daemon/src/naming.rs`, `docs/board-design.md` §8):
+
+| Scope | Name |
+|---|---|
+| Tab with a pane in a worktree bound to an issue | `WEB-101 · <title>` (`WEB-101` until the space's Linear read has the title) |
+| Pane in a bound worktree | `WEB-101 · <agent>`, or `WEB-101` with no agent |
+| Anything else | `<repo or folder> · <agent>`, or the folder alone |
+
+A tab takes the first of its panes, in `pane.list` order, that is bound, else its first pane. The
+repo is the main checkout's folder for a linked worktree. Names are capped at 40 cells with `…`
+and stripped of control and format characters.
+
+herdr does not record who set a label, so the daemon stores each label it writes in
+`linear_generated_labels`, keyed by the canonical session socket, `tab`/`pane` and id. It
+renames only a label that is blank (a pane's `null`), herdr's default (a tab's `number` as a
+string, see "Herdr 0.9.3 compatibility") or equal to the stored label. Any other label is hand-set:
+it is never touched, and the stored label is dropped. `pane.rename` fires no event, so each pass
+reads the current labels with `tab.list` and `pane.list`.
+
+**One owner for a board's own label.** A board keeps its own pane title (`Linear: …`), which
+`scripts/open-board.sh` matches to find it. The daemon never names a pane in `linear_board_panes`,
+and `pane.set_title` drops the pane's stored label, so a board that titles itself owns its label
+from then on. A tab holding only board panes is left alone. A `board tui --session` board sends no
+title and is named from its scope like any other split. The pass and `pane.set_title` hold one
+lock, so a board's title never lands between a pass's read and its rename. A pass can still name a
+fresh board pane once before that board's first title.
+
+**When a pass runs.** One pass covers every session the daemon knows (its default socket, the
+running sessions `herdr session list` reports, and boards' level sockets) and, in each, only the
+workspaces with a space binding in that session. It runs after any `local_state_changed` (a
+binding change, or a Linear read that brings a title), on herdr `tab_created`, `pane_created`,
+`layout_updated`, `pane_exited` and agent-status events, and every 10 s. Sessions holding a bound
+space are watched for those events even with no board open. A `pane.agent_status_changed`
+subscription needs a concrete pane id, so an agent starting in a pane the daemon does not run is
+picked up by the 10 s pass. Labels of tabs and panes that no longer exist are pruned.
+
+A rename can race a run's own `card-<id>` tab rename in a bound space; the daemon's `card-<id>` and
+`card-<id>-anchor` labels otherwise read as hand-set and are left alone.
+
 ## Linear bind handoff (retired)
 
 Earlier releases bound a space by starting the work plugin's `/work:bind` skill: the daemon

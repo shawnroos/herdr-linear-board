@@ -9,7 +9,7 @@ exercises the herdr wire integration end to end.
 For the layers below this one (unit, daemon+CLI integration, TUI snapshots), the
 isolation/safety design, and the **how-to-write-a-scenario** guide, see
 [`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v17:
-every numbered scenario from **01 through 46** must appear here and in `run-all.sh`. Every scenario is
+every numbered scenario from **01 through 47** must appear here and in `run-all.sh`. Every scenario is
 provider-free; the Linear scenarios read a loopback fake Linear (`fake-linear.py`). The provider-free
 safe boundary is `fake-agent.sh`,
 `fake-bin/{pi,claude,codex,opencode,agy}`, and `test-harness.sh`; prompt/system-prompt contents are never logged.
@@ -66,6 +66,7 @@ exercise the complete catalog after the cheaper static checks succeed.
 | A Claude Code PostToolUse payload for `mcp__claude_ai_Linear__save_issue`, piped into `board linear report` from a real pane in a space bound through the work-store import, links that pane's worktree to the saved issue and records the activity against the pane; a second save from the now-bound session leaves a `suggestion` mark and keeps the first binding | `44-linear-report-link.sh` | live, provider-free; no Linear call |
 | An agent bound to an issue calls `board mcp` `open_board` with `session: true`: the plugin's session entrypoint opens as a split in the agent's own tab with the agent's pane, socket, workspace and worktree cwd in its environment, shows the bound issue, and focus stays on the agent pane; `close_board` with `session: true` closes it | `45-session-side-pane.sh` | live, provider-free; no Linear call |
 | The Linear board picks its level from its pane: a board the daemon opens in its own tab shows the space board, a focused pane split beside it in a worktree bound to an issue turns it into that issue's view, closing the split turns it back, and a board opened as an overlay shows the space board with focus on a bound pane beneath it | `46-board-levels.sh` | live, provider-free; no Linear call |
+| The daemon names the tabs and splits of a Linear-bound space from their scope: a tab in a bound worktree is `KEY · title`, an agent split in it is `KEY · agent`; a tab renamed by hand keeps its name when the binding changes while the split follows it, and a tab in an unbound workspace is never renamed | `47-tab-split-names.sh` | live, provider-free; loopback fake Linear |
 
 ### How the live scenario produces Herdr `done`
 
@@ -138,7 +139,7 @@ unmarked, or out-of-root paths. Named-session sockets must be at most 92 bytes, 
 short `/tmp/hb-e2e.XXXXXX` isolated root. `TMPDIR` is pinned to that exact marker-owned root, so
 generated configured-harness scripts remain contained even if asynchronous `pane run` never opens
 their normal self-removing script. The forced-build standard suite is configured and required to exercise
-scenarios 01–46 without provider calls; this is a coverage requirement, not a claim that a live run
+scenarios 01–47 without provider calls; this is a coverage requirement, not a claim that a live run
 has completed. Scenarios 18–29 use only the configured or managed
 fake harnesses and never record prompt or system-prompt bodies.
 
@@ -214,6 +215,7 @@ personal Claude state. Its intended contract is one authorized attempt with no r
 | `43-open-board-pane.sh` | Open-a-board door: links this checkout as the `herdr-board` plugin, drives `board mcp` over stdio from the agent pane's environment, and asserts the split lands in the agent's tab, the pane's process carries this boardd's `BOARD_SOCKET` and `BOARD_SHOW_SPACE` (Linux `/proc`; prints `skipped:` elsewhere), focus never moves, a second open reuses the pane, `overlay` is refused, and `close_board` closes it. |
 | `44-linear-report-link.sh` | Hook-report link: seeds a session-keyed space binding through `board import work-store`, pipes two `save_issue` PostToolUse payloads into `board linear report` with the agent pane's environment, and asserts the first links the worktree and the second becomes a suggestion mark. |
 | `46-board-levels.sh` | Board levels: seeds a space binding through `board import work-store` and a worktree binding through `linear.bind`, opens a board in its own tab through `board mcp` `open_board {placement: tab}`, and asserts it draws without `TEAM-46`; splits a focused pane in the bound worktree beside it and waits for `TEAM-46` on the board; closes the split and waits for `TEAM-46` to go; then opens the board as an overlay with `plugin.pane.open` over a bound pane, focuses that pane, and asserts the overlay never shows `TEAM-46`. |
+| `47-tab-split-names.sh` | Tab and split names: binds a space to a fake-Linear project (`linear.space.bind`), warms its read with `board linear snapshot`, binds a worktree to TEAM-47, creates a tab and a split in it and reports `claude` on the split (`pane.report_agent`); waits for `TEAM-47 · Fix login` on the tab and `TEAM-47 · claude` on the split; renames the tab by hand to `scratch`, rebinds the worktree to TEAM-48, and asserts the tab keeps `scratch` while the split becomes `TEAM-48 · claude`; a tab in a second, unbound workspace keeps herdr's label. |
 | `45-session-side-pane.sh` | Session side pane: seeds a space binding through `board import work-store` and a worktree binding through `linear.bind`, drives `board mcp` from the agent's worktree with `open_board {session: true}`, and asserts the split lands in the agent's tab without focus, its process carries `BOARD_SESSION_PANE` and `BOARD_SESSION_CWD` (Linux `/proc`; prints `skipped:` elsewhere), the pane shows the bound issue, and `close_board {session: true}` closes it. |
 | `real-pi-smoke.sh` | Fail-closed real-provider poem smoke. Detects Pi's runtime default model (`E2E_REAL_PI_MODEL` overrides it, validated in `pi --list-models`), passes `E2E_REAL_PI_EFFORT` (default `low`) as the thinking level consistently in card create + evidence, and `E2E_REAL_PI_NEW_WORKSPACE=1` switches to a daemon-created `new_workspace` space (discovered for cleanup; final structure is exactly one `card-<id>` tab with one Pi harness pane and no anchor/unused tab). Isolates board/Pi session output under `/tmp`, verifies the current Pi integration v8/WezTerm, poem/comments/argv/git/settings, and supports keep mode for visual audit. Not in `run-all.sh`. |
 | `real-claude-haiku-smoke.sh` | Fail-closed intended-contract smoke. Requires exact opt-in, authorizes one Claude Haiku/low attempt with no retry/fallback, stages only completed onboarding/theme, exact workspace trust, the installed current Claude integration v7 hook, credentials, and approved remote-settings bytes under `/tmp` so startup dialogs cannot consume `agent.prompt`; no broad personal Claude state is copied. Independently identity-gates the daemon and Herdr server and cleans exact resources. Not in `run-all.sh`. |
@@ -223,7 +225,7 @@ personal Claude state. Its intended contract is one authorized attempt with no r
 | `12-cwd-boards.sh` | Scoped project identity/isolation plus real TUI title, the board→project picker drill-down (`b` → `⇄ Other projects…` → Global last), and heterogeneous-workspace cwd override/fail-closed dispatch. |
 | `13-jump-to-pane.sh` | Canonical CLI focus of a deliberately selected run. The TUI-overlay half was retired when Linear mode took the pane entrypoint. |
 | `NN-*.sh` | The scenarios above. |
-| `run-all.sh` | Builds once, runs scenarios 01–46 as environment-scrubbed children with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). | with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). |
+| `run-all.sh` | Builds once, runs scenarios 01–47 as environment-scrubbed children with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). | with their own sessions, captures artifacts, and prints the summary (`--require-all` forbids skips). |
 | `ci.sh` | Pins, caches, and verifies Herdr for Linux x86_64; runs the complete suite with `--require-all`; exports only its exact private artifact root to `e2e-artifacts/`. |
 
 Columns have no `board` CLI verb, so scenarios configure them over the boardd
