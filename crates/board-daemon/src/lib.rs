@@ -11,6 +11,7 @@ mod herdr_snapshot;
 mod import;
 pub mod linear;
 mod logging;
+pub mod naming;
 mod ops;
 mod recovery;
 mod rescue;
