@@ -117,12 +117,13 @@ Linear's attachments say **which** PRs belong to the issue (repo + number + url)
 
 Notes for the build: `gh` runs per PR, so cache per (repo, number, headSha) and refresh on a timer or when the board refreshes. `gh` auth comes from the user's machine, as it does for the board's other `gh` uses (none in the daemon yet).
 
-## 6. Today's issue page (`crates/board-tui/src/view/linear_issue.rs`)
+## 6. Today's issue view (`crates/board-tui/src/view/linear_issue.rs`)
 
-- Header ` ID`, optional error row, two columns (sidebar 34 wide when the body is ≥ 72), hint row.
-- Main: title → description → sub-issues → Activity (history, then comments with replies).
-- Sidebar: Status, Priority, Assignee, Labels, Project, Milestone, Cycle, Estimate, Due (always shown, `—` when empty) → Parent → Relations → Marks → Board.
-- Keys: j/k, Enter (linked issue, with back stack), o, u, y, b, r, Esc.
+- Opens as a borderless window (≤ 128 wide) over the faded board at ≥ 136 cells, else over the whole board; `e` expands, `o` pins it beside the board, `p` focuses the pin.
+- Header: powerline `ID │ status`, `project › milestone`, buttons; the bottom bar under it; body inset 2 cells.
+- Main (100-cell cap): title → description → ATTACHMENTS (cards) → PULL REQUESTS (open cards with `linear.pr` data, merged lines) → SUB-ISSUES → ACTIVITY.
+- Sidebar (40 cells, from 100 cells wide): properties → Parent → Relations → Marks → Board.
+- Keys: j/k (rows, then scroll), PgUp/PgDn, Enter (linked issue with back stack, pane focus, link), e, o, u, y, b, r, Esc / Backspace / ←.
 
 ## Gaps worth deciding on
 

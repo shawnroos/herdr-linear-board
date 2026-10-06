@@ -385,6 +385,9 @@ pub struct LinearState {
     /// the rows turns it off until the selection moves again.
     pub detail_follow: bool,
     pub issue_mode: IssueMode,
+    /// The card the open issue was opened from and where it sat, so closing
+    /// can select the next shown card when opening it hid it.
+    pub opened_from: Option<(String, (usize, usize, usize))>,
     pub pinned: Option<PinnedIssue>,
     /// What the daemon's PR read returned, by pull request URL. Kept across
     /// opens, so a card shows the last read while the next one runs.
@@ -503,6 +506,7 @@ impl LinearState {
             detail_scroll: 0,
             detail_follow: true,
             issue_mode: IssueMode::default(),
+            opened_from: None,
             pinned: None,
             prs: HashMap::new(),
             pr_read_missing: false,
@@ -864,6 +868,7 @@ impl LinearState {
     /// A newly opened issue: a window, scrolled to the top, following its
     /// selected row.
     pub(super) fn open_fresh(&mut self) {
+        self.opened_from = None;
         self.issue_mode = IssueMode::Window;
         self.detail_scroll = 0;
         self.detail_follow = true;
@@ -1674,6 +1679,9 @@ fn open_card(app: &mut App, id: &str) -> Vec<Effect> {
         return vec![];
     };
     state.open_fresh();
+    if let Focus::Card(card) = state.focus {
+        state.opened_from = Some((id.to_string(), (state.sel_tab, state.sel_group, card)));
+    }
     state.detail = Some(id.to_string());
     state.detail_stack.clear();
     state.detail_seed = None;

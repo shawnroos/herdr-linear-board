@@ -603,3 +603,38 @@ fn a_group_alert_keeps_text_that_excludes_its_cards_and_leaves_the_filter_select
     assert!(frame.contains("\u{f0232} ? question WEB-102"), "{frame}");
     assert!(frame.contains("no matching issues"), "{frame}");
 }
+
+#[test]
+fn enter_from_the_filter_selects_the_first_match_in_board_order_when_the_column_has_none() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('/'));
+    type_text(&mut d, "web-105");
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(focus(&d), Focus::Card(0), "a card, not a lane line");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-105"));
+}
+
+#[test]
+fn a_card_opened_from_a_chip_filtered_board_returns_to_the_next_match_and_keeps_the_chip() {
+    let shared = three_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    press(&mut d, KeyCode::Esc);
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(
+        shown(&d),
+        ["WEB-101", "WEB-107"],
+        "the opened card's mark cleared"
+    );
+    assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
+    assert_eq!(
+        selected_id(&d).as_deref(),
+        Some("WEB-107"),
+        "the match after WEB-103 in board order"
+    );
+    assert_eq!(chip(&d), Some(MarkKind::Attention));
+}

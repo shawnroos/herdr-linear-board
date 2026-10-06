@@ -243,6 +243,21 @@ fn close_open(state: &mut LinearState) {
     state.detail_stack.clear();
 }
 
+/// Opening a card clears its marks, so under a mark filter it can leave the
+/// board: the next shown card in board order takes the selection, and the
+/// filter stays.
+fn reselect_after_close(state: &mut LinearState) {
+    let Some((id, at)) = state.opened_from.take() else {
+        return;
+    };
+    if state.selected_identifier() == Some(id.as_str()) {
+        return;
+    }
+    if let Some((tab, group, card)) = state.shown_from(at) {
+        state.select_slot(tab, group, card);
+    }
+}
+
 /// `o` on the board: the pinned issue goes.
 pub(super) fn unpin(app: &mut App) {
     let width = app.last_area.width;
@@ -561,13 +576,8 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
         return vec![];
     };
     let Some(step) = state.detail_stack.pop() else {
-        state.detail = None;
-        state.detail_doc = None;
-        state.detail_error = None;
-        state.detail_in_flight = None;
-        state.detail_selection = None;
-        state.detail_seed = None;
-        state.detail_marks = None;
+        close_open(state);
+        reselect_after_close(state);
         app.screen = Screen::LinearBoard;
         return vec![];
     };

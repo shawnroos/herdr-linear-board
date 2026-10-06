@@ -595,6 +595,33 @@ impl LinearState {
         });
         self.focus = Focus::Card(last.unwrap_or(0));
         self.clamp();
+        // A filter that left this column empty selects its first match
+        // elsewhere rather than a lane line.
+        if self.filtering() && self.selected_identifier().is_none() {
+            if let Some(group) =
+                (0..self.groups().len()).find(|&g| !self.visible_cards(g).is_empty())
+            {
+                self.sel_group = group;
+                self.focus = Focus::Card(0);
+            }
+        }
+    }
+
+    /// The first shown card at or after `at` (tab, column, card) in board
+    /// order, else the last shown card.
+    pub(super) fn shown_from(&self, at: (usize, usize, usize)) -> Option<(usize, usize, usize)> {
+        let mut slots = vec![];
+        for (t, tab) in self.tabs().iter().enumerate() {
+            for (g, group) in tab.groups.iter().enumerate() {
+                let n = self.visible_in(&tab.key, group).len();
+                slots.extend((0..n).map(|c| (t, g, c)));
+            }
+        }
+        slots
+            .iter()
+            .find(|&&slot| slot >= at)
+            .or(slots.last())
+            .copied()
     }
 
     /// Esc on a filter that hides anything: it clears, and the card selected

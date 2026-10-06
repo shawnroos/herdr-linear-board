@@ -107,6 +107,7 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "↑/↓ k/j", "lane lines and cards"),
     (Screen::LinearBoard, "/", "filter; ↑ at the top too"),
     (Screen::LinearBoard, "Enter Tab ↓", "filter: to the cards"),
+    (Screen::LinearBoard, "Esc ⌫", "filter: clear / drop chip"),
     (Screen::LinearBoard, "[ / ]", "previous / next tab"),
     (Screen::LinearBoard, "< / >", "page one column"),
     (Screen::LinearBoard, "Enter Esc", "pager: back to the card"),
@@ -193,8 +194,8 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        156,
-        "the interaction contract must stay at exactly 156 bindings (87 upstream + 64 Linear mode + 5 session pane)"
+        157,
+        "the interaction contract must stay at exactly 157 bindings (87 upstream + 65 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

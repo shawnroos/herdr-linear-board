@@ -300,6 +300,7 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "↑/↓ k/j", "lane lines and cards"),
     (Screen::LinearBoard, "/", "filter; ↑ at the top too"),
     (Screen::LinearBoard, "Enter Tab ↓", "filter: to the cards"),
+    (Screen::LinearBoard, "Esc ⌫", "filter: clear / drop chip"),
     (Screen::LinearBoard, "[ / ]", "previous / next tab"),
     (Screen::LinearBoard, "< / >", "page one column"),
     (Screen::LinearBoard, "Enter Esc", "pager: back to the card"),

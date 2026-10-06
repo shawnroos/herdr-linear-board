@@ -23,6 +23,7 @@ All notable changes to this project are documented here. The format is based on
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board's bottom bar shows controls, a selection tip and alerts; `?` opens it, and show-requests are answered there.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear cards drop the rows they have nothing for, and z switches to a compact density that fits more cards.
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Return on a Linear group alert such as `! 3 needs you` filters the board to those cards, in a full-width filter card.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear issues open as a window over the faded board, expand with e, pin beside the board with o, and show attachment and PR cards.
 
 - [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The board works with Herdr 0.9.0 through 0.9.3.
 

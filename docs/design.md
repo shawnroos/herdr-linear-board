@@ -985,10 +985,14 @@ The Linear read is cached per space for 15 s and shared, so ten open boards cost
 Linear cannot be read, the last good read stays on screen marked stale. The wire contract is
 [protocol.md](protocol.md) → linear.
 
-**The issue page.** Opening a card opens a page, not an overlay: it replaces the board at every
-width and is laid out like Linear's own issue page — title, description, sub-issues and Activity in
-a main column, every Linear property in a sidebar, and the board's own bindings last in that
-sidebar. Below 72 cells of body width it is one column in the same order.
+**The issue view.** Opening a card opens the issue as a borderless window over the faded board
+when the pane is at least 136 cells wide, and over the whole board below that; `e` expands the
+window and `o` pins the issue into a column's slot beside the board (`responsive-board.md`,
+"Opening an issue"). It is laid out like Linear's own issue page — title, description,
+attachment and pull request cards, sub-issues and Activity in a main column, every Linear property
+in a 40-cell sidebar, and the board's own bindings last in that sidebar. Below 100 cells it is one
+column in the same order (this supersedes the 72-cell rule). Pull request cards fill in from the
+daemon's `linear.pr` read.
 
 The snapshot has none of what that page shows, so a second request fills it in:
 
