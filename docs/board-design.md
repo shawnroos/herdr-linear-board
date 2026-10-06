@@ -48,6 +48,7 @@ the prototype's `icon` modules.
 | Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). One blank row below (none in compact). Each lane band is as tall as its tallest column (the sum of its card heights and gaps), so lanes align. |
 | Lane states | Normal: dim. Holds the selected card: label `accent`. Lane line selected: plus `surface0` background. Nothing selected: all lanes in the "holds the selected card" state. |
 | Folding | Lane lines are selectable in ↑↓ order (lane, its cards, next lane). Return folds or unfolds the lane in every column. |
+| Filter | A full-width card (Shawn, 2026-10-06): one row on the card surface across the board width, 2-cell inset, with the filter icon, the mark chip when set, the typed text and cursor, and a right-aligned match count. One blank row above and below. `surface0` while focused. Hidden until opened; stays while it holds text or a chip. |
 | Spacing | 1 blank row between cards, below lane lines (not in compact), and between a lane's last card and the next lane line. |
 
 ## 3. Cards
