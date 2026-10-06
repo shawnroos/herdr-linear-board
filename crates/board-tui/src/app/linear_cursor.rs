@@ -680,7 +680,7 @@ impl LinearState {
     /// column off the page; any other focus pulls the page by the least that
     /// shows it.
     /// Whether the pinned issue is drawn at `width`: it keeps a column's
-    /// slot only while the board has two columns' room (KTD12).
+    /// slot only while the board has two columns' room.
     pub fn pin_shown(&self, width: u16) -> bool {
         self.pinned.is_some() && crate::view::pin_fits(width)
     }
@@ -720,7 +720,7 @@ impl LinearState {
     /// Keeps the stored page what `page` draws at `width`, and moves a
     /// paging button's focus whose button is gone onto the edge column.
     pub(super) fn refit(&mut self, width: u16) {
-        // A pin that went or no longer fits hands its keys back (KTD2).
+        // A pin that went or no longer fits hands its keys back.
         if self.focus == Focus::Pinned && !self.pin_shown(width) {
             self.reselect();
         }

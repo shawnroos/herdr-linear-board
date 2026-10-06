@@ -276,7 +276,7 @@ fn heading(theme: &Theme, text: &str, width: usize) -> Line<'static> {
 
 /// A property row. The value is always drawn, as an em dash when Linear has
 /// none: a row that disappears when empty makes "no milestone" and "not loaded
-/// yet" the same thing on screen (R4).
+/// yet" the same thing on screen.
 fn property(theme: &Theme, label: &str, value: Option<String>, width: usize) -> Line<'static> {
     let value = value.filter(|v| !v.trim().is_empty());
     let name = format!("{label:<10} ");
@@ -572,7 +572,7 @@ fn history_text(event: &board_core::protocol::LinearHistoryEvent) -> String {
     String::new()
 }
 
-/// The sidebar: Linear's properties, then the board's own block last (R10).
+/// The sidebar: Linear's properties, then the board's own block last.
 fn sidebar_column(
     state: &LinearState,
     slot: &Slot<'_>,
@@ -625,7 +625,7 @@ fn sidebar_column(
     }
 
     // Parent and relations appear only when the issue has them: unlike a value
-    // property, an absent one is not a field with no value (R4).
+    // property, an absent one is not a field with no value.
     if let Some(parent) = detail.and_then(|d| d.parent.as_ref()) {
         out.push(Line::from(""));
         out.push(heading(theme, "PARENT", width));
@@ -1119,7 +1119,7 @@ pub fn draw(
 
 /// The scroll of the column that moves with the page. It starts from the
 /// stored offset; while it follows the selection, it moves by the least that
-/// keeps the selected row in view with a line either side (R5).
+/// keeps the selected row in view with a line either side.
 fn flow_scroll(app: &App, page: &Page, slot: &Slot<'_>) -> usize {
     let height = page.flow_height();
     let max = page.flow_len().saturating_sub(height);

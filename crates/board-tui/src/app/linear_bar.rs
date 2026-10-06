@@ -2,7 +2,7 @@
 //! and board-wide alerts. Items are kept by identity, so an alert list that
 //! changes under the cursor re-finds the item rather than an index.
 
-use board_core::protocol::MarkKind;
+use board_core::protocol::{MarkKind, CI_FAIL, GH_UNAVAILABLE};
 use crossterm::event::{KeyCode, KeyEvent};
 use unicode_width::UnicodeWidthStr;
 
@@ -147,14 +147,14 @@ impl LinearState {
             .filter(|id| {
                 self.issue(id)
                     .and_then(|issue| issue.pr.as_ref()?.ci.as_ref())
-                    .is_some_and(|ci| ci.state == "fail")
+                    .is_some_and(|ci| ci.state == CI_FAIL)
             })
             .collect()
     }
 
     fn gh_unavailable(&self) -> Option<String> {
         let gh = self.snapshot()?.gh.as_ref()?;
-        (gh.status == "unavailable").then(|| gh.message.clone().unwrap_or_default())
+        (gh.status == GH_UNAVAILABLE).then(|| gh.message.clone().unwrap_or_default())
     }
 
     fn request_issue_of(&self, id: i64) -> Option<(String, String)> {
@@ -392,7 +392,7 @@ impl LinearState {
     }
 
     /// The bar's tip for what is selected at `width` cells, saying when a
-    /// pinned issue is hidden for want of room (KTD12).
+    /// pinned issue is hidden for want of room.
     pub fn bar_tip(&self, width: u16) -> String {
         let tip = self.focus_tip(width);
         match &self.pinned {

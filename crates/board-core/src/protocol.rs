@@ -2055,6 +2055,12 @@ pub struct LinearHerdr {
     pub version: Option<String>,
 }
 
+/// [`LinearGhSource::status`] values. The field stays a string so a peer
+/// with a newer vocabulary still parses.
+pub const GH_OK: &str = "ok";
+pub const GH_UNAVAILABLE: &str = "unavailable";
+pub const GH_UNKNOWN: &str = "unknown";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearGhSource {
     /// `ok`, `unavailable` (gh missing or not logged in) or `unknown` (no
@@ -2172,6 +2178,14 @@ pub struct LinearCardPr {
     #[serde(default)]
     pub gh_error: Option<String>,
 }
+
+/// [`LinearPrCi::state`] and [`LinearPrCheck::bucket`] values (`skipping` is
+/// a check bucket only). Strings on the wire, so a newer peer still parses.
+pub const CI_PASS: &str = "pass";
+pub const CI_PENDING: &str = "pending";
+pub const CI_FAIL: &str = "fail";
+pub const CI_SKIPPING: &str = "skipping";
+pub const CI_NONE: &str = "none";
 
 /// A PR's checks, counted after keeping only the latest run of each name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

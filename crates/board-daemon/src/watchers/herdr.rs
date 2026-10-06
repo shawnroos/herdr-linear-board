@@ -47,8 +47,7 @@ pub(super) trait WatchConnector: Send + Sync {
     fn subscribe(
         &self,
         socket: &std::path::Path,
-        panes: &[String],
-        levels: bool,
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>>;
     fn snapshot(&self, socket: &std::path::Path) -> board_herdr::Result<WatchSnapshot>;
 }
@@ -59,16 +58,15 @@ impl WatchConnector for HerdrWatchConnector {
     fn subscribe(
         &self,
         socket: &std::path::Path,
-        panes: &[String],
-        levels: bool,
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>> {
         // The event stream has its own persistent connection and handshake,
         // so gate the socket on a request connection first. This must happen
         // before `events.subscribe`: an incompatible but pingable Herdr must
         // never receive a subscription or become a watched generation.
         let _client = crate::herdr_conn::connect_checked(socket)?;
-        let mut subscriptions = watch_subscriptions(panes);
-        if levels {
+        let mut subscriptions = watch_subscriptions(&want.panes);
+        if want.levels {
             subscriptions.extend(layout_subscriptions());
             subscriptions.extend(naming_subscriptions());
         }
@@ -109,8 +107,7 @@ impl Default for WatchTiming {
 /// State for one socket. Generation, retry, and snapshot schedules are local:
 /// changing or losing one session never resets a healthy session's stream.
 pub(super) struct SocketWatch {
-    pub(super) panes: Vec<String>,
-    pub(super) levels: bool,
+    pub(super) want: Want,
     pub(super) generation: u64,
     pub(super) events: Option<Box<dyn WatchEventStream>>,
     retry_at: Instant,
@@ -120,10 +117,8 @@ pub(super) struct SocketWatch {
 
 impl SocketWatch {
     fn new(want: Want, generation: u64, now: Instant, timing: WatchTiming) -> Self {
-        let (panes, levels) = want;
         Self {
-            panes,
-            levels,
+            want,
             generation,
             events: None,
             retry_at: now,
@@ -158,7 +153,7 @@ impl HerdrSocketSupervisor {
         self.sockets.retain(|socket, _| wanted.contains_key(socket));
         for (socket, want) in wanted {
             match self.sockets.get_mut(&socket) {
-                Some(state) if (&state.panes, state.levels) != (&want.0, want.1) => {
+                Some(state) if state.want != want => {
                     let generation = state.generation.saturating_add(1);
                     *state = SocketWatch::new(want, generation, now, self.timing);
                 }
@@ -179,12 +174,12 @@ impl HerdrSocketSupervisor {
                 return;
             }
             if state.events.is_none() && now >= state.retry_at {
-                match self.connector.subscribe(socket, &state.panes, state.levels) {
+                match self.connector.subscribe(socket, &state.want) {
                     Ok(events) => {
                         state.events = Some(events);
                         state.retry_delay = self.timing.retry_initial;
                         // The subscription ack has completed before snapshot I/O.
-                        reconcile_socket(d, socket, &state.panes, self.connector.as_ref());
+                        reconcile_socket(d, socket, &state.want.panes, self.connector.as_ref());
                         state.reconcile_at = now + self.timing.reconcile;
                     }
                     Err(error) => {
@@ -197,7 +192,7 @@ impl HerdrSocketSupervisor {
                 }
             }
             if state.events.is_some() && now >= state.reconcile_at {
-                reconcile_socket(d, socket, &state.panes, self.connector.as_ref());
+                reconcile_socket(d, socket, &state.want.panes, self.connector.as_ref());
                 state.reconcile_at = now + self.timing.reconcile;
             }
             let polled = state
@@ -221,7 +216,11 @@ impl HerdrSocketSupervisor {
 
 /// The run panes to watch per socket, plus whether a board reads its level
 /// from that socket or it holds a Linear-bound space whose tabs are named.
-type Want = (Vec<String>, bool);
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Want {
+    pub(super) panes: Vec<String>,
+    pub(super) levels: bool,
+}
 
 /// Level sockets are dropped once no client is subscribed: nobody is left to
 /// receive their events, and a board that comes back re-registers on its
@@ -235,10 +234,16 @@ fn wanted_watches(d: &Arc<Daemon>) -> HashMap<PathBuf, Want> {
     let mut wanted: HashMap<PathBuf, Want> = watch
         .panes_by_socket
         .iter()
-        .map(|(socket, panes)| (socket.clone(), (panes.clone(), false)))
+        .map(|(socket, panes)| {
+            let want = Want {
+                panes: panes.clone(),
+                levels: false,
+            };
+            (socket.clone(), want)
+        })
         .collect();
     for socket in watch.level_sockets.iter().chain(&watch.name_sockets) {
-        wanted.entry(socket.clone()).or_default().1 = true;
+        wanted.entry(socket.clone()).or_default().levels = true;
     }
     wanted
 }

@@ -42,6 +42,24 @@ pub struct LinearStart {
     pub show: crate::ShowContext,
 }
 
+impl LinearStart {
+    /// The state every Linear-mode driver starts from, plus the parts each
+    /// constructor places itself. The session pane takes no Herdr keys.
+    fn into_state(
+        self,
+    ) -> (
+        LinearState,
+        Vec<crate::herdr_keys::HerdrKey>,
+        OriginContext,
+        crate::ShowContext,
+    ) {
+        let mut state =
+            LinearState::new(self.workspace_id, self.board_version, self.daemon_version);
+        state.theme = self.theme;
+        (state, self.herdr_keys, self.origin, self.show)
+    }
+}
+
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
 /// produced by `update`.
 pub struct Driver {
@@ -86,17 +104,12 @@ impl Driver {
         start: LinearStart,
         defer_snapshots: bool,
     ) -> Driver {
-        let mut state = LinearState::new(
-            start.workspace_id,
-            start.board_version,
-            start.daemon_version,
-        );
-        state.herdr_keys = start.herdr_keys;
-        state.theme = start.theme;
-        state.landing = Some(start.show);
-        state.level = level_for(&start.origin);
-        let app = App::linear(state, start.origin.clone());
-        Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
+        let (mut state, herdr_keys, origin, show) = start.into_state();
+        state.herdr_keys = herdr_keys;
+        state.landing = Some(show);
+        state.level = level_for(&origin);
+        let app = App::linear(state, origin.clone());
+        Driver::start_linear(app, client, editor, platform, origin, defer_snapshots)
     }
 
     /// `board tui --session`: the Linear board, starting at the split level
@@ -108,24 +121,12 @@ impl Driver {
         start: LinearStart,
         identity: crate::SessionIdentity,
     ) -> Driver {
-        let mut state = LinearState::new(
-            start.workspace_id,
-            start.board_version,
-            start.daemon_version,
-        );
-        state.herdr_keys = start.herdr_keys;
-        state.theme = start.theme;
-        let own = start.origin.pane_id.clone().unwrap_or_default();
+        let (mut state, herdr_keys, origin, _) = start.into_state();
+        state.herdr_keys = herdr_keys;
+        let own = origin.pane_id.clone().unwrap_or_default();
         state.level = Some(crate::app::LevelState::new(own, false).starting_beside(identity));
-        let app = App::linear(state, start.origin.clone());
-        Driver::start_linear(
-            app,
-            client,
-            Box::new(RealEditor),
-            platform,
-            start.origin,
-            false,
-        )
+        let app = App::linear(state, origin.clone());
+        Driver::start_linear(app, client, Box::new(RealEditor), platform, origin, false)
     }
 
     /// The session side pane beside the agent `identity` names. Its first
@@ -136,25 +137,13 @@ impl Driver {
         start: LinearStart,
         identity: crate::SessionIdentity,
     ) -> Driver {
-        let mut state = LinearState::new(
-            start.workspace_id,
-            start.board_version,
-            start.daemon_version,
-        );
-        state.theme = start.theme;
+        let (state, _, origin, _) = start.into_state();
         let app = App::session(
             state,
             crate::app::SessionState::new(identity),
-            start.origin.clone(),
+            origin.clone(),
         );
-        Driver::start_linear(
-            app,
-            client,
-            Box::new(RealEditor),
-            platform,
-            start.origin,
-            false,
-        )
+        Driver::start_linear(app, client, Box::new(RealEditor), platform, origin, false)
     }
 
     fn start_linear(

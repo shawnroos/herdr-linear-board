@@ -71,7 +71,7 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
 }
 
 /// At the split level the board reads and writes nothing but its own pane
-/// title (KTD11): no mark clear, bind or show answer leaves it.
+/// title: no mark clear, bind or show answer leaves it.
 pub(super) fn split_allows(eff: &crate::app::Effect) -> bool {
     use crate::app::Effect;
     session_allows(eff) || matches!(eff, Effect::PaneContext | Effect::SetLinearPaneTitle(_))

@@ -116,7 +116,7 @@ pub enum Effect {
     /// `linear.session.get` for the agent it is beside.
     LinearSessionGet,
     /// Linear mode: fetch `pane.context` for the board's own pane, which
-    /// picks the level (KTD10).
+    /// picks the level.
     PaneContext,
     /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
     /// project id). The reducer marks the read in flight before emitting it.

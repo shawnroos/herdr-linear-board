@@ -462,27 +462,14 @@ pub(super) fn pinned_arrived(
     if pin.issue != issue {
         return Some(vec![]);
     }
-    match result.clone() {
-        Ok(doc) if doc.issue.is_some() => {
-            let doc = super::linear::sanitise_issue(doc);
+    match super::linear::read_outcome(issue, result.clone()) {
+        Ok(doc) => {
             pin.error = None;
             pin.doc = Some(doc.clone());
             Some(request_prs(state, &doc))
         }
-        Ok(doc) => {
-            let message = doc
-                .message
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| "this issue could not be read".into());
-            pin.error = Some(super::linear::DetailError {
-                issue: issue.to_string(),
-                message: super::sanitise(&message),
-                retryable: true,
-            });
-            Some(vec![])
-        }
-        Err(failure) => {
-            pin.error = Some(super::linear::detail_failure(issue, failure));
+        Err(error) => {
+            pin.error = Some(error);
             Some(vec![])
         }
     }
@@ -589,7 +576,7 @@ fn leave_issue_page(app: &mut App) -> Vec<Effect> {
         return vec![];
     };
     // What that page last showed goes back on screen now; the fresh read below
-    // replaces it when it lands, and leaves it in place if it fails (R17).
+    // replaces it when it lands, and leaves it in place if it fails.
     state.detail = Some(step.issue.clone());
     state.detail_selection = step.selection;
     state.detail_scroll = 0;
@@ -641,15 +628,10 @@ pub(crate) fn pr_arrived(
         return;
     };
     let read = match result {
-        Ok(doc) => {
-            let clean = serde_json::to_value(&doc)
-                .map(board_core::text::sanitise_json)
-                .and_then(serde_json::from_value);
-            match clean {
-                Ok(doc) => PrRead::Read(Box::new(doc)),
-                Err(_) => PrRead::Failed("unreadable PR document".into()),
-            }
-        }
+        Ok(doc) => match board_core::text::scrubbed(&doc) {
+            Ok(doc) => PrRead::Read(Box::new(doc)),
+            Err(_) => PrRead::Failed("unreadable PR document".into()),
+        },
         Err(LinearFailure::MethodNotFound) => {
             state.pr_read_missing = true;
             state.prs.remove(&url);

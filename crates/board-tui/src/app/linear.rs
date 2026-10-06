@@ -273,7 +273,7 @@ pub struct LinearState {
     pub board_version: String,
     pub daemon_version: Option<String>,
     /// The last document that arrived, sanitised. Stays on screen when a
-    /// later refresh fails (R19).
+    /// later refresh fails.
     pub last_good: Option<LinearSnapshot>,
     pub sel_tab: usize,
     /// The focused column, kept while nothing is selected as the column the
@@ -320,7 +320,7 @@ pub struct LinearState {
     pub queued_force: bool,
     pub error: Option<String>,
     /// `(board_version, daemon_version)` once the daemon answered that it has
-    /// no `linear.snapshot` (R25).
+    /// no `linear.snapshot`.
     pub stale_daemon: Option<(String, Option<String>)>,
     /// `App::now` when `last_good` arrived.
     pub fetched_at: Option<i64>,
@@ -367,7 +367,7 @@ pub struct LinearState {
     pub detail_selection: Option<crate::view::IssueRowKind>,
     /// The issues opened to get to the one on screen, oldest first. Each entry
     /// keeps what its page last showed, so stepping back re-renders it while
-    /// its own fresh read runs rather than emptying to loading markers (R17).
+    /// its own fresh read runs rather than emptying to loading markers.
     pub detail_stack: Vec<DetailStep>,
     /// The last local-state read that succeeded, sanitised. Kept whole rather
     /// than pruned to the snapshot's issues, so a mark on a card the board has
@@ -397,7 +397,7 @@ pub struct LinearState {
     /// opens, so a card shows the last read while the next one runs.
     pub prs: HashMap<String, PrRead>,
     /// The daemon predates `linear.pr`: cards show Linear's data only, and
-    /// no further read is sent (KTD9).
+    /// no further read is sent.
     pub pr_read_missing: bool,
     /// Where an agent-opened board lands, taken by the first good snapshot.
     pub landing: Option<crate::ShowContext>,
@@ -789,7 +789,7 @@ impl LinearState {
             .unwrap_or_default()
     }
 
-    /// The mapping the snapshot reports, when it is not the default (R9).
+    /// The mapping the snapshot reports, when it is not the default.
     pub fn non_default_mapping(&self) -> Option<String> {
         let mapping = &self.snapshot()?.mapping;
         // A document with no mapping section has nothing to report.
@@ -811,7 +811,7 @@ impl LinearState {
         })
     }
 
-    /// One line per source whose status is not `ok` (R12, R19).
+    /// One line per source whose status is not `ok`.
     pub fn source_warnings(&self) -> Vec<String> {
         let Some(s) = self.snapshot() else {
             return vec![];
@@ -931,7 +931,7 @@ pub(super) fn order_tabs(snapshot: &mut LinearSnapshot) {
 
 pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
-        // `board_changed` never refreshes a Linear board (R21).
+        // `board_changed` never refreshes a Linear board.
         Msg::Refresh => vec![],
         Msg::Mouse(m) => {
             let mut effects = super::mouse::on_mouse(app, m);
@@ -984,8 +984,8 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
 }
 
 /// Start the issue-page read for `issue`, unless one is already in flight for
-/// it. The page is already on screen by now: R14 opens it on what the snapshot
-/// holds, and this fills in the rest.
+/// it. The page is already on screen by now, showing what the snapshot holds;
+/// this fills in the rest.
 pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
         return vec![];
@@ -1012,7 +1012,7 @@ pub(super) fn request_issue(app: &mut App, issue: &str) -> Vec<Effect> {
     }]
 }
 
-/// R18 -- a read that lands after the reader has opened another issue is
+/// A read that lands after the reader has opened another issue is
 /// dropped. Overlapping reads are the normal case once Enter opens a linked
 /// issue in place, so this is the rule, not an edge case.
 pub(super) fn issue_arrived(
@@ -1048,6 +1048,26 @@ pub(super) fn issue_arrived(
         return vec![];
     }
     state.detail_in_flight = None;
+    match read_outcome(issue, result) {
+        Ok(document) => {
+            state.detail_error = None;
+            let effects = super::linear_issue::request_prs(state, &document);
+            state.detail_doc = Some((issue.to_string(), document));
+            effects
+        }
+        Err(error) => {
+            state.detail_error = Some(error);
+            vec![]
+        }
+    }
+}
+
+/// An issue read as the page shows it: a sanitised document, or the error
+/// the page draws instead.
+pub(super) fn read_outcome(
+    issue: &str,
+    result: Result<LinearIssueDocument, LinearFailure>,
+) -> Result<LinearIssueDocument, DetailError> {
     match result {
         // The plugin carries a reachability failure IN the document -
         // `status: "unavailable"` with no issue - because the read ran and
@@ -1057,43 +1077,30 @@ pub(super) fn issue_arrived(
         Ok(document) if document.issue.is_none() => {
             let message = document
                 .message
-                .clone()
                 .filter(|m| !m.trim().is_empty())
                 .unwrap_or_else(|| "this issue could not be read".to_string());
-            state.detail_error = Some(DetailError {
+            Err(DetailError {
                 issue: issue.to_string(),
                 message: sanitise(&message),
                 retryable: true,
-            });
+            })
         }
-        Ok(document) => {
-            let document = sanitise_issue(document);
-            state.detail_error = None;
-            let effects = super::linear_issue::request_prs(state, &document);
-            state.detail_doc = Some((issue.to_string(), document));
-            return effects;
-        }
-        Err(failure) => {
-            state.detail_error = Some(detail_failure(issue, failure));
-        }
+        Ok(document) => Ok(sanitise_issue(document)),
+        Err(failure) => Err(detail_failure(issue, failure)),
     }
-    vec![]
 }
 
 /// The same walk over an issue document: descriptions, comments and
-/// attachment fields are outside text (KTD15).
+/// attachment fields are outside text.
 pub(crate) fn sanitise_issue(document: LinearIssueDocument) -> LinearIssueDocument {
-    serde_json::to_value(&document)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value::<LinearIssueDocument>)
-        .unwrap_or_default()
+    board_core::text::scrubbed(&document).unwrap_or_default()
 }
 
 pub(super) fn detail_failure(issue: &str, failure: LinearFailure) -> DetailError {
     let (message, retryable) = match failure {
         // The plugin is installed and current but has no issue script: `r`
         // would retry something that cannot succeed, so the page says what to
-        // do instead (R16).
+        // do instead.
         LinearFailure::OpUnsupported(_) => (
             "this issue page needs a newer work plugin; update it to read the issue".to_string(),
             false,
@@ -1931,12 +1938,9 @@ pub fn sanitise(s: &str) -> String {
 
 /// Every string in the document, keys included, through [`sanitise`]. It walks
 /// the serialised form rather than the struct's fields, so a string field
-/// added to any Linear type is covered without a line here (R22).
+/// added to any Linear type is covered without a line here.
 pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
-    let cleaned = serde_json::to_value(&*snapshot)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value::<LinearSnapshot>);
-    match cleaned {
+    match board_core::text::scrubbed(&*snapshot) {
         Ok(cleaned) => *snapshot = cleaned,
         // The document round-trips through its own types, so this does not
         // happen; if it did, nothing unsanitised may reach the screen.
@@ -1947,19 +1951,16 @@ pub fn sanitise_snapshot(snapshot: &mut LinearSnapshot) {
 /// The same walk over local state: mark text and note bodies are agent text.
 pub(super) fn sanitise_local(local: LocalState) -> LocalState {
     let space = local.space.clone();
-    serde_json::to_value(&local)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value::<LocalState>)
-        .unwrap_or(LocalState {
-            space,
-            space_bindings: vec![],
-            worktree_bindings: vec![],
-            grouping: None,
-            marks: vec![],
-            notes: vec![],
-            show_requests: vec![],
-            resolved_show_requests: vec![],
-        })
+    board_core::text::scrubbed(&local).unwrap_or(LocalState {
+        space,
+        space_bindings: vec![],
+        worktree_bindings: vec![],
+        grouping: None,
+        marks: vec![],
+        notes: vec![],
+        show_requests: vec![],
+        resolved_show_requests: vec![],
+    })
 }
 
 /// The same walk over a list envelope.

@@ -1,6 +1,6 @@
 //! The board's level: the space board, or the issue of the split beside it,
-//! picked from where the board's own pane sits in its herdr tab (KTD10). The
-//! split level is read-only (KTD11): it opens the issue without clearing its
+//! picked from where the board's own pane sits in its herdr tab. The
+//! split level is read-only: it opens the issue without clearing its
 //! marks, and its keys only read.
 
 use std::collections::BTreeSet;
@@ -25,7 +25,7 @@ pub struct LevelState {
     /// Esc at the split level's stack root: the space board until focus
     /// moves to another pane.
     pub dismissed: bool,
-    /// The daemon predates `pane.context`: no further read is sent (KTD9).
+    /// The daemon predates `pane.context`: no further read is sent.
     pub missing: bool,
     pub in_flight: bool,
     pub queued: bool,
@@ -212,10 +212,7 @@ pub(super) fn arrived(app: &mut App, result: Result<PaneContext, LinearFailure>)
 
 /// Pane ids and issue keys go back to the daemon and onto the screen.
 fn sanitised(ctx: PaneContext) -> PaneContext {
-    serde_json::to_value(&ctx)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value)
-        .unwrap_or_default()
+    board_core::text::scrubbed(&ctx).unwrap_or_default()
 }
 
 pub(super) fn start_arrived(

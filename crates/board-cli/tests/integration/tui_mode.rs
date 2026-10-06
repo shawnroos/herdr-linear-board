@@ -1,5 +1,5 @@
 //! `board tui` decides Linear mode from the herdr space id before it touches
-//! the store (KTD2, KTD3). The TUI itself needs a terminal, so every run here
+//! the store. The TUI itself needs a terminal, so every run here
 //! exits at raw-mode setup; what is provable is what reached the daemon and
 //! the store before that point.
 
@@ -33,7 +33,7 @@ fn cwd_scope(td: &TestDaemon) -> Value {
     )
 }
 
-/// AE3, characterised: with no space id the upstream path opens the cwd
+/// Characterised: with no space id the upstream path opens the cwd
 /// project, which persists a row, before the terminal is even set up.
 #[test]
 fn tui_without_a_space_id_writes_the_cwd_project_row() {
@@ -48,7 +48,7 @@ fn tui_without_a_space_id_writes_the_cwd_project_row() {
     );
 }
 
-/// AE2 / R7: a space id selects Linear mode and no project row is written.
+/// A space id selects Linear mode and no project row is written.
 #[test]
 fn tui_with_a_space_id_writes_no_project_row() {
     let td = TestDaemon::start(&[]);
@@ -62,7 +62,7 @@ fn tui_with_a_space_id_writes_no_project_row() {
     );
 }
 
-/// KTD2: `BOARD_SCOPE_PATH` is ignored in Linear mode with one stderr line.
+/// `BOARD_SCOPE_PATH` is ignored in Linear mode with one stderr line.
 #[test]
 fn board_scope_path_is_ignored_in_linear_mode_with_one_stderr_line() {
     let td = TestDaemon::start(&[]);
@@ -102,7 +102,7 @@ fn plugin_context_workspace_id_selects_linear_mode() {
     assert_eq!(scope_paths(&td), vec![Value::Null]);
 }
 
-/// AE10 at the CLI boundary: a daemon that predates `linear.snapshot` (here a
+/// At the CLI boundary: a daemon that predates `linear.snapshot` (here a
 /// listener answering every method but `daemon.status` with the protocol's
 /// unknown-method error) receives no project request from `board tui`. The
 /// method-not-found rendering itself is proven in the TUI suite.

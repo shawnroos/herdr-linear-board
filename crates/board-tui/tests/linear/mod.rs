@@ -107,7 +107,7 @@ fn open_web_3302(d: &mut Driver) {
     );
 }
 
-// -- rendering (AE1, AE9, AE2, AE4, herdr down, mapping, detail, stale) -----
+// -- rendering (herdr down, mapping, detail, stale) ------------------------
 
 #[test]
 fn bound_with_view_renders_the_views_columns_in_order() {
@@ -543,7 +543,7 @@ fn control_characters_never_reach_the_frame() {
     );
 }
 
-// -- the allow set (AE11, R17) -----------------------------------------------
+// -- the allow set -----------------------------------------------
 
 #[test]
 fn a_card_create_effect_is_refused_before_any_request_is_built() {
@@ -623,7 +623,7 @@ fn upstream_effects_still_run_outside_linear_mode() {
     assert!(d.app.toast.is_none());
 }
 
-// -- refresh policy (R21) ----------------------------------------------------
+// -- refresh policy ----------------------------------------------------
 
 #[test]
 fn a_refresh_while_one_is_in_flight_is_dropped_with_a_toast() {
@@ -997,7 +997,7 @@ fn a_key_is_handled_while_a_snapshot_is_in_flight_and_the_result_replaces_the_bo
     assert!(!board.contains("refreshing…"), "{board}");
 }
 
-// -- errors (R19, R25) --------------------------------------------------------
+// -- errors --------------------------------------------------------
 
 /// Answers the first `linear.snapshot` from the fake, then fails every later
 /// one, so a test can watch the last good document survive a bad refresh.
@@ -1068,7 +1068,7 @@ fn a_first_fetch_failure_has_no_last_good_and_no_dismiss() {
     assert_eq!(d.app.screen, Screen::LinearError, "nothing to dismiss to");
 }
 
-// -- the three actions (R20, AE6) -------------------------------------------
+// -- the three actions -------------------------------------------
 
 #[test]
 fn detail_cursor_starts_on_the_working_pane_and_return_focuses_it() {
@@ -3263,7 +3263,7 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
     );
 }
 
-// -- the issue-page read (R14, R15, R17, R18, R19) --------------------------
+// -- the issue-page read --------------------------
 
 fn issue_doc(identifier: &str) -> board_core::protocol::LinearIssueDocument {
     board_core::protocol::LinearIssueDocument {
@@ -3293,7 +3293,7 @@ fn in_flight_issue(d: &Driver) -> Option<&str> {
         .map(|(issue, _)| issue.as_str())
 }
 
-/// R14 -- the page opens on what the snapshot already holds and asks for the
+/// The page opens on what the snapshot already holds and asks for the
 /// rest; it never waits on a blank screen.
 #[test]
 fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
@@ -3314,7 +3314,7 @@ fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
     assert!(detail_state(&d).detail_error.is_none());
 }
 
-/// R18 -- overlapping reads are the normal case once Enter opens a linked issue
+/// Overlapping reads are the normal case once Enter opens a linked issue
 /// in place, so a result for an issue the reader has left must be dropped
 /// rather than painted under the open issue's title.
 #[test]
@@ -3354,7 +3354,7 @@ fn a_failure_for_an_issue_the_reader_has_left_is_dropped() {
     assert!(detail_state(&d).detail_error.is_none(), "failure leaked");
 }
 
-/// R15 -- a failed read keeps what the page already shows, says what happened,
+/// A failed read keeps what the page already shows, says what happened,
 /// and `r` sends the read again.
 #[test]
 fn a_failed_read_is_retryable_with_r() {
@@ -3379,7 +3379,7 @@ fn a_failed_read_is_retryable_with_r() {
     );
 }
 
-/// R16 -- a plugin that ships no issue script is fixed by updating it, so the
+/// A plugin that ships no issue script is fixed by updating it, so the
 /// page must not offer a retry that can never succeed.
 #[test]
 fn a_plugin_without_the_issue_script_is_not_retryable() {
@@ -3404,7 +3404,7 @@ fn a_plugin_without_the_issue_script_is_not_retryable() {
     assert!(detail_state(&d).last_good.is_some());
 }
 
-/// R17 -- each open fetches fresh; nothing is cached between opens.
+/// Each open fetches fresh; nothing is cached between opens.
 #[test]
 fn opening_the_same_issue_again_reads_it_again() {
     let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
@@ -3426,7 +3426,7 @@ fn opening_the_same_issue_again_reads_it_again() {
     );
 }
 
-/// R19 -- the page is read-only. The effect gate is the guard (its exhaustive
+/// The page is read-only. The effect gate is the guard (its exhaustive
 /// classification is proven in `driver::linear`); what this adds is that
 /// reading a page sends no write to the daemon at all.
 #[test]
@@ -3446,7 +3446,7 @@ fn opening_and_reading_a_page_sends_no_write() {
     assert!(called.iter().any(|m| m == "linear.issue"), "{called:?}");
 }
 
-// -- one cursor, Enter, and the back stack (R11, R12, R13, R17) -------------
+// -- one cursor, Enter, and the back stack -------------
 
 use board_tui::view::IssueRowKind;
 
@@ -3466,7 +3466,7 @@ fn page_selection(d: &Driver) -> Option<IssueRowKind> {
     d.app.linear.as_ref().unwrap().detail_selection.clone()
 }
 
-/// R11 -- one cursor over every selectable row, in the order the page draws
+/// One cursor over every selectable row, in the order the page draws
 /// them: the main column's rows before the sidebar's, at both widths.
 #[test]
 fn the_cursor_moves_through_every_selectable_row_in_reading_order() {
@@ -3559,7 +3559,7 @@ fn the_selection_survives_the_document_arriving_above_it() {
     assert!(after.contains("▶ wA:p2"), "{after}");
 }
 
-/// R12 -- Enter on an issue row opens that issue in place, and Esc walks back
+/// Enter on an issue row opens that issue in place, and Esc walks back
 /// one issue at a time before leaving the page.
 #[test]
 fn enter_opens_a_linked_issue_and_esc_walks_back() {
@@ -3600,7 +3600,7 @@ fn enter_opens_a_linked_issue_and_esc_walks_back() {
     assert!(d.app.linear.as_ref().unwrap().detail.is_none());
 }
 
-/// R17 -- a back-step re-shows what that page last displayed while its fresh
+/// A back-step re-shows what that page last displayed while its fresh
 /// read runs; it does not empty to loading markers on the way back.
 #[test]
 fn a_back_step_shows_the_previous_page_immediately() {
@@ -3837,7 +3837,7 @@ fn the_back_stack_stops_growing_at_its_cap() {
     assert_eq!(stack.first().unwrap().issue, pushed(HOPS - CAP + 1));
 }
 
-/// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
+/// Each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
 /// page's own issue whatever row is selected.
 #[test]
 fn return_focuses_a_pane_row_and_the_issue_keys_need_no_row() {
@@ -3872,7 +3872,7 @@ fn return_focuses_a_pane_row_and_the_issue_keys_need_no_row() {
     );
 }
 
-/// Covers AE5. The description's Markdown reaches the page as structure, not
+/// The description's Markdown reaches the page as structure, not
 /// as markup, and the media it cannot draw is named rather than dropped.
 #[test]
 fn the_description_renders_its_markdown_on_the_page() {
@@ -3912,7 +3912,7 @@ fn the_description_renders_its_markdown_on_the_page() {
 
 // -- findings from code review ---------------------------------------------
 
-/// R14, and the defect that made it a P0: a linked issue is deliberately NOT on
+/// The defect that made this a P0: a linked issue is deliberately NOT on
 /// the board, so resolving the page's subject out of the snapshot rendered it
 /// blank. The earlier back-stack test passed over this because it asserted the
 /// state and never that anything was drawn.

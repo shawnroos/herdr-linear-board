@@ -214,10 +214,7 @@ fn session_arrived(
 
 /// Mark text and issue ids are agent text, cleaned as the board cleans them.
 fn clean(read: LinearSessionGetResult) -> LinearSessionGetResult {
-    serde_json::to_value(&read)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value)
-        .unwrap_or_default()
+    board_core::text::scrubbed(&read).unwrap_or_default()
 }
 
 fn snapshot_arrived(

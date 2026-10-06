@@ -1,4 +1,4 @@
-//! The board's level from where its own pane sits in herdr (KTD10, KTD11):
+//! The board's level from where its own pane sits in herdr:
 //! the space board alone or as an overlay, the issue of the focused split
 //! when it is one split among several.
 

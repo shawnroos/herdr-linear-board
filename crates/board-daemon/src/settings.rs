@@ -142,7 +142,7 @@ impl DaemonSettings {
     }
 }
 
-/// The only variables a `gh` child sees (KTD8). The last one carries
+/// The only variables a `gh` child sees. The last one carries
 /// Linux keyring auth.
 pub(crate) const GH_ENV_ALLOWLIST: &[&str] = &[
     "HOME",

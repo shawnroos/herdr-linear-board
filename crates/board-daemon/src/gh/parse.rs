@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use board_core::protocol::{LinearPrCheck, LinearPrCi, LinearPrDetail, LinearPrReview};
+use board_core::protocol::{
+    LinearPrCheck, LinearPrCi, LinearPrDetail, LinearPrReview, CI_FAIL, CI_NONE, CI_PASS,
+    CI_PENDING, CI_SKIPPING,
+};
 use serde_json::Value;
 
 pub const VIEW_FIELDS: &str = "number,title,url,state,isDraft,mergedAt,mergeStateStatus,mergeable,\
@@ -44,21 +47,21 @@ fn bucket(item: &Value) -> (&'static str, Option<String>) {
         .filter(|_| item["context"].is_string())
     {
         let bucket = match state {
-            "SUCCESS" => "pass",
-            "PENDING" | "EXPECTED" => "pending",
-            _ => "fail",
+            "SUCCESS" => CI_PASS,
+            "PENDING" | "EXPECTED" => CI_PENDING,
+            _ => CI_FAIL,
         };
         return (bucket, Some(state.to_string()));
     }
     let status = item["status"].as_str().unwrap_or("");
     if status != "COMPLETED" {
-        return ("pending", text(&item["status"]));
+        return (CI_PENDING, text(&item["status"]));
     }
     let conclusion = item["conclusion"].as_str().unwrap_or("");
     let bucket = match conclusion {
-        "SUCCESS" | "NEUTRAL" => "pass",
-        "SKIPPED" => "skipping",
-        _ => "fail",
+        "SUCCESS" | "NEUTRAL" => CI_PASS,
+        "SKIPPED" => CI_SKIPPING,
+        _ => CI_FAIL,
     };
     (bucket, text(&item["conclusion"]))
 }
@@ -105,19 +108,19 @@ fn count(checks: &[LinearPrCheck]) -> LinearPrCi {
     let n = |b: &str| checks.iter().filter(|c| c.bucket == b).count() as u64;
     let mut ci = LinearPrCi {
         state: String::new(),
-        passed: n("pass"),
-        pending: n("pending"),
-        failed: n("fail"),
-        skipped: n("skipping"),
+        passed: n(CI_PASS),
+        pending: n(CI_PENDING),
+        failed: n(CI_FAIL),
+        skipped: n(CI_SKIPPING),
     };
     ci.state = if ci.failed > 0 {
-        "fail"
+        CI_FAIL
     } else if ci.pending > 0 {
-        "pending"
+        CI_PENDING
     } else if ci.passed > 0 {
-        "pass"
+        CI_PASS
     } else {
-        "none"
+        CI_NONE
     }
     .to_string();
     ci

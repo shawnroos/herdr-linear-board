@@ -629,7 +629,7 @@ const MUTED_CARD_STEP: u8 = 2;
 // Shawn's gruvbox muted detail; no blend reproduces it in every channel.
 const GRUVBOX_MUTED_DETAIL: Color = Color::Rgb(0x7c, 0x6f, 0x64);
 const MUTED_DETAIL_BLEND: f32 = 0.2;
-// "about 60%" per the design (KTD6).
+// "about 60%" per the design.
 const FADE: f32 = 0.6;
 
 impl Theme {

@@ -8,14 +8,17 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use board_core::protocol::{LinearCardPr, LinearGhSource, LinearPrDetail, LinearPrDocument};
+use board_core::protocol::{
+    LinearCardPr, LinearGhSource, LinearPrDetail, LinearPrDocument, CI_PENDING, GH_OK,
+    GH_UNAVAILABLE, GH_UNKNOWN,
+};
 
 pub use client::{GhClient, GhConfig, GhError, Output, MAX_OUTPUT_BYTES};
 
 use crate::linear::{Debouncer, SpaceKey};
 use crate::sync::locked;
 
-/// Chosen, not measured (KTD8): a PR with pending checks is read again after
+/// Chosen, not measured: a PR with pending checks is read again after
 /// two minutes, any other after ten, and only while a board is subscribed.
 pub const PENDING_REFRESH_SECS: i64 = 120;
 pub const STALE_AFTER_SECS: i64 = 600;
@@ -121,7 +124,7 @@ impl Entry {
         self.detail
             .as_ref()
             .and_then(|d| d.ci.as_ref())
-            .is_some_and(|ci| ci.state == "pending")
+            .is_some_and(|ci| ci.state == CI_PENDING)
     }
 }
 
@@ -231,15 +234,15 @@ impl GhState {
     pub fn source(&self) -> LinearGhSource {
         match &self.unavailable {
             Some((message, _)) => LinearGhSource {
-                status: "unavailable".into(),
+                status: GH_UNAVAILABLE.into(),
                 message: Some(message.clone()),
             },
             None if self.ever_read => LinearGhSource {
-                status: "ok".into(),
+                status: GH_OK.into(),
                 message: None,
             },
             None => LinearGhSource {
-                status: "unknown".into(),
+                status: GH_UNKNOWN.into(),
                 message: None,
             },
         }

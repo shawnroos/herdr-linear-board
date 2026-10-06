@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::super::herdr::{
-    handle_event_from_socket, HerdrSocketSupervisor, HerdrWatchConnector, WatchConnector,
+    handle_event_from_socket, HerdrSocketSupervisor, HerdrWatchConnector, Want, WatchConnector,
     WatchEventStream, WatchSnapshot, WatchTiming,
 };
 use super::active_daemon;
@@ -234,11 +234,10 @@ impl WatchConnector for FakeSocketConnector {
     fn subscribe(
         &self,
         socket: &Path,
-        _panes: &[String],
-        levels: bool,
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>> {
         let mut state = self.0.lock().unwrap();
-        let tail = if levels { " +levels" } else { "" };
+        let tail = if want.levels { " +levels" } else { "" };
         state
             .log
             .push(format!("subscribe:{}{tail}", socket.display()));
@@ -641,7 +640,7 @@ fn watch_snapshot_accepts_the_supported_protocol() {
 #[test]
 fn watch_subscription_rejects_an_incompatible_socket_before_subscribing() {
     let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL - 1);
-    let result = HerdrWatchConnector.subscribe(&herdr.socket, &[], false);
+    let result = HerdrWatchConnector.subscribe(&herdr.socket, &Want::default());
 
     assert!(result.is_err(), "an incompatible socket must not subscribe");
     assert_eq!(herdr.methods(), vec!["ping"]);
@@ -651,7 +650,7 @@ fn watch_subscription_rejects_an_incompatible_socket_before_subscribing() {
 fn watch_subscription_accepts_the_supported_socket_after_the_gate() {
     let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL);
     let _events = HerdrWatchConnector
-        .subscribe(&herdr.socket, &[], false)
+        .subscribe(&herdr.socket, &Want::default())
         .expect("the supported Herdr contract must pass before subscribing");
 
     assert_eq!(herdr.methods(), vec!["ping", "events.subscribe"]);
@@ -661,7 +660,13 @@ fn watch_subscription_accepts_the_supported_socket_after_the_gate() {
 fn a_level_watch_adds_the_focus_and_layout_subscriptions() {
     let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL);
     let _events = HerdrWatchConnector
-        .subscribe(&herdr.socket, &[], true)
+        .subscribe(
+            &herdr.socket,
+            &Want {
+                panes: vec![],
+                levels: true,
+            },
+        )
         .expect("subscribe");
     let sent = herdr.requests_for("events.subscribe");
     let kinds: Vec<String> = sent[0]["params"]["subscriptions"]

@@ -2,7 +2,7 @@
 //! say which pull requests belong to the issue and draw at once; `gh` fields
 //! fill in when the daemon's PR read lands.
 
-use board_core::protocol::{LinearAttachment, LinearPrDetail};
+use board_core::protocol::{LinearAttachment, LinearPrDetail, CI_FAIL};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -333,7 +333,7 @@ fn open_card(
             checks.push(Span::styled(format!("  {} skipped", ci.skipped), t.dim()));
             out.push(card_row(checks, width, bg));
         }
-        for check in g.checks.iter().filter(|c| c.bucket == "fail") {
+        for check in g.checks.iter().filter(|c| c.bucket == CI_FAIL) {
             out.push(card_row(
                 vec![Span::styled(
                     fit(&format!("   {CROSS} {}", line(&check.name)), inner),

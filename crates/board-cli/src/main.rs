@@ -106,21 +106,12 @@ fn dispatch(cli: Cli) -> Result<()> {
                 anyhow!("board tui --session needs BOARD_SESSION_WORKSPACE or HERDR_WORKSPACE_ID")
             })?;
             let mut client = ctx.into_client()?;
-            let daemon_version = client.daemon_status().ok().map(|status| status.version);
-            let herdr = board_tui::herdr_keys::from_environment();
-            board_tui::run_linear_beside(
-                Box::new(client),
-                board_tui::LinearStart {
-                    workspace_id: identity.space.clone(),
-                    origin: board_tui::OriginContext::from_environment(),
-                    board_version: env!("CARGO_PKG_VERSION").to_string(),
-                    daemon_version,
-                    herdr_keys: herdr.keys,
-                    theme: herdr.theme,
-                    show: board_tui::ShowContext::default(),
-                },
-                identity,
-            )
+            let start = linear_start(
+                &mut client,
+                identity.space.clone(),
+                board_tui::ShowContext::default(),
+            );
+            board_tui::run_linear_beside(Box::new(client), start, identity)
         }
         Cmd::Tui { session: false } => {
             let show = board_tui::ShowContext::from_environment();
@@ -133,20 +124,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                         eprintln!("board: BOARD_SCOPE_PATH is ignored in Linear mode (the herdr space id selects the board)");
                     }
                     let mut client = ctx.into_client()?;
-                    let daemon_version = client.daemon_status().ok().map(|status| status.version);
-                    let herdr = board_tui::herdr_keys::from_environment();
-                    board_tui::run_linear(
-                        Box::new(client),
-                        board_tui::LinearStart {
-                            workspace_id,
-                            origin: board_tui::OriginContext::from_environment(),
-                            board_version: env!("CARGO_PKG_VERSION").to_string(),
-                            daemon_version,
-                            herdr_keys: herdr.keys,
-                            theme: herdr.theme,
-                            show,
-                        },
-                    )
+                    let start = linear_start(&mut client, workspace_id, show);
+                    board_tui::run_linear(Box::new(client), start)
                 }
                 scope::TuiMode::Upstream => {
                     let board = ctx.board()?.clone();
@@ -206,6 +185,24 @@ fn dispatch(cli: Cli) -> Result<()> {
 
 fn run_daemon(foreground: bool) -> Result<()> {
     board_daemon::run(foreground).map_err(|error| anyhow!(error))
+}
+
+fn linear_start(
+    client: &mut UnixClient,
+    workspace_id: String,
+    show: board_tui::ShowContext,
+) -> board_tui::LinearStart {
+    let daemon_version = client.daemon_status().ok().map(|status| status.version);
+    let herdr = board_tui::herdr_keys::from_environment();
+    board_tui::LinearStart {
+        workspace_id,
+        origin: board_tui::OriginContext::from_environment(),
+        board_version: env!("CARGO_PKG_VERSION").to_string(),
+        daemon_version,
+        herdr_keys: herdr.keys,
+        theme: herdr.theme,
+        show,
+    }
 }
 
 fn cmd_version(json_output: bool) -> Result<()> {

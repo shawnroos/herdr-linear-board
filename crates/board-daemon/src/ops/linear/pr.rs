@@ -50,7 +50,6 @@ pub(crate) fn schedule_pass(d: &Arc<Daemon>) {
     );
 }
 
-/// The snapshot flag: the next plain snapshot already carries the new data.
 fn run_pass(d: &Arc<Daemon>) {
     if d.is_shutdown() {
         return;
@@ -78,6 +77,7 @@ fn announce(d: &Arc<Daemon>, prs: &[PrRef]) {
     }
     let spaces: BTreeSet<String> = d.gh.state().spaces_showing(prs);
     for space in spaces {
+        // `snapshot: true`: the next plain snapshot already carries the new data.
         d.emit(Event::LocalStateChanged {
             space: Some(space),
             snapshot: true,

@@ -3,7 +3,10 @@
 //! screens. Only `Mode::Linear` reaches this module, and it reads
 //! `App::linear` only, never `App::board`.
 
-use board_core::protocol::{LinearCardPr, LinearGhSource, LinearIssue, LinearSnapshot, MarkKind};
+use board_core::protocol::{
+    LinearCardPr, LinearGhSource, LinearIssue, LinearSnapshot, MarkKind, CI_FAIL, CI_PASS,
+    CI_PENDING, GH_UNAVAILABLE,
+};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -123,7 +126,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
     scrub(f);
 }
 
-/// The view boundary for outside text (KTD15). Every Linear and agent string
+/// The view boundary for outside text. Every Linear and agent string
 /// is sanitised on arrival, but ratatui writes ESC and BEL into cells as-is, so
 /// a string that missed that pass would reach the terminal as a sequence. A
 /// cell holding a control or format character is blanked instead.
@@ -170,7 +173,7 @@ fn draw_issue_screen(app: &App, state: &LinearState, f: &mut Frame, area: Rect) 
 }
 
 /// Every cell of `area` outside `keep` blended toward the app background
-/// (KTD6), so whatever drew there recedes without a muted style of its own.
+///, so whatever drew there recedes without a muted style of its own.
 fn fade_outside(state: &LinearState, f: &mut Frame, area: Rect, keep: Rect) {
     let buf = f.buffer_mut();
     let area = area.intersection(buf.area);
@@ -225,7 +228,7 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
         Some(("none", _)) => DEFAULT_VIEW_LABEL.to_string(),
         None => "no view chosen: /work:bind".to_string(),
         // The record still names the view Linear no longer has, so say which
-        // one failed and that a new choice is needed (AE9).
+        // one failed and that a new choice is needed.
         Some((status @ ("not_found" | "archived" | "not_in_project"), Some(name))) => format!(
             "view {} {} · no view chosen: /work:bind",
             line(&name),
@@ -409,7 +412,7 @@ fn pr_gh(source: Option<&LinearGhSource>, pr: &LinearCardPr) -> PrGh {
     match source {
         _ if read => PrGh::Read,
         None => PrGh::LinearOnly,
-        Some(source) if source.status == "unavailable" || pr.gh_error.is_some() => {
+        Some(source) if source.status == GH_UNAVAILABLE || pr.gh_error.is_some() => {
             PrGh::GhUnavailable
         }
         Some(_) => PrGh::Loading,
@@ -487,9 +490,9 @@ fn pr_read(theme: &Theme, pr: &LinearCardPr, muted: bool) -> Vec<Span<'static>> 
         ));
     }
     let ci = pr.ci.as_ref().and_then(|ci| match ci.state.as_str() {
-        "pass" => Some((icon::CHECK, theme.palette.green)),
-        "fail" => Some((icon::CROSS, theme.palette.red)),
-        "pending" => Some((icon::CLOCK, theme.palette.yellow)),
+        CI_PASS => Some((icon::CHECK, theme.palette.green)),
+        CI_FAIL => Some((icon::CROSS, theme.palette.red)),
+        CI_PENDING => Some((icon::CLOCK, theme.palette.yellow)),
         _ => None,
     });
     if let Some((glyph, colour)) = ci {
@@ -707,7 +710,7 @@ pub fn board_columns(width: u16) -> usize {
 }
 
 /// Whether `width` cells leave the board two columns of room, the least a
-/// pinned issue panel keeps (KTD12).
+/// pinned issue panel keeps.
 pub fn pin_fits(width: u16) -> bool {
     width >= 2 * MIN_COL_W
 }
