@@ -98,6 +98,14 @@ pub fn layout_subscriptions() -> Vec<Subscription> {
         .collect()
 }
 
+/// What the daemon's tab and split naming follows, all global.
+pub fn naming_subscriptions() -> Vec<Subscription> {
+    ["tab.created", "pane.created"]
+        .into_iter()
+        .map(|kind| Subscription(json!({ "type": kind })))
+        .collect()
+}
+
 /// A persistent event-stream connection. Iterating yields decoded events until
 /// the socket closes.
 pub struct HerdrEvents {

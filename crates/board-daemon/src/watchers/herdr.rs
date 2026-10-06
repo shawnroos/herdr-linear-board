@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use board_core::engine::AgentSignal;
 use board_core::protocol::{CardStatus, Event, RunOutcome};
 use board_herdr::{
-    layout_subscriptions, watch_subscriptions, AgentStatus, HerdrError, HerdrEvent, HerdrEvents,
+    layout_subscriptions, naming_subscriptions, watch_subscriptions, AgentStatus, HerdrError,
+    HerdrEvent, HerdrEvents,
 };
 
 use super::{apply_signal, run_open};
@@ -69,6 +70,7 @@ impl WatchConnector for HerdrWatchConnector {
         let mut subscriptions = watch_subscriptions(panes);
         if levels {
             subscriptions.extend(layout_subscriptions());
+            subscriptions.extend(naming_subscriptions());
         }
         HerdrEvents::connect(socket, &subscriptions)
             .map(|events| Box::new(events) as Box<dyn WatchEventStream>)
@@ -218,7 +220,7 @@ impl HerdrSocketSupervisor {
 }
 
 /// The run panes to watch per socket, plus whether a board reads its level
-/// from that socket.
+/// from that socket or it holds a Linear-bound space whose tabs are named.
 type Want = (Vec<String>, bool);
 
 /// Level sockets are dropped once no client is subscribed: nobody is left to
@@ -235,7 +237,7 @@ fn wanted_watches(d: &Arc<Daemon>) -> HashMap<PathBuf, Want> {
         .iter()
         .map(|(socket, panes)| (socket.clone(), (panes.clone(), false)))
         .collect();
-    for socket in &watch.level_sockets {
+    for socket in watch.level_sockets.iter().chain(&watch.name_sockets) {
         wanted.entry(socket.clone()).or_default().1 = true;
     }
     wanted
@@ -338,6 +340,9 @@ pub(super) fn handle_event_from_socket(
     ev: HerdrEvent,
 ) {
     use board_herdr::AgentStatus;
+    if !matches!(ev, HerdrEvent::Other(_)) {
+        d.naming.kick();
+    }
     match ev {
         HerdrEvent::AgentStatusChanged {
             pane_id, status, ..
@@ -416,7 +421,7 @@ pub(super) fn handle_event_from_socket(
             workspace_id,
             tab_id,
         }),
-        HerdrEvent::Other(_) => {}
+        HerdrEvent::Created { .. } | HerdrEvent::Other(_) => {}
     }
 }
 

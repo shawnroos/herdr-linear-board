@@ -112,7 +112,14 @@ fn derive_caps_long_names_at_forty_cells() {
 #[test]
 fn decide_renames_only_blank_default_or_generated_labels() {
     let derived = "WEB-101 · Fix login";
-    let rows: &[(Option<&str>, Option<&str>, Option<&str>, bool, &str)] = &[
+    type Row<'a> = (
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        bool,
+        &'a str,
+    );
+    let rows: &[Row] = &[
         (None, None, None, true, "a pane with no label"),
         (Some(""), None, None, true, "an empty label"),
         (Some("  "), None, None, true, "a blank label"),

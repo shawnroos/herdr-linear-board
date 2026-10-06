@@ -16,10 +16,10 @@ use std::sync::{Mutex, PoisonError};
 use board_core::db::NewBoardPane;
 use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement};
 
-/// Rename `pane_id` in the session `origin_socket` belongs to.
+/// Rename `pane_id` in the session `origin_socket` belongs to. The pane's
+/// label then belongs to its client: the naming pass never renames it again.
 ///
-/// Takes no [`Daemon`](crate::state::Daemon): this touches no board state, only
-/// the caller's own Herdr session. That session is named by `origin_socket`
+/// The rename touches only the caller's own Herdr session. That session is named by `origin_socket`
 /// exactly as it is for `run.focus`, because only the caller knows which Herdr
 /// it is running inside; the socket is canonicalized and then opened through
 /// [`crate::herdr_conn`], so the pinned Herdr 0.9.0 / protocol 22 gate applies
@@ -35,7 +35,7 @@ use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, Plu
 /// Control and format characters are stripped here rather than trusted to the
 /// TUI, because any socket client can call this. Brackets survive: the kanban
 /// title is `Board [scope · FILTER]`.
-pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
+pub(super) fn pane_set_title(d: &Arc<Daemon>, p: PaneSetTitleParams) -> Result<Value> {
     if p.pane_id.trim().is_empty() {
         return Err(Error::BadRequest(
             "pane.set_title requires a non-empty pane_id".into(),
@@ -44,12 +44,14 @@ pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
     let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
     let mut client = crate::herdr_conn::connect_checked(&socket)
         .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+    let _labels = d.naming.labels();
     client
         .pane_rename(&PaneRenameParams {
             pane_id: p.pane_id.clone(),
             label: board_core::text::strip_control_and_format(&p.title),
         })
         .map_err(|e| Error::HerdrUnavailable(format!("pane.rename {}: {e}", p.pane_id)))?;
+    crate::naming::titled_by_client(d, &socket, &p.pane_id);
     Ok(json!(PaneSetTitleResult { renamed: true }))
 }
 

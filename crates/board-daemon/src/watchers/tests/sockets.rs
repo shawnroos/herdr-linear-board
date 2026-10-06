@@ -677,7 +677,9 @@ fn a_level_watch_adds_the_focus_and_layout_subscriptions() {
             "pane.closed",
             "pane.focused",
             "tab.focused",
-            "layout.updated"
+            "layout.updated",
+            "tab.created",
+            "pane.created"
         ]
     );
 }
@@ -725,4 +727,37 @@ fn a_level_socket_forwards_focus_and_layout_events_only_while_a_client_listens()
     supervisor.step(&d, Instant::now());
     assert!(supervisor.sockets.is_empty());
     assert!(d.watch.lock().unwrap().level_sockets.is_empty());
+}
+
+#[test]
+fn a_named_socket_stays_watched_with_no_client_and_its_events_wake_naming() {
+    let socket = PathBuf::from("/tmp/herdr-named.sock");
+    let state = Arc::new(Mutex::new(FakeSocketState::default()));
+    state
+        .lock()
+        .unwrap()
+        .events
+        .entry(socket.clone())
+        .or_default()
+        .push_back(Ok(Some(HerdrEvent::Created {
+            workspace_id: Some("w1".into()),
+        })));
+    let d = testkit::daemon().build_daemon();
+    d.watch.lock().unwrap().name_sockets.insert(socket.clone());
+    let mut supervisor = fake_supervisor(state.clone());
+    assert!(!d.naming.pending());
+
+    supervisor.step(&d, Instant::now());
+
+    let log = state.lock().unwrap().log.clone();
+    assert!(
+        log.contains(&"subscribe:/tmp/herdr-named.sock +levels".to_string()),
+        "{log:?}"
+    );
+    assert!(
+        d.naming.pending(),
+        "a created tab or pane must wake the naming pass"
+    );
+    supervisor.step(&d, Instant::now());
+    assert!(supervisor.sockets.contains_key(&socket));
 }

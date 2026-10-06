@@ -39,8 +39,8 @@ pub use client::HerdrClient;
 pub use envelope::{ErrorBody, Request, Response};
 pub use error::{HerdrError, Result};
 pub use events::{
-    layout_subscriptions, parse_event_line, watch_subscriptions, Backoff, HerdrEvent, HerdrEvents,
-    Subscription,
+    layout_subscriptions, naming_subscriptions, parse_event_line, watch_subscriptions, Backoff,
+    HerdrEvent, HerdrEvents, Subscription,
 };
 pub use params::{
     AgentPromptParams, AgentPromptWaitOptions, AgentStartParams, AgentWaitParams, PaneRenameParams,

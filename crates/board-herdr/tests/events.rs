@@ -217,3 +217,32 @@ fn layout_subscriptions_are_the_three_global_focus_and_layout_kinds() {
         ]
     );
 }
+
+// Shapes from the pinned schema: `tab_created {tab: TabInfo}`, `pane_created {pane: PaneInfo}`.
+#[test]
+fn parses_tab_and_pane_created_with_their_workspace() {
+    let cases = [
+        r#"{"event":"tab_created","data":{"type":"tab_created","tab":{"tab_id":"w3:t2","workspace_id":"w3","number":2,"label":"2","focused":false,"pane_count":1,"agent_status":"unknown"}}}"#,
+        r#"{"event":"pane_created","data":{"type":"pane_created","pane":{"pane_id":"w3:p4","workspace_id":"w3","tab_id":"w3:t2","focused":false,"revision":1,"agent_status":"unknown"}}}"#,
+    ];
+    for line in cases {
+        assert_eq!(
+            parse_event_line(line).expect("event"),
+            HerdrEvent::Created {
+                workspace_id: Some("w3".into())
+            },
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn naming_subscriptions_are_the_global_tab_and_pane_created_kinds() {
+    assert_eq!(
+        board_herdr::naming_subscriptions(),
+        vec![
+            Subscription::raw(serde_json::json!({"type": "tab.created"})),
+            Subscription::raw(serde_json::json!({"type": "pane.created"})),
+        ]
+    );
+}

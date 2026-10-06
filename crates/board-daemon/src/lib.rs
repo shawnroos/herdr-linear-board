@@ -198,6 +198,8 @@ async fn async_main(db_path: PathBuf, socket_path: PathBuf) -> anyhow::Result<()
         // Herdr server may appear after boardd and must still be discovered.
         let d = daemon.clone();
         std::thread::spawn(move || watchers::herdr_event_thread(d));
+        let d = daemon.clone();
+        std::thread::spawn(move || naming::naming_thread(d));
         // Durable runs that could not be adopted at startup are not in the
         // in-memory watch set yet. Retry the conservative pass slowly until a
         // socket becomes available; successful adoption feeds the per-socket

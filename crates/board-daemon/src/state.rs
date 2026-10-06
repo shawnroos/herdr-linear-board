@@ -158,6 +158,9 @@ pub struct WatchState {
     /// Sessions a board read `pane.context` from: watched for focus and
     /// layout events while any client is subscribed.
     pub level_sockets: std::collections::HashSet<PathBuf>,
+    /// Sessions holding a Linear-bound space, watched so their tabs and
+    /// splits are named as they appear.
+    pub name_sockets: std::collections::HashSet<PathBuf>,
     pub generation: u64,
 }
 
@@ -187,6 +190,7 @@ pub struct Daemon {
     pub watch: Mutex<WatchState>,
     pub linear: crate::linear::LinearService,
     pub gh: crate::gh::GhService,
+    pub naming: crate::naming::Naming,
     /// Connections that sent `events.subscribe` and are still open.
     subscribers: Arc<std::sync::atomic::AtomicUsize>,
     shutdown_tx: watch::Sender<bool>,
@@ -227,6 +231,7 @@ impl Daemon {
             watch: Mutex::new(WatchState::default()),
             linear: crate::linear::LinearService::default(),
             gh: crate::gh::GhService::default(),
+            naming: crate::naming::Naming::default(),
             subscribers: Arc::default(),
             shutdown_tx,
             stopping: AtomicBool::new(false),
@@ -248,6 +253,11 @@ impl Daemon {
             Event::LocalStateChanged { .. } => "local_state_changed",
             Event::PaneLayoutChanged { .. } => "pane_layout_changed",
         });
+        // A binding change, or a Linear read that brings an issue's title,
+        // can change a generated name.
+        if matches!(ev, Event::LocalStateChanged { .. }) {
+            self.naming.kick();
+        }
         let _ = self.events_tx.send(ev);
     }
 

@@ -122,7 +122,7 @@ routes!(d, params, {
     "harness.list" => discovery::harness_list(d),
     "space.list" => discovery::space_list(d, from(params)?),
     "session.list" => discovery::session_list(d),
-    "pane.set_title" => panes::pane_set_title(from(params)?),
+    "pane.set_title" => panes::pane_set_title(d, from(params)?),
     "pane.focus" => panes::pane_focus(from(params)?),
     "pane.context" => panes::pane_context(d, from(params)?),
     "board.pane.open" => panes::board_pane_open(d, from(params)?),

@@ -25,6 +25,8 @@ pub enum HerdrEvent {
         workspace_id: Option<String>,
         tab_id: Option<String>,
     },
+    /// `tab_created` or `pane_created`; the id is nested in `tab` or `pane`.
+    Created { workspace_id: Option<String> },
     /// Any other event line (raw envelope preserved).
     Other(Value),
 }
@@ -108,6 +110,13 @@ pub fn parse_event_line(line: &str) -> Option<HerdrEvent> {
             Some(HerdrEvent::LayoutChanged {
                 workspace_id: f.workspace_id,
                 tab_id: f.tab_id,
+            })
+        }
+        "tab_created" | "pane_created" => {
+            let place = data.get("tab").or_else(|| data.get("pane")).unwrap_or(data);
+            let f: PlaceFields = serde_json::from_value(place.clone()).ok()?;
+            Some(HerdrEvent::Created {
+                workspace_id: f.workspace_id,
             })
         }
         _ => Some(HerdrEvent::Other(value)),
