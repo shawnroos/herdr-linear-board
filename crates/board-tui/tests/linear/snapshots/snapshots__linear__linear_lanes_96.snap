@@ -3,7 +3,7 @@ source: crates/board-tui/tests/linear/mod.rs
 expression: frame
 ---
 " Linear  Frame Effects · view: project issues (default) · space: Plugins · fetched 0s ago       "
-" Enter detail · r refresh · ? help · ctrl+q quit                                                "
+" Enter detail · r refresh · ? bar · ctrl+q quit                                                 "
 "   Frontend    Backend                                                                        "
 "   TODO  4                                        IN PROGRESS  2                              "
 "                                                                                                "

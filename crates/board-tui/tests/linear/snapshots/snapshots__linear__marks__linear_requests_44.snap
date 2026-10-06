@@ -3,7 +3,7 @@ source: crates/board-tui/tests/linear/marks.rs
 expression: frame
 ---
 " Linear  Frame Effects · view: project issue"
-" Enter detail · r refresh · ? help · ctrl+q "
+" Enter detail · r refresh · ? bar · ctrl+q q"
 "   Frontend    Backend                    "
 "   TODO  4                                 "
 "                                            "

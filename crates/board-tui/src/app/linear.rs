@@ -506,7 +506,7 @@ impl LinearState {
             .filter(move |r| r.issue == identifier)
     }
 
-    /// Every pending show-request, oldest first: the pinned line's order.
+    /// Every pending show-request, oldest first: the bar's order.
     pub fn pending_requests(&self) -> Vec<&ShowRequest> {
         let mut requests: Vec<&ShowRequest> =
             self.local.iter().flat_map(|l| &l.show_requests).collect();

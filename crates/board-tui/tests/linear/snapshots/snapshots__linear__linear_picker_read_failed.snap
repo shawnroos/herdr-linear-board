@@ -3,7 +3,7 @@ source: crates/board-tui/tests/linear/mod.rs
 expression: failed_frame
 ---
 " Linear  Frame Effects · view: Canvas board · space: Plugins · fetched 0s ago                                           "
-" Enter detail · r refresh · ? help · ctrl+q quit                                                                        "
+" Enter detail · r refresh · ? bar · ctrl+q quit                                                                         "
 "   BACKLOG  1                                                 TODO  1                                                 "
 "                                                                                                                        "
 "                                                                                                                        "

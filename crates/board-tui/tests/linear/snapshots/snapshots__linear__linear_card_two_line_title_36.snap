@@ -3,7 +3,7 @@ source: crates/board-tui/tests/linear/mod.rs
 expression: "rows.join(\"\\n\")"
 ---
  Linear  Frame Effects · view: Canva
- Enter detail · r refresh · ? help ·
+ Enter detail · r refresh · ? bar · 
    BACKLOG  1                      
                                     
                                     

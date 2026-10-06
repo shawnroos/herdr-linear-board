@@ -69,7 +69,7 @@ Two reads (`crates/board-daemon/src/linear/queries.rs`):
 |---|---|---|
 | `linear_marks` | kind (`!` attention, `?` question, `✓` done, `◇` suggestion), text, detail JSON, created_by, created_at, owner (herdr socket + pane + Claude session) | Card gutter; page "Marks" as of open; opening clears all but `◇`. Owner, time, detail not shown |
 | `linear_notes` | body, author, created_at, owner | Card shows newest note `› body`; **not on the page** |
-| `linear_show_requests` | reason, requested_by, created_at, acknowledged_at, expires_at (30 min), outcome (accepted / rejected / withdrawn / expired) | Board pinned `◉` line; **not on the page**; outcomes never shown |
+| `linear_show_requests` | reason, requested_by, created_at, acknowledged_at, expires_at (30 min), outcome (accepted / rejected / withdrawn / expired) | Board bottom-bar alert; **not on the page**; outcomes never shown |
 | `linear_worktree_bindings` | worktree_path, state (bound / misplaced / stale), **branch**, tab, display_name, carried JSON, bound_at | Page Board block shows path + state; branch, display_name, carried, bound_at not shown (status line shows elapsed) |
 | `linear_activity` | agent tool calls with claims (socket, pane, workspace, card, run), last 500 per space | Not shown in the TUI |
 

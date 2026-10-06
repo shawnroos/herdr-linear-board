@@ -28,7 +28,7 @@ resume = false             # can this harness resume a recorded conversation? de
 ```
 
 `[linear] show_request_ttl_secs` applies to every show-request an agent makes (`board mcp`'s
-`ask_to_show`). When it runs out, the request leaves the board's pinned line and its outcome
+`ask_to_show`). When it runs out, the request leaves the board's bottom bar and its outcome
 becomes `expired`. An agent cannot set its own expiry. Values below 1 count as 1.
 
 `[daemon] work_plugin_root` is retired. Linear mode no longer runs the work plugin's scripts, so

@@ -286,9 +286,11 @@ board import work-store [--dry-run]
   instead of the kanban: tabs, columns and swimlane rows grouped by the configured grouping (or
   the bound Linear view's grouping, or the team's workflow states), and each card lists its
   worktree bindings, recorded tabs and live pane status. Cards show the marks agents set (`!`
-  needs you, `?` question, `◇` suggestion, `✓` done) and pending show-requests (`◉`). The person
-  answers them: `Enter` on a card clears the `!`, `?` and `✓` marks it showed, `a` accepts a
-  suggestion or the oldest show-request, and `x` rejects one. The person binds a space to a
+  needs you, `?` question, `◇` suggestion, `✓` done) and pending show-requests (`◉`). Each
+  show-request is also an alert in the board's bottom bar, naming who asked and the issue, oldest
+  first. The person answers them: `Enter` on a card clears the `!`, `?` and `✓` marks it showed,
+  `a` / `x` on a selected `◇` card bind or reject the suggestion, and `a` / `x` on a request's bar
+  alert accept or dismiss that request. The person binds a space to a
   project or view from the board's pickers. `r` refreshes; `R` reads Linear again; `u` opens the
   issue; `y` copies the worktree path. Card-owning verbs are refused with a toast. Outside herdr
   the kanban is unchanged.
@@ -355,7 +357,7 @@ A call with none of them owns nothing, and only the person can clear what it wri
 | `unmark {issue, kind?}` | Clear your own marks on a card, of one kind or all kinds. |
 | `note {issue, body}` | Attach a short note; it replaces your earlier note. |
 | `notify {title, body?}` | Send a herdr notification. |
-| `ask_to_show {issue, reason?}` | Ask the person to look at an issue. Asking again refreshes your request. It expires if nobody acts on it. |
+| `ask_to_show {issue, reason?}` | Ask the person to look at an issue. It shows as an alert in the board's bottom bar. Asking again refreshes your request. It expires if nobody acts on it. |
 | `withdraw_show {issue}` | Withdraw your own pending request. |
 | `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. With `session: true`, open or close this session's side pane instead: your bound issue, your lane, or the bind hint. |
 

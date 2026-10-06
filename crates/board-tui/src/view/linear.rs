@@ -220,7 +220,7 @@ fn header_lines(app: &App, state: &LinearState) -> (Vec<Line<'static>>, (u16, u1
     }
     let second = if warnings.is_empty() {
         vec![Span::styled(
-            " Enter detail · r refresh · ? help · ctrl+q quit",
+            " Enter detail · r refresh · ? bar · ctrl+q quit",
             theme.dim(),
         )]
     } else {

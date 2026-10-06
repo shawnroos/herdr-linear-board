@@ -112,11 +112,14 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "Enter Esc", "pager: back to the card"),
     (Screen::LinearBoard, "Enter", "detail; clears its marks"),
     (Screen::LinearBoard, "Enter", "lane line: fold / unfold"),
-    (Screen::LinearBoard, "a", "accept: bind ◇ card"),
-    (Screen::LinearBoard, "x", "dismiss: ◇ card"),
+    (Screen::LinearBoard, "a", "accept: ◇ card / request"),
+    (Screen::LinearBoard, "x", "dismiss: ◇ card / request"),
     (Screen::LinearBoard, "n / N", "next / prev marked card"),
     (Screen::LinearBoard, "r / R", "refresh; R skips cache"),
-    (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "?", "bottom bar; help: keys"),
+    (Screen::LinearBoard, "←/→ h/l Tab", "bar: move along it"),
+    (Screen::LinearBoard, "Enter", "bar: run the item"),
+    (Screen::LinearBoard, "↑ / Esc", "bar: board / deselect"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
     (Screen::LinearBoard, "Esc", "clear the selection"),
     (Screen::LinearBoard, "Ctrl+Q", "quit (q does nothing)"),
@@ -178,8 +181,8 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        145,
-        "the interaction contract must stay at exactly 145 bindings (87 upstream + 53 Linear mode + 5 session pane)"
+        148,
+        "the interaction contract must stay at exactly 148 bindings (87 upstream + 56 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {
