@@ -412,9 +412,29 @@ impl LinearState {
         }
     }
 
-    /// The bar's tip for what is selected at `width` cells.
+    /// The bar's tip for what is selected at `width` cells, saying when a
+    /// pinned issue is hidden for want of room (KTD12).
     pub fn bar_tip(&self, width: u16) -> String {
+        let tip = self.focus_tip(width);
+        match &self.pinned {
+            Some(pin)
+                if !self.pin_shown(width)
+                    && matches!(
+                        self.focus,
+                        Focus::Card(_) | Focus::LaneLine(_) | Focus::None
+                    ) =>
+            {
+                format!("{} is still pinned · {tip}", pin.issue)
+            }
+            _ => tip,
+        }
+    }
+
+    fn focus_tip(&self, width: u16) -> String {
         match &self.focus {
+            Focus::Pinned => {
+                "↑↓ scroll the pinned issue · Enter follows the row · Esc or p goes back".into()
+            }
             Focus::Bar(item) => self.item_tip(item),
             Focus::Filter if self.filter_chip.is_some() => {
                 "Type to narrow by id or title · Backspace drops the chip · Esc clears".into()

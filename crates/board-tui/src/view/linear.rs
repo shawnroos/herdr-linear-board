@@ -767,15 +767,49 @@ fn draw_board(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
     let footer_h = state.bar_layout(area.width).rows();
     let mut y = area.y + HEADER_ROWS;
     let mut body_h = area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h);
+    let board_w = state.board_width(area.width);
     let overlays = state.overlays();
-    if let Some(row) = tab_row(state, &overlays, area.width as usize).filter(|_| body_h > 0) {
-        f.render_widget(Paragraph::new(row), Rect::new(area.x, y, area.width, 1));
+    if let Some(row) = tab_row(state, &overlays, board_w as usize).filter(|_| body_h > 0) {
+        f.render_widget(Paragraph::new(row), Rect::new(area.x, y, board_w, 1));
         y += 1;
         body_h -= 1;
     }
-    let body = Rect::new(area.x, y, area.width, body_h);
-    draw_columns(state, &overlays, f, body, &mut app.hit_map.borrow_mut());
+    let body = Rect::new(area.x, y, board_w, body_h);
+    draw_columns(
+        state,
+        &overlays,
+        f,
+        body,
+        area.width,
+        &mut app.hit_map.borrow_mut(),
+    );
     draw_strip(app, strip, f, area, body.bottom());
+    if let (Some(rect), Some(slot)) = (
+        pinned_rect(state, area),
+        super::linear_issue::pinned_slot(state),
+    ) {
+        let look = super::linear_issue::Look::Pinned;
+        super::linear_issue::draw(app, state, &slot, f, rect, look);
+    }
+}
+
+/// Where the pinned issue draws in a frame of `area`: one column's slot at
+/// the right, from under the board's header to above the strip and the bar.
+/// `None` while nothing is pinned or the board has no room for it.
+pub(super) fn pinned_rect(state: &LinearState, area: Rect) -> Option<Rect> {
+    if !state.pin_shown(area.width) || !board_fits(state, area) {
+        return None;
+    }
+    let snapshot = state.snapshot()?;
+    let strip_h = strip_lines(state, snapshot, area.width as usize).len() as u16;
+    let footer_h = state.bar_layout(area.width).rows();
+    let board_w = state.board_width(area.width);
+    Some(Rect::new(
+        area.x + board_w,
+        area.y + HEADER_ROWS,
+        area.width - board_w,
+        area.height.saturating_sub(HEADER_ROWS + strip_h + footer_h),
+    ))
 }
 
 /// One powerline bar: each segment's text on its colour, a `/` cut where the
@@ -1044,11 +1078,14 @@ fn lane_line(
     }
 }
 
+/// `full_w` is the frame's width, which the page is reckoned from; `body`
+/// is the board's share of it.
 fn draw_columns(
     state: &LinearState,
     overlays: &CardOverlays<'_>,
     f: &mut Frame,
     body: Rect,
+    full_w: u16,
     hit_map: &mut HitMap,
 ) {
     let groups = state.groups();
@@ -1061,10 +1098,10 @@ fn draw_columns(
     }
     let t = &state.theme;
     let sel_group = state.sel_group.min(groups.len() - 1);
-    let page = state.page(body.width);
+    let page = state.page(full_w);
     let visible = page.visible as u16;
     let board_focus = state.focus.board();
-    let nothing_selected = matches!(board_focus, Focus::None | Focus::Bar(_));
+    let nothing_selected = matches!(board_focus, Focus::None | Focus::Bar(_) | Focus::Pinned);
     // Columns share the width, the remainder spread one cell at a time, so
     // the last column's outer gap ends at the board's edge.
     let slot_x =

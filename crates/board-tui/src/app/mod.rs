@@ -56,7 +56,7 @@ pub use effect::Effect;
 pub use linear::{
     mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays, Density,
     DetailError, DetailStep, IssueMode, LinearArrival, LinearFailure, LinearState, LinearWrite,
-    LocalStateSignals, PaneRow, PrRead, SpaceList, StripView, WriteFailure,
+    LocalStateSignals, PaneRow, PinnedIssue, PrRead, SpaceList, StripView, WriteFailure,
 };
 pub use linear_bar::{item_width, BarItem, BarLayout, BAR_GAP, BAR_HINT, CONTROLS};
 pub use linear_cursor::{

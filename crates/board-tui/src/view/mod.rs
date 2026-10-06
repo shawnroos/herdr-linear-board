@@ -309,6 +309,14 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "x", "dismiss: ◇ card / request"),
     (Screen::LinearBoard, "n / N", "next / prev marked card"),
     (Screen::LinearBoard, "z", "compact / roomy cards"),
+    (Screen::LinearBoard, "o", "unpin the pinned issue"),
+    (Screen::LinearBoard, "p", "pinned: focus; Esc/p back"),
+    (
+        Screen::LinearBoard,
+        "↑/↓ PgUp/Dn",
+        "pinned: rows, then scroll",
+    ),
+    (Screen::LinearBoard, "Enter ⌫ ←", "pinned: open row / back"),
     (Screen::LinearBoard, "r / R", "refresh; R skips cache"),
     (Screen::LinearBoard, "?", "bottom bar; help: keys"),
     (Screen::LinearBoard, "←/→ h/l Tab", "bar: move along it"),
@@ -427,6 +435,14 @@ pub fn issue_layout(app: &crate::app::App) -> Option<IssueLayout> {
     let slot = linear_issue::open_slot(state)?;
     let (rect, look) = linear_issue::open_rect(app, state, app.last_area);
     linear_issue::layout(app, state, &slot, rect, look)
+}
+
+/// The pinned issue laid out as the board draws it.
+pub fn pinned_layout(app: &crate::app::App) -> Option<IssueLayout> {
+    let state = app.linear.as_ref()?;
+    let slot = linear_issue::pinned_slot(state)?;
+    let rect = linear::pinned_rect(state, app.last_area)?;
+    linear_issue::layout(app, state, &slot, rect, linear_issue::Look::Pinned)
 }
 
 /// The selectable rows of the open issue as it is currently drawn.

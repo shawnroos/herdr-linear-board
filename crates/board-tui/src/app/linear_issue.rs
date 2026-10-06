@@ -5,8 +5,10 @@ use board_core::protocol::LinearLinkedIssue;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::linear::{
-    request_issue, DetailStep, IssueMode, LinearFailure, LinearState, PrRead, DETAIL_STACK_MAX,
+    request_issue, DetailStep, IssueMode, LinearFailure, LinearState, PinnedIssue, PrRead,
+    DETAIL_STACK_MAX,
 };
+use super::linear_cursor::Focus;
 use super::nav::{nav_delta, step_clamped};
 use super::{App, Effect, Screen};
 use crate::view::IssueRowKind;
@@ -88,50 +90,76 @@ fn toggle_size(app: &mut App) {
     }
 }
 
-/// ↑ / ↓: the next selectable row that way, or, with none, the page scrolls
-/// a line, so text below the last row can still be read.
+/// A slot's cursor: its selected row and its scroll.
+struct Cursor<'a> {
+    selection: &'a mut Option<IssueRowKind>,
+    scroll: &'a mut usize,
+    follow: &'a mut bool,
+}
+
+impl Cursor<'_> {
+    /// ↑ / ↓: the next selectable row that way, or, with none, the page
+    /// scrolls a line, so text below the last row can still be read.
+    fn step(self, layout: crate::view::IssueLayout, delta: isize) {
+        let at = LinearState::selected_row(&layout.rows, self.selection.as_ref());
+        let next = step_clamped(at, delta, layout.rows.len().saturating_sub(1));
+        // Nothing chosen yet and the first row out of sight: read toward it
+        // rather than jump past it.
+        let unseen = self.selection.is_none() && layout.in_flow(at) && !layout.visible(at);
+        if next != at && layout.rows.get(next).is_some() && !unseen {
+            *self.selection = layout.rows.get(next).map(|r| r.kind.clone());
+            *self.scroll = layout.scroll;
+            *self.follow = true;
+            return;
+        }
+        *self.scroll = layout.scroll.saturating_add_signed(delta).min(layout.max);
+        *self.follow = false;
+    }
+
+    /// PgUp / PgDn: the page by a screen, the selection moving onto the
+    /// first row the new screen shows when the old one scrolled away.
+    fn page(self, mut layout: crate::view::IssueLayout, delta: isize) {
+        let step = layout.height.saturating_sub(1).max(1) as isize;
+        layout.scroll = layout
+            .scroll
+            .saturating_add_signed(delta * step)
+            .min(layout.max);
+        *self.scroll = layout.scroll;
+        *self.follow = false;
+        let at = LinearState::selected_row(&layout.rows, self.selection.as_ref());
+        if layout.in_flow(at) && !layout.visible(at) {
+            if let Some(first) =
+                (0..layout.rows.len()).find(|&i| layout.in_flow(i) && layout.visible(i))
+            {
+                *self.selection = Some(layout.rows[first].kind.clone());
+            }
+        }
+    }
+}
+
+fn open_cursor(state: &mut LinearState) -> Cursor<'_> {
+    Cursor {
+        selection: &mut state.detail_selection,
+        scroll: &mut state.detail_scroll,
+        follow: &mut state.detail_follow,
+    }
+}
+
 fn step_open(app: &mut App, delta: isize) {
     let Some(layout) = crate::view::issue_layout(app) else {
         return;
     };
-    let Some(state) = app.linear.as_mut() else {
-        return;
-    };
-    let at = LinearState::selected_row(&layout.rows, state.detail_selection.as_ref());
-    let next = step_clamped(at, delta, layout.rows.len().saturating_sub(1));
-    if next != at && layout.rows.get(next).is_some() {
-        state.detail_selection = layout.rows.get(next).map(|r| r.kind.clone());
-        state.detail_scroll = layout.scroll;
-        state.detail_follow = true;
-        return;
+    if let Some(state) = app.linear.as_mut() {
+        open_cursor(state).step(layout, delta);
     }
-    state.detail_scroll = layout.scroll.saturating_add_signed(delta).min(layout.max);
-    state.detail_follow = false;
 }
 
-/// PgUp / PgDn: the page by a screen, the selection moving onto the first
-/// row the new screen shows when the old one scrolled away.
 fn page_open(app: &mut App, delta: isize) {
     let Some(layout) = crate::view::issue_layout(app) else {
         return;
     };
-    let Some(state) = app.linear.as_mut() else {
-        return;
-    };
-    let step = layout.height.saturating_sub(1).max(1) as isize;
-    let scroll = layout
-        .scroll
-        .saturating_add_signed(delta * step)
-        .min(layout.max);
-    state.detail_scroll = scroll;
-    state.detail_follow = false;
-    let mut moved = layout;
-    moved.scroll = scroll;
-    let at = LinearState::selected_row(&moved.rows, state.detail_selection.as_ref());
-    if moved.in_flow(at) && !moved.visible(at) {
-        if let Some(first) = (0..moved.rows.len()).find(|&i| moved.in_flow(i) && moved.visible(i)) {
-            state.detail_selection = Some(moved.rows[first].kind.clone());
-        }
+    if let Some(state) = app.linear.as_mut() {
+        open_cursor(state).page(layout, delta);
     }
 }
 
@@ -155,12 +183,287 @@ fn follow_open_row(app: &mut App) -> Vec<Effect> {
 }
 
 /// `o` in the modal or the expanded view: pinned beside the board, replacing
-/// any issue pinned before.
+/// any issue pinned before, and the board gets the keys back.
 fn pin_open(app: &mut App) -> Vec<Effect> {
     if !crate::view::issue_buttons_shown(app) {
         narrow_toast(app);
+        return vec![];
+    }
+    let width = app.last_area.width;
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(issue) = state.detail.clone() else {
+        return vec![];
+    };
+    let doc = state
+        .detail_doc
+        .take()
+        .filter(|(id, _)| *id == issue)
+        .map(|(_, doc)| doc);
+    let in_flight = state
+        .detail_in_flight
+        .take()
+        .filter(|(id, _)| *id == issue)
+        .map(|(_, generation)| generation);
+    state.pinned = Some(PinnedIssue {
+        issue: issue.clone(),
+        doc,
+        in_flight,
+        error: state.detail_error.take(),
+        seed: state.detail_seed.take(),
+        selection: state.detail_selection.take(),
+        stack: vec![],
+        marks: state
+            .detail_marks
+            .take()
+            .map(|(_, m)| m)
+            .unwrap_or_default(),
+        scroll: 0,
+        follow: true,
+    });
+    close_open(state);
+    app.screen = Screen::LinearBoard;
+    app.set_toast(format!("{issue} pinned · p focuses it · o unpins"), false);
+    if let Some(state) = app.linear.as_mut() {
+        state.refit(width);
     }
     vec![]
+}
+
+/// The open issue's slot emptied, as closing the view leaves it.
+fn close_open(state: &mut LinearState) {
+    state.detail = None;
+    state.detail_doc = None;
+    state.detail_error = None;
+    state.detail_in_flight = None;
+    state.detail_selection = None;
+    state.detail_seed = None;
+    state.detail_marks = None;
+    state.detail_stack.clear();
+}
+
+/// `o` on the board: the pinned issue goes.
+pub(super) fn unpin(app: &mut App) {
+    let width = app.last_area.width;
+    let Some(state) = app.linear.as_mut() else {
+        return;
+    };
+    match state.pinned.take() {
+        Some(pin) => {
+            if state.focus == Focus::Pinned {
+                state.reselect();
+            }
+            state.refit(width);
+            app.set_toast(format!("{} unpinned", pin.issue), false);
+        }
+        None => app.set_toast("nothing is pinned; o in an open issue pins it", false),
+    }
+}
+
+/// `p` on the board: the pinned panel takes the keys.
+pub(super) fn focus_pinned(app: &mut App) {
+    let width = app.last_area.width;
+    let Some(state) = app.linear.as_mut() else {
+        return;
+    };
+    if state.pinned.is_none() {
+        return app.set_toast("nothing is pinned; o in an open issue pins it", false);
+    }
+    if !state.pin_shown(width) {
+        return app.set_toast("the pinned issue needs a wider pane to show", false);
+    }
+    state.remember_card();
+    state.focus = Focus::Pinned;
+}
+
+/// Keys while the pinned panel has the focus. `None` hands the key to the
+/// board.
+pub(super) fn pinned_key(app: &mut App, k: KeyEvent) -> Option<Vec<Effect>> {
+    let width = app.last_area.width;
+    let state = app.linear.as_mut()?;
+    if state.focus != Focus::Pinned {
+        return None;
+    }
+    if !state.pin_shown(width) {
+        state.reselect();
+        return None;
+    }
+    if let Some(delta) = nav_delta(k.code) {
+        let layout = crate::view::pinned_layout(app)?;
+        let pin = app.linear.as_mut()?.pinned.as_mut()?;
+        pin_cursor(pin).step(layout, delta);
+        return Some(vec![]);
+    }
+    Some(match k.code {
+        KeyCode::PageDown | KeyCode::PageUp => {
+            let delta = if k.code == KeyCode::PageDown { 1 } else { -1 };
+            let layout = crate::view::pinned_layout(app)?;
+            let pin = app.linear.as_mut()?.pinned.as_mut()?;
+            pin_cursor(pin).page(layout, delta);
+            vec![]
+        }
+        KeyCode::Esc | KeyCode::Char('p') => {
+            state.reselect();
+            vec![]
+        }
+        KeyCode::Enter => follow_pinned_row(app),
+        KeyCode::Backspace | KeyCode::Left => pinned_back(app),
+        KeyCode::Char('o') => {
+            unpin(app);
+            vec![]
+        }
+        _ => vec![],
+    })
+}
+
+fn pin_cursor(pin: &mut PinnedIssue) -> Cursor<'_> {
+    Cursor {
+        selection: &mut pin.selection,
+        scroll: &mut pin.scroll,
+        follow: &mut pin.follow,
+    }
+}
+
+/// Return in the panel: a linked issue opens in the panel, a pane is
+/// focused, a card opens its link.
+fn follow_pinned_row(app: &mut App) -> Vec<Effect> {
+    let Some(layout) = crate::view::pinned_layout(app) else {
+        return vec![];
+    };
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(pin) = state.pinned.as_ref() else {
+        return vec![];
+    };
+    match LinearState::selected_kind(&layout.rows, pin.selection.as_ref()) {
+        Some(IssueRowKind::Issue(identifier)) => {
+            let seed = pin
+                .doc
+                .as_ref()
+                .and_then(|doc| doc.issue.as_ref())
+                .and_then(|issue| linked_in(issue, &identifier));
+            open_in_pin(state, &identifier, seed)
+        }
+        Some(IssueRowKind::Pane(index)) => {
+            let pane = state
+                .issue(&pin.issue)
+                .map(|issue| state.pane_rows(issue))
+                .and_then(|rows| rows.get(index).map(|row| row.pane_id.clone()));
+            match pane {
+                Some(pane_id) => vec![Effect::FocusPane(pane_id)],
+                None => vec![],
+            }
+        }
+        Some(IssueRowKind::Link(url)) => vec![Effect::OpenLink(url)],
+        None => vec![],
+    }
+}
+
+fn open_in_pin(
+    state: &mut LinearState,
+    identifier: &str,
+    seed: Option<LinearLinkedIssue>,
+) -> Vec<Effect> {
+    let Some(pin) = state.pinned.as_mut() else {
+        return vec![];
+    };
+    if pin.issue == identifier {
+        return vec![];
+    }
+    pin.stack.push(DetailStep {
+        issue: std::mem::replace(&mut pin.issue, identifier.to_string()),
+        doc: pin.doc.take(),
+        seed: pin.seed.take(),
+        selection: pin.selection.take(),
+    });
+    if pin.stack.len() > DETAIL_STACK_MAX {
+        pin.stack.remove(0);
+    }
+    pin.seed = seed;
+    pin.error = None;
+    pin.marks.clear();
+    pin.scroll = 0;
+    pin.follow = true;
+    read_pinned(state)
+}
+
+/// Backspace or ← in the panel: back one linked issue.
+fn pinned_back(app: &mut App) -> Vec<Effect> {
+    let Some(state) = app.linear.as_mut() else {
+        return vec![];
+    };
+    let Some(pin) = state.pinned.as_mut() else {
+        return vec![];
+    };
+    let Some(step) = pin.stack.pop() else {
+        return vec![];
+    };
+    pin.issue = step.issue;
+    pin.doc = step.doc;
+    pin.seed = step.seed;
+    pin.selection = step.selection;
+    pin.error = None;
+    pin.scroll = 0;
+    pin.follow = true;
+    read_pinned(state)
+}
+
+/// A fresh read for the pinned issue, numbered from the shared counter.
+fn read_pinned(state: &mut LinearState) -> Vec<Effect> {
+    state.detail_reads += 1;
+    let generation = state.detail_reads;
+    let Some(pin) = state.pinned.as_mut() else {
+        return vec![];
+    };
+    pin.in_flight = Some(generation);
+    vec![Effect::LinearIssue {
+        issue: pin.issue.clone(),
+        generation,
+    }]
+}
+
+/// An issue read the pinned slot asked for, applied there. `None` when the
+/// read was not the pinned slot's.
+pub(super) fn pinned_arrived(
+    state: &mut LinearState,
+    issue: &str,
+    generation: u64,
+    result: &Result<board_core::protocol::LinearIssueDocument, LinearFailure>,
+) -> Option<Vec<Effect>> {
+    let pin = state.pinned.as_mut()?;
+    if pin.in_flight != Some(generation) {
+        return None;
+    }
+    pin.in_flight = None;
+    if pin.issue != issue {
+        return Some(vec![]);
+    }
+    match result.clone() {
+        Ok(doc) if doc.issue.is_some() => {
+            let doc = super::linear::sanitise_issue(doc);
+            pin.error = None;
+            pin.doc = Some(doc.clone());
+            Some(request_prs(state, &doc))
+        }
+        Ok(doc) => {
+            let message = doc
+                .message
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| "this issue could not be read".into());
+            pin.error = Some(super::linear::DetailError {
+                issue: issue.to_string(),
+                message: super::sanitise(&message),
+                retryable: true,
+            });
+            Some(vec![])
+        }
+        Err(failure) => {
+            pin.error = Some(super::linear::detail_failure(issue, failure));
+            Some(vec![])
+        }
+    }
 }
 
 fn focus_selected_pane(app: &mut App, rows: &[crate::view::IssueRow]) -> Vec<Effect> {
@@ -184,12 +487,11 @@ fn focus_selected_pane(app: &mut App, rows: &[crate::view::IssueRow]) -> Vec<Eff
     }
 }
 
-/// The row the reader is opening, as the page already had it. Looked up in the
-/// open document rather than the snapshot, because that is where a linked issue
-/// the board has never seen comes from.
-fn linked_row(state: &LinearState, identifier: &str) -> Option<LinearLinkedIssue> {
-    let (_, doc) = state.detail_doc.as_ref()?;
-    let issue = doc.issue.as_ref()?;
+/// A linked issue `issue` lists: a sub-issue, its parent or a relation.
+fn linked_in(
+    issue: &board_core::protocol::LinearIssueDetail,
+    identifier: &str,
+) -> Option<LinearLinkedIssue> {
     issue
         .children
         .iter()
@@ -197,6 +499,14 @@ fn linked_row(state: &LinearState, identifier: &str) -> Option<LinearLinkedIssue
         .chain(issue.relations.iter().map(|r| &r.issue))
         .find(|row| row.identifier == identifier)
         .cloned()
+}
+
+/// The row the reader is opening, as the page already had it. Looked up in the
+/// open document rather than the snapshot, because that is where a linked issue
+/// the board has never seen comes from.
+fn linked_row(state: &LinearState, identifier: &str) -> Option<LinearLinkedIssue> {
+    let (_, doc) = state.detail_doc.as_ref()?;
+    linked_in(doc.issue.as_ref()?, identifier)
 }
 
 /// Enter on a sub-issue, the parent or a relation. The page being left goes on

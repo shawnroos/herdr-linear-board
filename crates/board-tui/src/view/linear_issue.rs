@@ -144,6 +144,22 @@ pub fn open_slot(state: &LinearState) -> Option<Slot<'_>> {
     })
 }
 
+/// The pinned issue's slot.
+pub fn pinned_slot(state: &LinearState) -> Option<Slot<'_>> {
+    let pin = state.pinned.as_ref()?;
+    Some(Slot {
+        issue: &pin.issue,
+        doc: pin.doc.as_ref(),
+        loading: pin.in_flight.is_some() && pin.error.is_none(),
+        error: pin.error.as_ref(),
+        seed: pin.seed.as_ref(),
+        selection: pin.selection.as_ref(),
+        marks: &pin.marks,
+        scroll: pin.scroll,
+        follow: pin.follow,
+    })
+}
+
 /// Everything one draw needs: the rendered lines of each column, the rows the
 /// cursor can reach in reading order, and where the columns sit.
 pub struct Page {
@@ -1110,7 +1126,8 @@ fn flow_scroll(app: &App, page: &Page, slot: &Slot<'_>) -> usize {
     let height = page.flow_height();
     let max = page.flow_len().saturating_sub(height);
     let base = slot.scroll.min(max);
-    if app.mode == Mode::Session || !slot.follow {
+    // With no row chosen the view starts at the top, not at the first row.
+    if app.mode == Mode::Session || !slot.follow || slot.selection.is_none() {
         return base;
     }
     let selected = LinearState::selected_row(&page.rows, slot.selection);

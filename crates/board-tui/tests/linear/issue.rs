@@ -641,3 +641,157 @@ fn two_columns_from_100_cells_and_one_below() {
         "one column at 99: the sidebar follows:\n{narrow}"
     );
 }
+
+const BOARD: u16 = 144;
+
+fn long_parent() -> LinearIssueDocument {
+    let mut parent = doc("WEB-101");
+    let issue = parent.issue.as_mut().unwrap();
+    issue.description = Some(
+        (1..=60)
+            .map(|n| format!("line {n} of a long description"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    );
+    issue.children = vec![board_core::protocol::LinearLinkedIssue {
+        identifier: "WEB-900".into(),
+        title: "child".into(),
+        ..Default::default()
+    }];
+    parent
+}
+
+fn pin_client() -> FakeBoardClient {
+    fake_with(tabs_lanes())
+        .with_linear_list(spaces(vec![]))
+        .with_linear_issue("WEB-101", long_parent())
+        .with_linear_issue("WEB-102", doc("WEB-102"))
+        .with_linear_issue("WEB-900", doc("WEB-900"))
+}
+
+/// WEB-101 opened at 144 cells and pinned with `o`.
+fn pinned_driver() -> Driver {
+    let mut d = driver_with(pin_client(), BOARD);
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('o'));
+    d
+}
+
+fn pin(d: &Driver) -> &board_tui::app::PinnedIssue {
+    state(d).pinned.as_ref().expect("an issue is pinned")
+}
+
+#[test]
+fn o_pins_the_issue_into_a_column_slot_the_board_keeps_the_keys_and_o_unpins() {
+    let mut d = driver_with(pin_client(), BOARD);
+    assert_eq!(state(&d).page(BOARD).visible, 3);
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('o'));
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert_eq!(pin(&d).issue, "WEB-101");
+    assert!(
+        pin(&d).doc.is_some(),
+        "the open issue's document moved to the pin"
+    );
+    assert_eq!(
+        state(&d).page(BOARD).visible,
+        2,
+        "the board dropped a column"
+    );
+    let frame = render_at(&mut d, BOARD, TALL);
+    let top = row_of(&frame, "Unpin o");
+    assert!(
+        top.find("WEB-101").unwrap() > 90,
+        "the panel sits at the right: {top}"
+    );
+    assert_eq!(state(&d).selected_identifier(), Some("WEB-101"));
+    press(&mut d, KeyCode::Char('l'));
+    assert_eq!(state(&d).sel_group, 1, "the board keeps the keys");
+
+    press(&mut d, KeyCode::Char('o'));
+    assert!(state(&d).pinned.is_none());
+    assert_eq!(state(&d).page(BOARD).visible, 3);
+    assert!(!render_at(&mut d, BOARD, TALL).contains("Unpin o"));
+}
+
+#[test]
+fn p_focuses_the_panel_down_scrolls_return_opens_a_linked_issue_there_and_esc_returns() {
+    let mut d = pinned_driver();
+    press(&mut d, KeyCode::Char('p'));
+    assert_eq!(state(&d).focus, Focus::Pinned);
+    render_at(&mut d, BOARD, TALL);
+    let before = pin(&d).scroll;
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Down);
+    assert!(
+        pin(&d).scroll > before,
+        "↓ past the last row scrolls the panel"
+    );
+    press(&mut d, KeyCode::PageUp);
+    assert_eq!(pin(&d).scroll, 0);
+
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        pin(&d).issue,
+        "WEB-900",
+        "the linked issue opened in the panel"
+    );
+    assert!(pin(&d).doc.is_some(), "its read landed in the panel's slot");
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    press(&mut d, KeyCode::Backspace);
+    assert_eq!(
+        pin(&d).issue,
+        "WEB-101",
+        "Backspace steps back in the panel"
+    );
+
+    press(&mut d, KeyCode::Esc);
+    assert!(
+        matches!(state(&d).focus, Focus::Card(_)),
+        "{:?}",
+        state(&d).focus
+    );
+    assert_eq!(state(&d).selected_identifier(), Some("WEB-101"));
+    assert!(state(&d).pinned.is_some(), "Esc keeps the pin");
+}
+
+#[test]
+fn with_a_pin_return_opens_another_card_as_a_modal_and_both_documents_stay_loaded() {
+    let mut d = pinned_driver();
+    press(&mut d, KeyCode::Down);
+    assert_eq!(state(&d).selected_identifier(), Some("WEB-102"));
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    let frame = render_at(&mut d, BOARD, TALL);
+    assert!(frame.contains("Expand e"), "a modal: {frame}");
+    let open = state(&d).detail_doc.as_ref().map(|(id, _)| id.as_str());
+    assert_eq!(open, Some("WEB-102"));
+    assert_eq!(pin(&d).issue, "WEB-101");
+    assert!(pin(&d).doc.is_some());
+
+    press(&mut d, KeyCode::Char('o'));
+    assert_eq!(pin(&d).issue, "WEB-102", "o in a modal replaces the pin");
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+}
+
+#[test]
+fn below_two_columns_the_panel_hides_the_tip_says_it_is_pinned_and_its_focus_returns() {
+    let mut d = pinned_driver();
+    press(&mut d, KeyCode::Char('p'));
+    assert_eq!(state(&d).focus, Focus::Pinned);
+    d.app.last_area = Rect::new(0, 0, 90, TALL);
+    press(&mut d, KeyCode::Down);
+    assert!(
+        matches!(state(&d).focus, Focus::Card(_)),
+        "{:?}",
+        state(&d).focus
+    );
+    d.app.toast = None;
+    let frame = render_at(&mut d, 90, TALL);
+    assert!(!frame.contains("Unpin o"), "{frame}");
+    assert!(frame.contains("WEB-101 is still pinned"), "{frame}");
+    press(&mut d, KeyCode::Char('p'));
+    assert!(toast(&d).contains("wider pane"), "{}", toast(&d));
+    let back = render_at(&mut d, BOARD, TALL);
+    assert!(back.contains("Unpin o"), "the panel returns at 144: {back}");
+}

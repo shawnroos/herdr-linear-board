@@ -385,6 +385,7 @@ pub struct LinearState {
     /// the rows turns it off until the selection moves again.
     pub detail_follow: bool,
     pub issue_mode: IssueMode,
+    pub pinned: Option<PinnedIssue>,
     /// What the daemon's PR read returned, by pull request URL. Kept across
     /// opens, so a card shows the last read while the next one runs.
     pub prs: HashMap<String, PrRead>,
@@ -408,6 +409,24 @@ pub enum PrRead {
     /// `gh` could not run at all (protocol code 8), with the daemon's words.
     GhUnavailable(String),
     Failed(String),
+}
+
+/// The issue pinned beside the board: a second slot with its own read, so
+/// a modal opened over the board leaves it loaded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinnedIssue {
+    pub issue: String,
+    pub doc: Option<LinearIssueDocument>,
+    /// The read in flight for it, numbered from the same counter as the open
+    /// issue's, so the generation alone says which slot an answer is for.
+    pub in_flight: Option<u64>,
+    pub error: Option<DetailError>,
+    pub seed: Option<LinearLinkedIssue>,
+    pub selection: Option<crate::view::IssueRowKind>,
+    pub stack: Vec<DetailStep>,
+    pub marks: Vec<Mark>,
+    pub scroll: usize,
+    pub follow: bool,
 }
 
 /// One step of the issue page's history.
@@ -484,6 +503,7 @@ impl LinearState {
             detail_scroll: 0,
             detail_follow: true,
             issue_mode: IssueMode::default(),
+            pinned: None,
             prs: HashMap::new(),
             pr_read_missing: false,
             landing: None,
@@ -966,6 +986,9 @@ pub(super) fn issue_arrived(
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
+    if let Some(effects) = super::linear_issue::pinned_arrived(state, issue, generation, &result) {
+        return effects;
+    }
     let current = state
         .detail_in_flight
         .as_ref()
@@ -1021,14 +1044,14 @@ pub(super) fn issue_arrived(
 
 /// The same walk over an issue document: descriptions, comments and
 /// attachment fields are outside text (KTD15).
-pub(super) fn sanitise_issue(document: LinearIssueDocument) -> LinearIssueDocument {
+pub(crate) fn sanitise_issue(document: LinearIssueDocument) -> LinearIssueDocument {
     serde_json::to_value(&document)
         .map(board_core::text::sanitise_json)
         .and_then(serde_json::from_value::<LinearIssueDocument>)
         .unwrap_or_default()
 }
 
-fn detail_failure(issue: &str, failure: LinearFailure) -> DetailError {
+pub(super) fn detail_failure(issue: &str, failure: LinearFailure) -> DetailError {
     let (message, retryable) = match failure {
         // The plugin is installed and current but has no issue script: `r`
         // would retry something that cannot succeed, so the page says what to
@@ -1550,6 +1573,9 @@ fn board_key(app: &mut App, k: KeyEvent) -> Vec<Effect> {
     if let Some(effects) = super::linear_bar::bar_key(app, k) {
         return effects;
     }
+    if let Some(effects) = super::linear_issue::pinned_key(app, k) {
+        return effects;
+    }
     let Some(state) = app.linear.as_mut() else {
         return vec![];
     };
@@ -1619,6 +1645,8 @@ fn board_action(app: &mut App, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => state.move_column(-1, width),
         KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => state.move_column(1, width),
         KeyCode::Char('/') => state.open_filter(),
+        KeyCode::Char('o') => super::linear_issue::unpin(app),
+        KeyCode::Char('p') => super::linear_issue::focus_pinned(app),
         KeyCode::Char('z') => {
             state.density = match state.density {
                 Density::Roomy => Density::Compact,

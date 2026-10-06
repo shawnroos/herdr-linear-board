@@ -108,6 +108,8 @@ pub enum Focus {
     Filter,
     Pager(Side, Box<Focus>),
     Bar(super::BarItem),
+    /// The pinned issue panel has the keys; the board keeps its column.
+    Pinned,
     None,
 }
 
@@ -650,7 +652,26 @@ impl LinearState {
     /// The page at `width` cells. Only a paging button may leave the focused
     /// column off the page; any other focus pulls the page by the least that
     /// shows it.
+    /// Whether the pinned issue is drawn at `width`: it keeps a column's
+    /// slot only while the board has two columns' room (KTD12).
+    pub fn pin_shown(&self, width: u16) -> bool {
+        self.pinned.is_some() && crate::view::pin_fits(width)
+    }
+
+    /// The board's share of `width` cells: all of it, less one column's slot
+    /// while the pinned issue is drawn.
+    pub fn board_width(&self, width: u16) -> u16 {
+        if self.pin_shown(width) {
+            width - width / crate::view::board_columns(width) as u16
+        } else {
+            width
+        }
+    }
+
+    /// The page at `width` cells, the whole frame's width; the pinned
+    /// issue's slot comes off it here.
     pub fn page(&self, width: u16) -> Page {
+        let width = self.board_width(width);
         let total = self.groups().len();
         let visible = crate::view::board_columns(width).min(total);
         let mut start = self.page_start.min(total - visible);
@@ -672,6 +693,10 @@ impl LinearState {
     /// Keeps the stored page what `page` draws at `width`, and moves a
     /// paging button's focus whose button is gone onto the edge column.
     pub(super) fn refit(&mut self, width: u16) {
+        // A pin that went or no longer fits hands its keys back (KTD2).
+        if self.focus == Focus::Pinned && !self.pin_shown(width) {
+            self.reselect();
+        }
         let page = self.page(width);
         self.page_start = page.start;
         if let Focus::Pager(side, _) = self.focus {
