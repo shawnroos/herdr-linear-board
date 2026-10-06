@@ -23,6 +23,7 @@ mod spawner;
 mod state;
 mod store;
 mod supervisor;
+mod sync;
 #[cfg(test)]
 mod testkit;
 mod watchers;

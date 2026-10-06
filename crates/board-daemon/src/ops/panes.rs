@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use board_core::db::NewBoardPane;
+use board_core::paths::{BOARD_ENTRYPOINT, BOARD_PLUGIN_ID};
 use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement};
 
 /// Rename `pane_id` in the session `origin_socket` belongs to. The pane's
@@ -36,14 +37,9 @@ use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, Plu
 /// TUI, because any socket client can call this. Brackets survive: the kanban
 /// title is `Board [scope · FILTER]`.
 pub(super) fn pane_set_title(d: &Arc<Daemon>, p: PaneSetTitleParams) -> Result<Value> {
-    if p.pane_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "pane.set_title requires a non-empty pane_id".into(),
-        ));
-    }
-    let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
-    let mut client = crate::herdr_conn::connect_checked(&socket)
-        .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+    require_nonempty(&p.pane_id, "pane.set_title", "pane_id")?;
+    let (socket, _) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket)?;
     let _labels = d.naming.labels();
     client
         .pane_rename(&PaneRenameParams {
@@ -60,14 +56,9 @@ pub(super) fn pane_set_title(d: &Arc<Daemon>, p: PaneSetTitleParams) -> Result<V
 /// the session does not list (another session's pane included) is `gone`, and
 /// `pane.focus` is never sent for it.
 pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
-    if p.pane_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "pane.focus requires a non-empty pane_id".into(),
-        ));
-    }
-    let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
-    let mut client = crate::herdr_conn::connect_checked(&socket)
-        .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+    require_nonempty(&p.pane_id, "pane.focus", "pane_id")?;
+    let (socket, _) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket)?;
     let live = client
         .pane_get(&p.pane_id)
         .map_err(|e| Error::HerdrUnavailable(format!("pane.get {}: {e}", p.pane_id)))?;
@@ -91,11 +82,7 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
 /// `linear.session.get` resolves it. Reading it also starts watching the
 /// session for focus and layout events.
 pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Value> {
-    if p.pane_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "pane.context requires a non-empty pane_id".into(),
-        ));
-    }
+    require_nonempty(&p.pane_id, "pane.context", "pane_id")?;
     let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
     let mut client = connect_origin(&socket_path)?;
     d.watch_levels(socket_path);
@@ -121,7 +108,7 @@ pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Valu
         listed
             .iter()
             .find(|pane| pane.pane_id == pane_id && pane.tab_id == layout.tab_id)
-            .and_then(|pane| pane.foreground_cwd.clone().or_else(|| pane.cwd.clone()))
+            .and_then(|pane| pane.working_dir().map(str::to_string))
     };
     let now = now_secs(d);
     let store = d.store.lock();
@@ -155,8 +142,6 @@ pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Valu
     }))
 }
 
-const BOARD_PLUGIN_ID: &str = "herdr-board";
-const BOARD_ENTRYPOINT: &str = "board";
 const SESSION_ENTRYPOINT: &str = "session";
 const MAX_CWD: usize = 4096;
 const MAX_CLAUDE_SESSION_ID: usize = 128;
@@ -270,6 +255,15 @@ fn origin_socket_key(origin_socket: &str) -> Result<(PathBuf, String)> {
     Ok((socket, key))
 }
 
+fn require_nonempty(value: &str, method: &str, field: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(Error::BadRequest(format!(
+            "{method} requires a non-empty {field}"
+        )));
+    }
+    Ok(())
+}
+
 fn connect_origin(socket: &Path) -> Result<board_herdr::HerdrClient> {
     crate::herdr_conn::connect_checked(socket)
         .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))
@@ -292,11 +286,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
     if session {
         show_env.extend(session_identity(&p)?);
     }
-    if p.origin_pane.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "board.pane.open requires a non-empty origin_pane".into(),
-        ));
-    }
+    require_nonempty(&p.origin_pane, "board.pane.open", "origin_pane")?;
     let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
     let _serial = BOARD_PANES.lock().unwrap_or_else(PoisonError::into_inner);
     let mut client = connect_origin(&socket_path)?;

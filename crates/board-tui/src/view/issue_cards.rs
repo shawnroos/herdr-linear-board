@@ -7,24 +7,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
+use super::linear::icon::{
+    BRANCH, CHECK, CLOCK, COMMIT, CROSS, DIFF, EYE, IMAGE, LINK, MERGE, PERSON, PULL_REQUEST, SLACK,
+};
 use super::linear::{clip_spans, fit, line, spans_width};
 use super::linear_issue::{ago, plain_lines, section, Column, Row, RowKind};
 use crate::app::{App, LinearState, PrRead};
 use crate::theme::Theme;
 
-const PULL_REQUEST: &str = "\u{f407}";
-const MERGE: &str = "\u{f419}";
-const BRANCH: &str = "\u{f418}";
-const DIFF: &str = "\u{f4d2}";
-const CHECK: &str = "\u{f058}";
-const CROSS: &str = "\u{f057}";
-const CLOCK: &str = "\u{f017}";
-const PERSON: &str = "\u{f415}";
-const EYE: &str = "\u{f441}";
-const COMMIT: &str = "\u{f417}";
-const SLACK: &str = "\u{f04b1}";
-const IMAGE: &str = "\u{f0976}";
-const LINK: &str = "\u{f44c}";
 const INSET: usize = 2;
 
 /// `owner/repo` and the number of a pull request URL on any host. Only the

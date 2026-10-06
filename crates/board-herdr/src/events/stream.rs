@@ -64,12 +64,17 @@ impl Subscription {
 
     /// Watch for panes whose process exits (global; no pane_id).
     pub fn pane_exited() -> Subscription {
-        Subscription(json!({ "type": "pane.exited" }))
+        Subscription::global("pane.exited")
     }
 
     /// Watch for panes being closed/removed (global; no pane_id).
     pub fn pane_closed() -> Subscription {
-        Subscription(json!({ "type": "pane.closed" }))
+        Subscription::global("pane.closed")
+    }
+
+    /// An event kind herdr reports for every pane, so no `pane_id`.
+    pub fn global(kind: &str) -> Subscription {
+        Subscription(json!({ "type": kind }))
     }
 
     /// Escape hatch: any subscription object.
@@ -94,7 +99,7 @@ pub fn watch_subscriptions(pane_ids: &[String]) -> Vec<Subscription> {
 pub fn layout_subscriptions() -> Vec<Subscription> {
     ["pane.focused", "tab.focused", "layout.updated"]
         .into_iter()
-        .map(|kind| Subscription(json!({ "type": kind })))
+        .map(Subscription::global)
         .collect()
 }
 
@@ -102,7 +107,7 @@ pub fn layout_subscriptions() -> Vec<Subscription> {
 pub fn naming_subscriptions() -> Vec<Subscription> {
     ["tab.created", "pane.created"]
         .into_iter()
-        .map(|kind| Subscription(json!({ "type": kind })))
+        .map(Subscription::global)
         .collect()
 }
 

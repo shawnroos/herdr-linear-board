@@ -95,6 +95,7 @@ use board_herdr::{PaneInfo, PaneRenameParams, TabInfo, TabRenameParams};
 
 use crate::linear::SpaceKey;
 use crate::state::Daemon;
+use crate::sync::locked;
 
 /// Agent starts in panes the daemon does not run raise no event it can
 /// subscribe to without naming each pane, so a periodic pass catches them.
@@ -107,10 +108,6 @@ pub struct Naming {
     kicked: Mutex<bool>,
     wake: Condvar,
     labels: Mutex<()>,
-}
-
-fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Naming {
@@ -371,7 +368,7 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
 }
 
 fn scope_of(d: &Arc<Daemon>, session: &str, pane: &PaneInfo) -> Scope {
-    let cwd = pane.foreground_cwd.as_deref().or(pane.cwd.as_deref());
+    let cwd = pane.working_dir();
     let issue = cwd
         .and_then(|cwd| resolve_worktree(cwd).ok())
         .and_then(|path| d.store.lock().worktree_binding(&path).ok().flatten())

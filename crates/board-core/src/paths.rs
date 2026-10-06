@@ -4,6 +4,11 @@ use std::path::PathBuf;
 
 use directories::BaseDirs;
 
+/// The Herdr plugin id and board entrypoint. A daemon-opened board is
+/// recognised as a plugin pane only while these match the plugin manifest.
+pub const BOARD_PLUGIN_ID: &str = "herdr-board";
+pub const BOARD_ENTRYPOINT: &str = "board";
+
 /// XDG data dir: `<data>/herdr-board` (e.g. `~/.local/share/herdr-board`).
 pub fn data_dir() -> PathBuf {
     match BaseDirs::new() {

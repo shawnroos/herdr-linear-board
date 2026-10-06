@@ -13,6 +13,7 @@ use board_core::db::{GroupingConfig, SpaceBinding, WorktreeBinding};
 use board_core::engine::grouping::{self, GroupingIssue, ViewPreferences, WorkflowState};
 use board_herdr::SessionSnapshot;
 
+use crate::gh::parse::text;
 use crate::gh::PrRef;
 use crate::linear::{fetch, names_project, CacheRead, FetchPlan, SpaceKey, SpaceRead};
 
@@ -20,10 +21,6 @@ use super::*;
 
 fn session_of(socket: Option<&str>) -> String {
     board_core::db::herdr_session(socket)
-}
-
-fn text(value: &Value) -> Option<String> {
-    value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 fn herdr_snapshot(origin: Option<&str>) -> Option<SessionSnapshot> {

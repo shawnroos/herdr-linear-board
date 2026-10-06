@@ -29,7 +29,7 @@ mod types;
 /// [`SUPPORTED_HERDR_PROTOCOL`]; a release that changes the protocol is refused.
 pub const SUPPORTED_HERDR_VERSIONS: &[&str] = &["0.9.0", "0.9.1", "0.9.2", "0.9.3"];
 /// The oldest supported Herdr release; test fakes report it in `ping`.
-pub const SUPPORTED_HERDR_VERSION: &str = "0.9.0";
+pub const SUPPORTED_HERDR_VERSION: &str = SUPPORTED_HERDR_VERSIONS[0];
 /// The supported releases as shown in error messages and docs.
 pub const SUPPORTED_HERDR_RANGE: &str = "0.9.0\u{2013}0.9.3";
 /// The only Herdr socket protocol supported by this client.

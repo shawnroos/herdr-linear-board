@@ -17,7 +17,7 @@ pub struct RequiredCheck {
     pub bucket: String,
 }
 
-fn text(value: &Value) -> Option<String> {
+pub(crate) fn text(value: &Value) -> Option<String> {
     value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
@@ -165,10 +165,6 @@ fn blocker(
     )
 }
 
-fn count_field(value: &Value) -> Option<u64> {
-    value.as_u64()
-}
-
 /// The caller fills in `repo` and the preview, which need more `gh` calls.
 pub fn pr_detail(view: &Value, required: Option<&[RequiredCheck]>) -> LinearPrDetail {
     let checks = latest_checks(&view["statusCheckRollup"], required.unwrap_or(&[]));
@@ -183,9 +179,9 @@ pub fn pr_detail(view: &Value, required: Option<&[RequiredCheck]>) -> LinearPrDe
         merge_state: text(&view["mergeStateStatus"]),
         mergeable: text(&view["mergeable"]),
         review_decision: text(&view["reviewDecision"]),
-        additions: count_field(&view["additions"]),
-        deletions: count_field(&view["deletions"]),
-        changed_files: count_field(&view["changedFiles"]),
+        additions: view["additions"].as_u64(),
+        deletions: view["deletions"].as_u64(),
+        changed_files: view["changedFiles"].as_u64(),
         head_ref: text(&view["headRefName"]),
         head_sha: text(&view["headRefOid"]),
         ci: Some(count(&checks)),

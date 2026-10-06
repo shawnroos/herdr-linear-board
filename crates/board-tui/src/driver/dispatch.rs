@@ -325,7 +325,7 @@ impl Driver {
     /// examples, standalone TUI) it is a no-op — there is no pane to rename,
     /// and no invoking session to rename it in.
     fn send_pane_title(&mut self, title: &str) {
-        if self.origin.plugin_id.as_deref() != Some("herdr-board") {
+        if self.origin.plugin_id.as_deref() != Some(board_core::paths::BOARD_PLUGIN_ID) {
             return;
         }
         let (Some(pane_id), Some(origin_socket)) = (

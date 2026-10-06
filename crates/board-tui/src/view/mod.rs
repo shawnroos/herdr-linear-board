@@ -472,6 +472,7 @@ pub use detail::{
     detail_layout, detail_toggle_rect, runs_viewport_height, DetailLayout,
 };
 pub use layout::{board_layout, BoardLayout, ColLayout, CompactHeader, ScrollInfo};
+pub(crate) use linear::fit;
 pub use linear::{
     board_columns, card_pr_line, linear_help_max_scroll, linear_pane_title, pin_fits, PrGh,
 };

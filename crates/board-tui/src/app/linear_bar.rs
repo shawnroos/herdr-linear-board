@@ -4,11 +4,12 @@
 
 use board_core::protocol::MarkKind;
 use crossterm::event::{KeyCode, KeyEvent};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use super::linear_cursor::{column_cards, Focus, Side};
 use super::nav::nav_delta;
-use super::{App, Density, Effect, LinearState, Screen};
+use super::{collapse_line, App, Density, Effect, LinearState, Screen};
+use crate::view::fit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BarItem {
@@ -41,28 +42,6 @@ const WHO_MAX: usize = 16;
 /// A label's cells on the bar: one blank either side.
 pub fn item_width(label: &str) -> usize {
     label.width() + 2
-}
-
-fn clip(s: &str, max: usize) -> String {
-    if s.width() <= max {
-        return s.to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for c in s.chars() {
-        let w = c.width().unwrap_or(0);
-        if used + w + 1 > max {
-            break;
-        }
-        used += w;
-        out.push(c);
-    }
-    out.push('…');
-    out
-}
-
-fn one_line(s: &str) -> String {
-    s.replace(['\n', '\t'], " ")
 }
 
 /// How the bar lays out at one width: one row or three, and which alerts
@@ -183,7 +162,7 @@ impl LinearState {
         let who = request
             .requested_by
             .as_deref()
-            .map(one_line)
+            .map(collapse_line)
             .filter(|w| !w.trim().is_empty())
             .unwrap_or_else(|| "an agent".into());
         Some((who, request.issue.clone()))
@@ -229,7 +208,7 @@ impl LinearState {
             BarItem::Deselect => "esc deselect".into(),
             BarItem::Quit => "ctrl+q quit".into(),
             BarItem::Request(id) => match self.request_issue_of(*id) {
-                Some((who, issue)) => format!("◉ {} {issue}", clip(&who, WHO_MAX)),
+                Some((who, issue)) => format!("◉ {} {issue}", fit(&who, WHO_MAX)),
                 None => "◉".into(),
             },
             BarItem::NeedsYou => format!("! {} needs you", self.marked(MarkKind::Attention).len()),
@@ -474,7 +453,7 @@ impl LinearState {
             .lanes()
             .into_iter()
             .find(|(lane, _)| *lane == key)
-            .map_or(key.to_string(), |(_, label)| one_line(label));
+            .map_or(key.to_string(), |(_, label)| collapse_line(label));
         if !self.folded(key) {
             return format!("Enter folds {label} in every column");
         }
@@ -565,7 +544,7 @@ impl LinearState {
             BarItem::GhUnavailable => match self.gh_unavailable() {
                 Some(why) if !why.trim().is_empty() => format!(
                     "gh unavailable: {} · checks show from Linear only",
-                    one_line(&why)
+                    collapse_line(&why)
                 ),
                 _ => "gh unavailable · checks show from Linear only".into(),
             },

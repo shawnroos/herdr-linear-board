@@ -3,8 +3,10 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+use crate::sync::locked;
 
 /// A space is a herdr workspace id, and workspace ids repeat across herdr
 /// sessions, so the session is part of the key.
@@ -63,10 +65,6 @@ impl<P, T> Default for SnapshotCache<P, T> {
             settled: Condvar::new(),
         }
     }
-}
-
-fn locked<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl<P: Clone + PartialEq, T> SnapshotCache<P, T> {

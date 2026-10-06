@@ -5,7 +5,7 @@ mod client;
 pub mod parse;
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use board_core::protocol::{LinearCardPr, LinearGhSource, LinearPrDetail, LinearPrDocument};
@@ -13,6 +13,7 @@ use board_core::protocol::{LinearCardPr, LinearGhSource, LinearPrDetail, LinearP
 pub use client::{GhClient, GhConfig, GhError, Output, MAX_OUTPUT_BYTES};
 
 use crate::linear::{Debouncer, SpaceKey};
+use crate::sync::locked;
 
 /// Chosen, not measured (KTD8): a PR with pending checks is read again after
 /// two minutes, any other after ten, and only while a board is subscribed.
@@ -278,10 +279,6 @@ fn document(entry: &Entry) -> LinearPrDocument {
         fetched_at: Some(entry.fetched_at),
         pr: entry.detail.clone(),
     }
-}
-
-fn locked<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The daemon's one `gh` service. Unconfigured, every read is unavailable;

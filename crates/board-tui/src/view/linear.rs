@@ -40,7 +40,7 @@ const TITLE_ROWS: u16 = 2;
 /// The filter card and the blank row under it; the title rows' blank sits above.
 const FILTER_ROWS: u16 = 2;
 
-mod icon {
+pub(super) mod icon {
     pub const PERSON: &str = "\u{f415}";
     pub const MILESTONE: &str = "\u{f45d}";
     pub const PULL_REQUEST: &str = "\u{f407}";
@@ -53,6 +53,12 @@ mod icon {
     pub const FILTER_OUTLINE: &str = "\u{f0233}";
     pub const SLANT: &str = "\u{e0bc}";
     pub const INFO: &str = "\u{f02fd}";
+    pub const MERGE: &str = "\u{f419}";
+    pub const BRANCH: &str = "\u{f418}";
+    pub const COMMIT: &str = "\u{f417}";
+    pub const SLACK: &str = "\u{f04b1}";
+    pub const IMAGE: &str = "\u{f0976}";
+    pub const LINK: &str = "\u{f44c}";
 }
 const DEFAULT_VIEW_LABEL: &str = "view: project issues (default)";
 
@@ -281,7 +287,7 @@ fn split_at_width(s: &str, max: usize) -> (&str, &str) {
 
 /// Truncation by display cells: `view::truncate` counts chars, which lets a
 /// wide glyph push the ellipsis past the column edge.
-pub(super) fn fit(s: &str, max: usize) -> String {
+pub(crate) fn fit(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_string();
     }
