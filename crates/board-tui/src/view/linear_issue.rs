@@ -124,7 +124,6 @@ impl Slot<'_> {
     }
 }
 
-/// The open issue's slot.
 pub fn open_slot(state: &LinearState) -> Option<Slot<'_>> {
     let issue = state.detail.as_deref()?;
     Some(Slot {
@@ -144,7 +143,6 @@ pub fn open_slot(state: &LinearState) -> Option<Slot<'_>> {
     })
 }
 
-/// The pinned issue's slot.
 pub fn pinned_slot(state: &LinearState) -> Option<Slot<'_>> {
     let pin = state.pinned.as_ref()?;
     Some(Slot {

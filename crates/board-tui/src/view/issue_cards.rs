@@ -42,7 +42,6 @@ pub fn pr_shape(url: &str) -> Option<(String, u64)> {
     Some((format!("{owner}/{repo}"), number.parse().ok()?))
 }
 
-/// The pull request attachments, newest first, one per URL.
 pub fn pull_requests(attachments: &[LinearAttachment]) -> Vec<&LinearAttachment> {
     let mut prs: Vec<&LinearAttachment> = attachments
         .iter()
@@ -98,7 +97,6 @@ fn gh_detail(read: Option<&PrRead>) -> Option<&LinearPrDetail> {
     }
 }
 
-/// One card row: the inset, `spans`, padded to `width` on the card surface.
 fn card_row(spans: Vec<Span<'static>>, width: usize, bg: Color) -> Line<'static> {
     let mut all = vec![Span::raw(" ".repeat(INSET))];
     all.extend(clip_spans(spans, width.saturating_sub(2 * INSET)));
@@ -111,7 +109,6 @@ fn blank(width: usize, bg: Color) -> Line<'static> {
     card_row(vec![], width, bg)
 }
 
-/// A head row: `left` and a chip pushed to the right edge.
 fn head(left: Vec<Span<'static>>, chip: Span<'static>, inner: usize) -> Vec<Span<'static>> {
     let gap = inner.saturating_sub(spans_width(&left) + chip.content.width());
     let mut spans = left;

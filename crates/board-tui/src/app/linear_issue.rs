@@ -90,7 +90,6 @@ fn toggle_size(app: &mut App) {
     }
 }
 
-/// A slot's cursor: its selected row and its scroll.
 struct Cursor<'a> {
     selection: &'a mut Option<IssueRowKind>,
     scroll: &'a mut usize,
@@ -231,7 +230,6 @@ fn pin_open(app: &mut App) -> Vec<Effect> {
     vec![]
 }
 
-/// The open issue's slot emptied, as closing the view leaves it.
 fn close_open(state: &mut LinearState) {
     state.detail = None;
     state.detail_doc = None;
@@ -258,7 +256,6 @@ fn reselect_after_close(state: &mut LinearState) {
     }
 }
 
-/// `o` on the board: the pinned issue goes.
 pub(super) fn unpin(app: &mut App) {
     let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
@@ -276,7 +273,6 @@ pub(super) fn unpin(app: &mut App) {
     }
 }
 
-/// `p` on the board: the pinned panel takes the keys.
 pub(super) fn focus_pinned(app: &mut App) {
     let width = app.last_area.width;
     let Some(state) = app.linear.as_mut() else {
@@ -425,7 +421,6 @@ fn pinned_back(app: &mut App) -> Vec<Effect> {
     read_pinned(state)
 }
 
-/// A fresh read for the pinned issue, numbered from the shared counter.
 fn read_pinned(state: &mut LinearState) -> Vec<Effect> {
     state.detail_reads += 1;
     let generation = state.detail_reads;
