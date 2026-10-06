@@ -45,33 +45,30 @@ the prototype's `icon` modules.
 |---|---|
 | Columns | No borders. 4-cell gap between columns (2 cells of each column's slot). |
 | Column titles | One powerline bar across the board. Focused column: herdr's active-tab style (`panel_bg` text on `accent`, bold), filling its slot including its half of each gap. Others: `overlay0` on `panel_bg`, running together with no divider. A full `/` cut (`U+E0BC`) where the colour changes, and at the bar's right end. No underline row. |
-| Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). One blank row below. Each lane band is as tall as its busiest column, so lanes align. |
+| Swimlanes | One line per lane across all columns: `─ ALPHA ─────── 5 󰈳 ─`. The count and filter icon are right-aligned (`md-filter_outline` expanded, `md-filter` folded). No blank row below. Each lane band is as tall as its tallest column (the sum of its card heights and gaps), so lanes align. |
 | Lane states | Normal: dim. Holds the selected card: label `accent`. Lane line selected: plus `surface0` background. Nothing selected: all lanes in the "holds the selected card" state. |
 | Folding | Lane lines are selectable in ↑↓ order (lane, its cards, next lane). Return folds or unfolds the lane in every column. |
-| Spacing | 1 blank row between cards, below lane lines, and between a lane's last card and the next lane. |
+| Spacing | 1 blank row between cards and between a lane's last card and the next lane line. None below a lane line. |
 
 ## 3. Cards
 
-Every card has the same height (13 rows), and selecting one never moves text.
+Cards are sized to their content (Shawn, 2026-10-06): no padding rows and no reserved rule rows. Widths are unchanged. Selecting a card changes only its surface and title colour, so it never moves text.
 
-| Row | Content |
-|---|---|
-| reserved | blank (top) |
-| header | `WEB-101 P0 ⧉2`, left-aligned. Marks and `▶` right-aligned. |
-| reserved | blank; a solid rule when selected |
-| title | 2 rows, bold; `yellow` when selected |
-| blank | |
-| description | 3 rows, ends in `…` |
-| reserved | blank; a dashed rule when selected |
-| meta | 2 rows of Nerd Font icon items: assignee, milestone; PR, preview, diff, CI |
-| reserved | blank (bottom) |
+| Row | Content | Rows |
+|---|---|---|
+| header | `WEB-101 P0 ⧉2`, left-aligned. Marks and `▶` right-aligned | 1 |
+| title | bold, wrapped; `yellow` when selected | 1–2 |
+| description | wrapped, ends in `…`; only when the issue has one | 0–3 |
+| meta | Nerd Font icon items, one row per group that has data: assignee and milestone; PR, preview, diff, CI | 0–2 |
+
+The shortest card is 2 rows, the fullest 8. In a 2-up row, the row is as tall as its taller card.
 
 - **Inset:** 2 cells on each side, so text keeps its column whether or not the card is selected.
-- **Selected card:** `surface0` background and a yellow title. No border.
+- **Selected card:** `surface0` background and a yellow title. No border, no rules.
 - **Unfocused columns:** muted tones (section 1).
 - **Marks keep their colour everywhere:** `!` red, `?` peach, `✓` green, `◇` mauve, `◉` blue.
 - **Width:** cards cap at 64 cells. A column whose inside is ≥ 81 cells shows cards 2-up (minimum 40 each, 1-cell gap). See `responsive-board.md`.
-- **Newest agent note:** when a card has one, it replaces the last description line as `› note`.
+- **Newest agent note:** when a card has one, it replaces the last description line as `› note`, or takes one description row when there is no description.
 
 ## 3b. Existing pieces, placed (Shawn, 2026-10-02)
 

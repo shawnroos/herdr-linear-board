@@ -210,7 +210,7 @@ flowchart TB
 |---|---|---|
 | 1 | U1, U2, U3, U5 | Separate areas: the `board-herdr` gate, a new theme module, daemon + protocol fields, and the reducer. No shared files except `CHANGELOG.md`, where each adds its own line |
 | 2 | U4, U6 | U4 is daemon-only and U6 is TUI views; they touch no common file |
-| 3 | U7 → U8 → U9 | Sequential: all three edit `view/linear.rs` and `app/linear.rs`, so parallel branches would conflict on every merge |
+| 3 | U7 → U8 → U12 → U9 | Sequential: all three edit `view/linear.rs` and `app/linear.rs`, so parallel branches would conflict on every merge |
 | 4 | U10 | Needs U1's probe findings and U9's narrow issue view |
 | 5 | U11 | Edits `watchers/herdr.rs` after U10 and uses U1's recorded default tab label |
 
@@ -508,6 +508,34 @@ Each wave-1 and wave-2 unit runs in its own worktree. `CHANGELOG.md` and `docs/t
 - With gh unavailable, the bar shows `gh unavailable` and no CI alert.
 
 **Verification:** bar tests pass; `skill/SKILL.md` describes the bar alert.
+
+### U12. Content-sized cards
+
+**Goal:** Cards are as tall as their content, so more cards fit on screen; widths are unchanged.
+
+**Requirements:** R5 (as amended by Shawn, 2026-10-06: cards no longer share one height), R6.
+
+**Dependencies:** U8. Runs before U9.
+
+**Files:**
+- `crates/board-tui/src/view/linear.rs` (`card_lines`, `Band`, band height, hit-testing), `crates/board-tui/src/app/linear.rs` (scroll offset, click targets)
+- `crates/board-tui/tests/linear/layout.rs`, `tests/linear/snapshots/*.snap`
+- `docs/tui-interactions.md`, `CHANGELOG.md`
+
+**Approach:**
+- Card rows per `docs/board-design.md` §3: header 1, title 1–2, description 0–3, meta 0–2; no padding or rule rows. Selection changes only surface and title colour.
+- Replace every fixed-height assumption (`Band::card_top`, the 13-row constant, scroll math, mouse hit-testing) with per-card heights computed once per draw from the same function the renderer uses.
+- Lane band height is the tallest column's summed card heights plus gaps; a 2-up row is as tall as its taller card. No blank row under lane lines.
+
+**Test scenarios:**
+- A card with only a title is 2 rows; one with a 2-row title, 3-row description and both meta rows is 8.
+- Selecting a card moves no text and changes no card's height.
+- Lanes still align when columns hold cards of different heights.
+- A 2-up row takes the taller card's height, and a click lands on the right card in a mixed-height column.
+- Scrolling keeps a tall selected card fully visible.
+- At 50 rows, a column of description-free cards shows more cards than the 13-row layout did.
+
+**Verification:** layout and snapshot tests pass; classic snapshots unchanged.
 
 ### U9. Issue view
 
