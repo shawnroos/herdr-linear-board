@@ -28,7 +28,7 @@ command, flag, or JSON shape from memory — verify against `api schema` /
 ## Compatibility gate: Herdr 0.9.0–0.9.3 / socket protocol 22
 
 The supported matrix: **Herdr 0.9.0, 0.9.1, 0.9.2 or 0.9.3**, **socket protocol 22**,
-board protocol v1, and SQLite schema v16. `board-herdr` rejects any other Herdr version
+board protocol v1, and SQLite schema v17. `board-herdr` rejects any other Herdr version
 or protocol before the daemon performs workspace discovery, pane placement, an agent
 launch, a configured runner action, or a notification mutation. This is a policy
 gate, not a protocol-negotiation fallback. A preview build of a supported release
@@ -557,7 +557,7 @@ DTOs are not part of this crate's public surface; repository isolation belongs i
 The checked-in schema fixture is regenerated from the installed Herdr contract and
 is not rewritten during unrelated API cleanup. The board fixture and typed client
 are currently pinned to **Herdr 0.9.0–0.9.3 / protocol 22** (the schema fixture is the
-0.9.0 dump); board protocol v1 and DB schema v16 remain independent and unchanged.
+0.9.0 dump); board protocol v1 and DB schema v17 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

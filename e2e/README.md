@@ -8,7 +8,7 @@ exercises the herdr wire integration end to end.
 
 For the layers below this one (unit, daemon+CLI integration, TUI snapshots), the
 isolation/safety design, and the **how-to-write-a-scenario** guide, see
-[`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v16:
+[`../docs/testing.md`](../docs/testing.md). This file is the authoritative use-case catalog for board protocol v1 / SQLite schema v17:
 every numbered scenario from **01 through 46** must appear here and in `run-all.sh`. Every scenario is
 provider-free; the Linear scenarios read a loopback fake Linear (`fake-linear.py`). The provider-free
 safe boundary is `fake-agent.sh`,

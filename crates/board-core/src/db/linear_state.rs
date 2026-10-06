@@ -656,6 +656,29 @@ impl BoardPanePlacement {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LabelKind {
+    Tab,
+    Pane,
+}
+
+impl LabelKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LabelKind::Tab => "tab",
+            LabelKind::Pane => "pane",
+        }
+    }
+
+    fn parse(text: &str) -> rusqlite::Result<Self> {
+        match text {
+            "tab" => Ok(LabelKind::Tab),
+            "pane" => Ok(LabelKind::Pane),
+            _ => Err(super::conv_err("linear_generated_labels.kind")),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewBoardPane<'a> {
     pub herdr_socket: &'a str,
@@ -1582,5 +1605,78 @@ impl Db {
             "DELETE FROM linear_board_panes WHERE herdr_socket = ?1 AND pane_id = ?2",
             params![herdr_socket, pane_id],
         )? > 0)
+    }
+    pub fn generated_labels(&self, herdr_socket: &str) -> Result<Vec<(LabelKind, String, String)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT kind, target_id, label FROM linear_generated_labels
+             WHERE herdr_socket = ?1 ORDER BY kind, target_id",
+        )?;
+        let rows = statement
+            .query_map(params![herdr_socket], |r| {
+                Ok((
+                    LabelKind::parse(&r.get::<_, String>(0)?)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn set_generated_label(
+        &self,
+        herdr_socket: &str,
+        kind: LabelKind,
+        target_id: &str,
+        label: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO linear_generated_labels (herdr_socket, kind, target_id, label)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (herdr_socket, kind, target_id)
+             DO UPDATE SET label = excluded.label, updated_at = datetime('now')",
+            params![herdr_socket, kind.as_str(), target_id, label],
+        )?;
+        Ok(())
+    }
+
+    pub fn forget_generated_label(
+        &self,
+        herdr_socket: &str,
+        kind: LabelKind,
+        target_id: &str,
+    ) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM linear_generated_labels
+             WHERE herdr_socket = ?1 AND kind = ?2 AND target_id = ?3",
+            params![herdr_socket, kind.as_str(), target_id],
+        )? > 0)
+    }
+
+    /// Drops the socket's labels of `kind` whose target is not in `live`.
+    pub fn prune_generated_labels(
+        &self,
+        herdr_socket: &str,
+        kind: LabelKind,
+        live: &[String],
+    ) -> Result<usize> {
+        let mut removed = 0;
+        for (row_kind, target_id, _) in self.generated_labels(herdr_socket)? {
+            if row_kind == kind && !live.contains(&target_id) {
+                removed +=
+                    usize::from(self.forget_generated_label(herdr_socket, kind, &target_id)?);
+            }
+        }
+        Ok(removed)
+    }
+
+    pub fn generated_label_sockets(&self) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT DISTINCT herdr_socket FROM linear_generated_labels ORDER BY herdr_socket",
+        )?;
+        let rows = statement
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 }

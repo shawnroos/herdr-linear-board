@@ -204,8 +204,8 @@ runs(id, card_id, column_id, harness, argv_json, prompt_snapshot,
      result_summary, log_path)
 ```
 
-Schema is versioned via `PRAGMA user_version` (current = **v16**). A fresh DB is built straight from
-`schema.sql` and stamped v16. Existing v1→v4 migrations retain their space/session, archive, and Pi
+Schema is versioned via `PRAGMA user_version` (current = **v17**). A fresh DB is built straight from
+`schema.sql` and stamped v17. Existing v1→v4 migrations retain their space/session, archive, and Pi
 effort behavior. v5 adds unique non-null `boards.scope_path`, preserves board `id=1` plus every
 related row as `Global`, and leaves existing card harnesses unchanged. v6 rebuilds `cards` to admit
 the `awaiting`/`done` statuses and adds `cards.awaiting_reason` (NULL outside `awaiting`). v7 adds
@@ -231,7 +231,9 @@ board_selection, project_recents, and board_recents tables. The v13→v14 migrat
 keys disabled (boards is the parent of columns/cards): every existing scoped board becomes its own
 project's first board `main` and the Global board becomes the Global project's `main`, so **all**
 board ids, columns, cards, runs, and comment history are preserved; a crash rolls the upgrade back
-and `user_version` stays 13. A legacy NULL remains a
+and `user_version` stays 13. v15 adds archive timestamps, v16 the Linear-mode local-state tables,
+and v17 `linear_generated_labels`: each tab or pane label the daemon wrote, keyed by session socket,
+kind and id, so a label it did not write is never replaced. A legacy NULL remains a
 launch-version marker: pre-v7 built-ins
 execute their persisted all-in-one argv unchanged, while pre-v7 configured rows retain their
 historical spawn-time current-column reconstruction. `Run` deserialization defaults an omitted field
@@ -239,7 +241,7 @@ to NULL, but serialization always omits `system_prompt_snapshot` and its content
 responses. `launch_spec_json` is likewise internal and omitted in full from boardd wire responses.
 
 Source ownership is explicit: `schema.sql` is the fresh schema source, `board-core::db` owns ordered
-upgrades through v16, and `board-core::protocol` owns the v1 wire DTOs and additive compatibility
+upgrades through v17, and `board-core::protocol` owns the v1 wire DTOs and additive compatibility
 rules. The CLI and TUI use typed `BoardClient` wrappers; only boardd reads or writes SQLite. New
 v1 fields such as `BoardSnapshot.active_runs` and RPC error `kind`/`details` are additive, so older
 clients can continue decoding the existing fields.
