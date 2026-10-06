@@ -623,10 +623,12 @@ pub(crate) fn pr_arrived(
     app: &mut App,
     url: String,
     result: Result<board_core::protocol::LinearPrDocument, LinearFailure>,
-) {
+) -> Vec<Effect> {
     let Some(state) = app.linear.as_mut() else {
-        return;
+        return vec![];
     };
+    state.prs_in_flight.remove(&url);
+    let queued = state.prs_queued.remove(&url);
     let read = match result {
         Ok(doc) => match board_core::text::scrubbed(&doc) {
             Ok(doc) => PrRead::Read(Box::new(doc)),
@@ -635,7 +637,7 @@ pub(crate) fn pr_arrived(
         Err(LinearFailure::MethodNotFound) => {
             state.pr_read_missing = true;
             state.prs.remove(&url);
-            return;
+            return vec![];
         }
         Err(LinearFailure::GhUnavailable(why)) => PrRead::GhUnavailable(super::sanitise(&why)),
         Err(LinearFailure::TimedOut(limit)) => {
@@ -645,7 +647,12 @@ pub(crate) fn pr_arrived(
             PrRead::Failed(super::sanitise(&why))
         }
     };
-    state.prs.insert(url, read);
+    state.prs.insert(url.clone(), read);
+    if queued && shown_pr_urls(state).contains(&url) {
+        send_pr_reads(state, vec![url], false)
+    } else {
+        vec![]
+    }
 }
 
 /// The PR reads an issue document asks for: each pull request it links,
@@ -655,21 +662,52 @@ pub(super) fn request_prs(
     state: &mut LinearState,
     doc: &board_core::protocol::LinearIssueDocument,
 ) -> Vec<Effect> {
-    if state.pr_read_missing {
-        return vec![];
-    }
-    let Some(detail) = doc.issue.as_ref() else {
+    let urls = pr_urls(Some(doc));
+    send_pr_reads(state, urls, false)
+}
+
+/// The PR reads the open and the pinned issue ask for again after the
+/// daemon refreshed its `gh` data.
+pub(super) fn refresh_prs(state: &mut LinearState) -> Vec<Effect> {
+    let urls = shown_pr_urls(state);
+    send_pr_reads(state, urls, true)
+}
+
+fn shown_pr_urls(state: &LinearState) -> Vec<String> {
+    let mut urls = pr_urls(state.detail_doc.as_ref().map(|(_, doc)| doc));
+    urls.extend(pr_urls(
+        state.pinned.as_ref().and_then(|pin| pin.doc.as_ref()),
+    ));
+    urls
+}
+
+fn pr_urls(doc: Option<&board_core::protocol::LinearIssueDocument>) -> Vec<String> {
+    let Some(detail) = doc.and_then(|doc| doc.issue.as_ref()) else {
         return vec![];
     };
     crate::view::pull_requests(&detail.attachments)
         .into_iter()
         .take(PR_READS_MAX)
-        .filter_map(|a| {
-            let url = a.url.clone();
-            if matches!(state.prs.get(&url), Some(PrRead::Loading)) {
+        .map(|a| a.url.clone())
+        .collect()
+}
+
+/// `queue`: a URL already in flight is read once more when it lands, since
+/// the read on the way may predate the `gh` refresh that asked for this one.
+fn send_pr_reads(state: &mut LinearState, urls: Vec<String>, queue: bool) -> Vec<Effect> {
+    if state.pr_read_missing {
+        return vec![];
+    }
+    urls.into_iter()
+        .filter_map(|url| {
+            if !state.prs_in_flight.insert(url.clone()) {
+                if queue {
+                    state.prs_queued.insert(url);
+                }
                 return None;
             }
-            state.prs.insert(url.clone(), PrRead::Loading);
+            // A card keeps its last read on screen while the next one runs.
+            state.prs.entry(url.clone()).or_insert(PrRead::Loading);
             Some(Effect::LinearPr { url })
         })
         .collect()

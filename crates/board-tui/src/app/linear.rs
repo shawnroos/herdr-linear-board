@@ -14,7 +14,7 @@ use board_core::protocol::{
     Mark, MarkKind, Note, ShowRequest,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::linear_cursor::{CardCursor, Focus, Side};
 use super::nav::{nav_delta, step_clamped};
@@ -396,6 +396,8 @@ pub struct LinearState {
     /// What the daemon's PR read returned, by pull request URL. Kept across
     /// opens, so a card shows the last read while the next one runs.
     pub prs: HashMap<String, PrRead>,
+    pub prs_in_flight: HashSet<String>,
+    pub prs_queued: HashSet<String>,
     /// The daemon predates `linear.pr`: cards show Linear's data only, and
     /// no further read is sent.
     pub pr_read_missing: bool,
@@ -517,6 +519,8 @@ impl LinearState {
             opened_from: None,
             pinned: None,
             prs: HashMap::new(),
+            prs_in_flight: HashSet::new(),
+            prs_queued: HashSet::new(),
             pr_read_missing: false,
             landing: None,
             level: None,
@@ -959,10 +963,7 @@ pub(super) fn update_linear(app: &mut App, msg: Msg) -> Vec<Effect> {
             LinearArrival::Wrote { write, result } => write_arrived(app, write, result),
             LinearArrival::Session(result) => super::linear_level::start_arrived(app, *result),
             LinearArrival::PaneContext(result) => super::linear_level::arrived(app, *result),
-            LinearArrival::Pr { url, result } => {
-                super::linear_issue::pr_arrived(app, url, *result);
-                vec![]
-            }
+            LinearArrival::Pr { url, result } => super::linear_issue::pr_arrived(app, url, *result),
         },
         Msg::Key(k) => {
             let mut effects = linear_key(app, k);
@@ -1178,9 +1179,14 @@ fn local_state_changed(app: &mut App, signals: &LocalStateSignals) -> Vec<Effect
         // The daemon already refetched Linear, so the snapshot read is never
         // forced. The state is read too: the daemon sends no separate signal
         // for a mark written alongside a refetch.
+        // A background `gh` pass also arrives as `snapshot: true`, and only
+        // a PR read brings its result to the open or pinned issue's cards.
         Some(true) => {
             let mut effects = request_or_queue(app);
             effects.extend(request_local_state(app));
+            if let Some(state) = app.linear.as_mut() {
+                effects.extend(super::linear_issue::refresh_prs(state));
+            }
             effects
         }
         Some(false) => request_local_state(app),

@@ -135,10 +135,7 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 generation,
                 result,
             } => super::linear::issue_arrived(app, &issue, generation, *result),
-            LinearArrival::Pr { url, result } => {
-                super::linear_issue::pr_arrived(app, url, *result);
-                vec![]
-            }
+            LinearArrival::Pr { url, result } => super::linear_issue::pr_arrived(app, url, *result),
             LinearArrival::List { .. }
             | LinearArrival::Wrote { .. }
             | LinearArrival::PaneContext(_) => {

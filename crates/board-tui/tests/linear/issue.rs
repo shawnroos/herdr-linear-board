@@ -508,6 +508,125 @@ fn with_gh_unavailable_the_pr_card_shows_linears_status_and_says_why() {
 }
 
 #[test]
+fn a_failed_refresh_keeps_the_last_checks_and_says_they_are_stale() {
+    let mut stale = pr_doc(OPEN_PR, 2128);
+    stale.status = board_core::protocol::GH_UNAVAILABLE.into();
+    stale.message = Some("gh timed out".into());
+    let c = cards_client()
+        .with_linear_pr(OPEN_PR, stale)
+        .with_linear_pr(MERGED_PR, merged_doc());
+    let (_, frame) = expanded(c, 120);
+    assert!(row_of(&frame, "11 passed").contains("1 pending"), "{frame}");
+    assert!(
+        frame.contains("gh: gh timed out · showing last known checks"),
+        "{frame}"
+    );
+    assert_eq!(
+        frame.matches("showing last known checks").count(),
+        1,
+        "only the stale card says so: {frame}"
+    );
+}
+
+fn recorded_cards() -> (Driver, RequestLog) {
+    let c = cards_client()
+        .with_linear_pr(OPEN_PR, pr_doc(OPEN_PR, 2128))
+        .with_linear_pr(MERGED_PR, merged_doc());
+    let (c, log) = RecordingClient::new(c);
+    let (mut d, _, _) = linear_driver(c, linear_start());
+    d.app.last_area = Rect::new(0, 0, BOARD, TALL);
+    (d, log)
+}
+
+fn refetched(d: &mut Driver, log: &RequestLog) -> Vec<serde_json::Value> {
+    let space = state(d).workspace_id.clone();
+    log.lock().unwrap().clear();
+    d.on_local_state_changed(local(&[(Some(space.as_str()), true)]));
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "linear.pr")
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+#[test]
+fn a_background_refresh_rereads_the_open_issues_pull_requests_unforced() {
+    let (mut d, log) = recorded_cards();
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(d.app.screen, Screen::LinearDetail);
+    let reads = refetched(&mut d, &log);
+    let urls: Vec<_> = reads.iter().map(|p| p["url"].clone()).collect();
+    assert_eq!(urls.len(), 2, "{reads:?}");
+    assert!(urls.contains(&OPEN_PR.into()) && urls.contains(&MERGED_PR.into()));
+    assert!(reads.iter().all(|p| p.get("force").is_none()), "{reads:?}");
+}
+
+#[test]
+fn a_background_refresh_rereads_the_pinned_issues_pull_requests() {
+    let (mut d, log) = recorded_cards();
+    press(&mut d, KeyCode::Enter);
+    press(&mut d, KeyCode::Char('o'));
+    assert!(state(&d).pinned.is_some());
+    assert_eq!(refetched(&mut d, &log).len(), 2);
+}
+
+#[test]
+fn a_background_refresh_with_no_issue_open_reads_no_pull_request() {
+    let (mut d, log) = recorded_cards();
+    assert_eq!(d.app.screen, Screen::LinearBoard);
+    assert!(refetched(&mut d, &log).is_empty());
+}
+
+fn refresh(d: &mut Driver) -> Vec<board_tui::app::Effect> {
+    let space = state(d).workspace_id.clone();
+    let signal = Msg::LocalStateChanged(local(&[(Some(space.as_str()), true)]));
+    board_tui::app::update(&mut d.app, signal)
+}
+
+fn pr_answer(url: &str) -> Msg {
+    Msg::LinearArrived(Box::new(board_tui::app::LinearArrival::Pr {
+        url: url.into(),
+        result: Box::new(Ok(pr_doc(url, 2128))),
+    }))
+}
+
+fn pr_reads(effects: &[board_tui::app::Effect]) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            board_tui::app::Effect::LinearPr { url } => Some(url.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_refresh_during_a_pr_read_sends_one_more_read_when_it_lands() {
+    let (mut d, _log) = recorded_cards();
+    press(&mut d, KeyCode::Enter);
+    // The reducer's effects are not dispatched here, so the reads stay in flight.
+    let first = refresh(&mut d);
+    assert_eq!(pr_reads(&first).len(), 2);
+    let during = refresh(&mut d);
+    assert!(pr_reads(&during).is_empty(), "already in flight");
+    let landed = board_tui::app::update(&mut d.app, pr_answer(OPEN_PR));
+    assert_eq!(pr_reads(&landed), vec![OPEN_PR.to_string()]);
+    let again = board_tui::app::update(&mut d.app, pr_answer(OPEN_PR));
+    assert!(pr_reads(&again).is_empty(), "only one follow-up");
+}
+
+#[test]
+fn a_pr_read_landing_with_nothing_queued_sends_no_follow_up() {
+    let (mut d, _log) = recorded_cards();
+    press(&mut d, KeyCode::Enter);
+    let first = refresh(&mut d);
+    assert_eq!(pr_reads(&first).len(), 2);
+    let landed = board_tui::app::update(&mut d.app, pr_answer(OPEN_PR));
+    assert!(pr_reads(&landed).is_empty());
+}
+
+#[test]
 fn an_older_daemon_without_the_pr_read_shows_linear_only_cards_not_the_stale_screen() {
     let (c, log) = RecordingClient::new(UnknownMethods(cards_client(), "linear.pr"));
     let (mut d, frame) = expanded(c, 120);

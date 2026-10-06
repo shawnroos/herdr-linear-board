@@ -2,7 +2,7 @@
 //! say which pull requests belong to the issue and draw at once; `gh` fields
 //! fill in when the daemon's PR read lands.
 
-use board_core::protocol::{LinearAttachment, LinearPrDetail, CI_FAIL};
+use board_core::protocol::{LinearAttachment, LinearPrDetail, CI_FAIL, GH_OK};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -227,7 +227,13 @@ fn gh_line(state: &LinearState, read: Option<&PrRead>) -> Option<String> {
             Some(why) if !why.trim().is_empty() => format!("gh unavailable: {}", line(why)),
             _ => "gh unavailable".into(),
         }),
-        Some(PrRead::Read(_)) => None,
+        Some(PrRead::Read(doc)) if doc.status == GH_OK => None,
+        Some(PrRead::Read(doc)) => Some(match doc.message.as_deref() {
+            Some(why) if !why.trim().is_empty() => {
+                format!("gh: {} · showing last known checks", line(why))
+            }
+            _ => "gh unavailable · showing last known checks".into(),
+        }),
         Some(PrRead::GhUnavailable(why)) | Some(PrRead::Failed(why)) if !why.trim().is_empty() => {
             Some(format!("gh unavailable: {}", line(why)))
         }
