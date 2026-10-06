@@ -217,15 +217,41 @@ fn entry_count_is_hard_bounded() {
     assert_eq!(models.len(), MAX_MODELS, "entry cap applies");
 }
 
+/// Write an executable `/bin/sh` fixture and return once it can be executed.
+#[cfg(unix)]
+fn write_fixture(bin: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let script = format!("#!/bin/sh\n[ -n \"$HB_FIXTURE_PROBE\" ] && exit 0\n{body}");
+    fs::write(bin, script).unwrap();
+    fs::set_permissions(bin, fs::Permissions::from_mode(0o700)).unwrap();
+    // A sibling test's fork inherits the write fd above until it execs, and
+    // Linux refuses to exec a file still open for writing (ETXTBSY). The
+    // loader would read that as a missing CLI, so wait until a probe execs.
+    for _ in 0..500 {
+        match Command::new(bin)
+            .env("HB_FIXTURE_PROBE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => panic!("fixture {bin:?} cannot run: {e}"),
+        }
+    }
+    panic!("fixture {bin:?} stayed busy (ETXTBSY)");
+}
+
 /// A fake `agy` executable that prints the fixture to stdout.
 #[cfg(unix)]
 fn fixture_agy_bin(dir: &tempfile::TempDir, stdout: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script = format!("#!/bin/sh\ncat <<'HBEOF'\n{stdout}\nHBEOF\n");
     let bin = dir.path().join("agy-fixture");
-    fs::write(&bin, script).unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(&bin, &format!("cat <<'HBEOF'\n{stdout}\nHBEOF\n"));
     bin
 }
 
@@ -253,9 +279,7 @@ fn load_from_cli_failing_binary_yields_none() {
     let dir = tempfile::tempdir().unwrap();
     // A script that exits non-zero (no model list) → None.
     let failing = dir.path().join("agy-failing");
-    fs::write(&failing, "#!/bin/sh\nexit 3\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&failing, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(&failing, "exit 3\n");
     assert!(load_from_cli(failing.to_str().unwrap()).is_none());
 
     // A missing binary → None.
@@ -266,12 +290,11 @@ fn load_from_cli_failing_binary_yields_none() {
 /// the recorded PID IS the killed process (no orphan child of a shell).
 #[cfg(unix)]
 fn pid_fixture_agy_bin(dir: &tempfile::TempDir, pid_file: &str, body: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script = format!("#!/bin/sh\necho \"$$\" > \"{pid_file}\"\nexec {body}\n");
     let bin = dir.path().join("agy-pid-fixture");
-    fs::write(&bin, script).unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(
+        &bin,
+        &format!("echo \"$$\" > \"{pid_file}\"\nexec {body}\n"),
+    );
     bin
 }
 
