@@ -5,7 +5,6 @@ mod client;
 pub mod parse;
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -351,23 +350,13 @@ pub fn read_all(
     done: impl Fn(&PrRef, Result<LinearPrDetail, GhError>) + Sync,
 ) {
     let work = Mutex::new(prs);
-    // gh missing or logged out fails every read alike, so the rest of the
-    // pass is not spawned; nothing is recorded for those PRs either way.
-    let unavailable = AtomicBool::new(false);
     std::thread::scope(|scope| {
         for _ in 0..PASS_CONCURRENCY {
             scope.spawn(|| loop {
-                if unavailable.load(Ordering::Relaxed) {
-                    break;
-                }
                 let Some(pr) = locked(&work).pop() else {
                     break;
                 };
-                let result = service.fetch(&pr);
-                if matches!(result, Err(GhError::Unavailable(_))) {
-                    unavailable.store(true, Ordering::Relaxed);
-                }
-                done(&pr, result);
+                done(&pr, service.fetch(&pr));
             });
         }
     });

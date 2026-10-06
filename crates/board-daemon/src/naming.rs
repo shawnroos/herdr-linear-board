@@ -91,7 +91,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use board_core::db::{herdr_session, resolve_worktree, Db, LabelKind};
+use board_core::db::{herdr_session, resolve_worktree, LabelKind};
 use board_herdr::{PaneInfo, PaneRenameParams, TabInfo, TabRenameParams};
 
 use crate::linear::SpaceKey;
@@ -316,7 +316,7 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
     let _labels = d.naming.labels();
     let tabs = client.tab_list(None)?;
     let panes = client.pane_list(None)?;
-    let (stored, plan) = {
+    let (stored, boards) = {
         let store = d.store.lock();
         let stored: Stored = store
             .generated_labels(&key)?
@@ -328,12 +328,14 @@ pub(crate) fn sweep_socket(d: &Arc<Daemon>, socket: &Path) -> anyhow::Result<boo
             .into_iter()
             .map(|row| row.pane_id)
             .collect();
-        let memo = PassMemo::default();
-        let plan = plan(&spaces, &tabs, &panes, &boards, &stored, |pane| {
-            scope_of(d, &store, &memo, &session, pane)
-        });
-        (stored, plan)
+        (stored, boards)
     };
+    // Outside the store lock: the scope lookups read the filesystem, and each
+    // binding read takes the lock on its own.
+    let memo = PassMemo::default();
+    let plan = plan(&spaces, &tabs, &panes, &boards, &stored, |pane| {
+        scope_of(d, &memo, &session, pane)
+    });
     for (kind, id, label) in plan.renames {
         let renamed = match kind {
             LabelKind::Tab => client.tab_rename(&TabRenameParams {
@@ -399,13 +401,13 @@ fn memoized<K: Eq + std::hash::Hash, V: Clone>(
     value
 }
 
-fn scope_of(d: &Arc<Daemon>, store: &Db, memo: &PassMemo, session: &str, pane: &PaneInfo) -> Scope {
+fn scope_of(d: &Arc<Daemon>, memo: &PassMemo, session: &str, pane: &PaneInfo) -> Scope {
     let cwd = pane.working_dir();
     let issue = cwd.and_then(|cwd| {
         memoized(&memo.issues, cwd.to_string(), || {
             resolve_worktree(cwd)
                 .ok()
-                .and_then(|path| store.worktree_binding(&path).ok().flatten())
+                .and_then(|path| d.store.lock().worktree_binding(&path).ok().flatten())
                 .map(|binding| binding.issue)
                 .filter(|issue| !issue.is_empty())
         })
