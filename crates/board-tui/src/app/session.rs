@@ -134,8 +134,9 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 issue,
                 generation,
                 result,
-            } => {
-                super::linear::issue_arrived(app, &issue, generation, *result);
+            } => super::linear::issue_arrived(app, &issue, generation, *result),
+            LinearArrival::Pr { url, result } => {
+                super::linear_issue::pr_arrived(app, url, *result);
                 vec![]
             }
             LinearArrival::List { .. } | LinearArrival::Wrote { .. } => {
@@ -180,7 +181,9 @@ fn failure_text(failure: LinearFailure) -> String {
     match failure {
         LinearFailure::MethodNotFound => "the daemon predates the session read".to_string(),
         LinearFailure::TimedOut(limit) => super::linear::read_timeout_text(limit),
-        LinearFailure::OpUnsupported(text) | LinearFailure::Failed(text) => sanitise(&text),
+        LinearFailure::OpUnsupported(text)
+        | LinearFailure::Failed(text)
+        | LinearFailure::GhUnavailable(text) => sanitise(&text),
     }
 }
 

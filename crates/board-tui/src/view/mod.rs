@@ -332,13 +332,16 @@ pub const HELP_KEYS: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "click view", "choose a view to bind"),
     (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearBoard, "Shift+wheel", "page hidden columns"),
-    (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
-    (Screen::LinearDetail, "o", "focus selected pane"),
+    (Screen::LinearDetail, "↑/↓ k/j", "rows, then scroll"),
+    (Screen::LinearDetail, "PgUp/PgDn", "scroll a page"),
+    (Screen::LinearDetail, "Enter", "open issue / pane / link"),
+    (Screen::LinearDetail, "e", "expand / window (wide)"),
+    (Screen::LinearDetail, "o", "pin beside the board"),
     (Screen::LinearDetail, "u", "open issue in Linear"),
     (Screen::LinearDetail, "y", "copy worktree path"),
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
-    (Screen::LinearDetail, "Esc", "back to board"),
+    (Screen::LinearDetail, "Esc ⌫ ←", "back an issue, then close"),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
     (
@@ -405,23 +408,37 @@ pub fn session_help_keys() -> &'static [(Screen, &'static str, &'static str)] {
     &HELP_KEYS[session_help_start()..]
 }
 
+mod issue_cards;
 mod layout;
 mod linear;
 mod linear_issue;
 mod session;
 
-pub use linear_issue::{Row as IssueRow, RowKind as IssueRowKind};
+pub use issue_cards::{pr_shape, pull_requests};
+pub use linear_issue::{
+    Layout as IssueLayout, Row as IssueRow, RowKind as IssueRowKind, MODAL_MIN,
+};
 
-/// The selectable rows of the issue page as it is currently drawn. The key
-/// handler and the renderer derive them from the same function, so what the
-/// cursor moves through and what is on screen cannot disagree.
+/// The open issue laid out as it is currently drawn. The key handler and the
+/// renderer derive it from the same function, so what the cursor moves
+/// through and what is on screen cannot disagree.
+pub fn issue_layout(app: &crate::app::App) -> Option<IssueLayout> {
+    let state = app.linear.as_ref()?;
+    let slot = linear_issue::open_slot(state)?;
+    let (rect, look) = linear_issue::open_rect(app, state, app.last_area);
+    linear_issue::layout(app, state, &slot, rect, look)
+}
+
+/// The selectable rows of the open issue as it is currently drawn.
 pub fn issue_page_rows(app: &crate::app::App) -> Vec<IssueRow> {
-    let Some(state) = app.linear.as_ref() else {
-        return vec![];
-    };
-    linear_issue::build(app, state, app.last_area)
-        .map(|page| page.rows)
-        .unwrap_or_default()
+    issue_layout(app).map(|l| l.rows).unwrap_or_default()
+}
+
+/// Whether the open issue draws its `e` / `o` buttons at the last size.
+pub fn issue_buttons_shown(app: &crate::app::App) -> bool {
+    app.linear
+        .as_ref()
+        .is_some_and(|state| linear_issue::buttons_shown(app, state))
 }
 mod linear_picker;
 mod linear_strip;
@@ -440,9 +457,7 @@ pub use session::session_help_max_scroll;
 /// How far the issue page can scroll at the last drawn size: the session
 /// pane's `j`/`k` stop here.
 pub fn issue_page_max_scroll(app: &crate::app::App) -> usize {
-    app.linear.as_ref().map_or(0, |state| {
-        linear_issue::max_scroll(app, state, app.last_area)
-    })
+    issue_layout(app).map_or(0, |l| l.max)
 }
 pub use overlays::{
     comment_history_rect, comment_history_wrapped_rows, help_content_width, help_list_rect,

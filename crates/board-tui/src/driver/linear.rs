@@ -9,8 +9,9 @@ use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
     ActivityClaims, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams, PaneFocusParams,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearPrParams, LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams,
+    PaneFocusParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_PR_CLIENT_TIMEOUT,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
@@ -54,6 +55,8 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearIssue { .. }
             | Effect::FocusPane(_)
             | Effect::OpenIssueUrl(_)
+            | Effect::OpenLink(_)
+            | Effect::LinearPr { .. }
             | Effect::CopyWorktreePath { .. }
             | Effect::SetLinearPaneTitle(_)
             | Effect::LinearSpaceBind { .. }
@@ -75,6 +78,7 @@ pub(super) fn session_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearSnapshot { force: false }
             | Effect::LinearStateGet
             | Effect::LinearIssue { .. }
+            | Effect::LinearPr { .. }
             | Effect::Quit
     )
 }
@@ -87,12 +91,14 @@ pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
         Effect::LinearSessionGet
         | Effect::LinearStateGet
         | Effect::LinearIssue { .. }
+        | Effect::LinearPr { .. }
         | Effect::Quit => false,
         Effect::LinearSnapshot { force } => *force,
         Effect::Refetch
         | Effect::LinearList { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
+        | Effect::OpenLink(_)
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::LinearSpaceBind { .. }
@@ -151,6 +157,8 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::LinearIssue { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
+        | Effect::OpenLink(_)
+        | Effect::LinearPr { .. }
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::LinearSpaceBind { .. }
@@ -274,6 +282,7 @@ pub(crate) fn classify<T>(
             // Code 7 is "the plugin ships no script for this op", which is
             // fixed by updating the plugin rather than by retrying.
             Some((7, message)) => LinearFailure::OpUnsupported(message),
+            Some((8, message)) => LinearFailure::GhUnavailable(message),
             Some((_, message)) => LinearFailure::Failed(message),
             None => LinearFailure::Failed(format!("{error:#}")),
         }
@@ -369,6 +378,23 @@ impl Driver {
             move |result| LinearArrival::Issue {
                 issue,
                 generation,
+                result: Box::new(result),
+            },
+        );
+    }
+
+    /// Not held by the test hook: a PR read follows an issue read, and holding
+    /// both would make every issue test deliver PR reads it does not test.
+    pub(super) fn fetch_linear_pr(&mut self, url: String) {
+        let params = LinearPrParams {
+            url: url.clone(),
+            force: false,
+        };
+        self.run_linear_read(
+            LINEAR_PR_CLIENT_TIMEOUT,
+            move |client| client.linear_pr(&params),
+            move |result| LinearArrival::Pr {
+                url,
                 result: Box::new(result),
             },
         );
@@ -639,6 +665,20 @@ impl Driver {
         }
     }
 
+    /// An attachment or pull request link: the same http(s) rule as the
+    /// issue URL, since anyone in the Linear workspace writes these.
+    pub(super) fn open_link(&mut self, url: String) {
+        if !is_http_url(&url) {
+            self.app
+                .set_toast("link is not http(s); not opening it", true);
+            return;
+        }
+        match self.platform.open_url(&url) {
+            Ok(()) => self.app.set_toast("opening the link", false),
+            Err(error) => self.app.set_toast(format!("open failed: {error:#}"), true),
+        }
+    }
+
     pub(super) fn copy_worktree_path(&mut self, path: String, missing: bool) {
         match self.platform.copy_text(&path) {
             Ok(()) if missing => self.app.set_toast("copied; directory is gone", false),
@@ -765,6 +805,8 @@ mod tests {
             },
             Effect::FocusPane(s()),
             Effect::OpenIssueUrl(s()),
+            Effect::OpenLink(s()),
+            Effect::LinearPr { url: s() },
             Effect::CopyWorktreePath {
                 path: s(),
                 missing: false,
@@ -789,11 +831,11 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 15 since the board acts on marks and show-requests: mark clear,
-        // show accept, show dismiss and bind joined `linear.state.get`'s 11.
-        // The number is pinned so widening what this mode can do is a
-        // deliberate edit rather than a side effect of adding an effect.
-        assert_eq!(allowed, 15, "the allow set grew or shrank");
+        // 17: the issue view's PR read and link opener joined the 15 the
+        // board's mark, show-request and bind writes made. The number is
+        // pinned so widening what this mode can do is a deliberate edit
+        // rather than a side effect of adding an effect.
+        assert_eq!(allowed, 17, "the allow set grew or shrank");
     }
 
     #[test]
@@ -813,9 +855,10 @@ mod tests {
             .filter(|e| session_allows(e))
             .map(|e| format!("{:?}", std::mem::discriminant(e)))
             .collect();
-        // Session read, snapshot, local state, issue document and quit. A
-        // forced snapshot is refused: the pane never skips the daemon's cache.
-        assert_eq!(allowed.len(), 5, "the session allow set grew or shrank");
+        // Session read, snapshot, local state, issue document, PR read and
+        // quit. A forced snapshot is refused: the pane never skips the
+        // daemon's cache.
+        assert_eq!(allowed.len(), 6, "the session allow set grew or shrank");
         assert!(session_denies(&Effect::LinearSnapshot { force: true }));
     }
 

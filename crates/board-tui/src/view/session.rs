@@ -36,9 +36,11 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         area.height.saturating_sub(u16::from(status.is_some())),
     );
     match (session.bound_issue(), session.view) {
-        // The page keeps its own row for a toast.
         (Some(_), SessionView::Issue) => {
-            super::linear_issue::draw(app, state, f, if app.toast.is_some() { area } else { body })
+            if let Some(slot) = super::linear_issue::open_slot(state) {
+                let look = super::linear_issue::Look::Session;
+                super::linear_issue::draw(app, state, &slot, f, body, look);
+            }
         }
         (Some(issue), SessionView::List) => draw_list(state, session, issue, f, body),
         (None, _) => draw_unbound(state, session, f, body),

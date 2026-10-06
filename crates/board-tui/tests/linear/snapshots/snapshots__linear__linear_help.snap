@@ -32,5 +32,5 @@ expression: frame
 "               │  Esc          strip: back to the board                                                ││               "
 " Spaces with no│  v            choose a view to bind                                                   ││               "
 "    Beta notes │  click        open card / focus column                                                ▼│               "
-"    Gamma docs │↑/↓ k/j scroll · 41 more below · any other key closes                                   │               "
+"    Gamma docs │↑/↓ k/j scroll · 44 more below · any other key closes                                   │               "
 " ? bar  keys  / filter  esc deselect  ctrl+q quit   󰋽 Enter lists every key · ←→ chooses · ↑ back to the board          "

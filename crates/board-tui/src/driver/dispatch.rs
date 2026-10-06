@@ -294,6 +294,8 @@ impl Driver {
             Effect::LinearBind { mark, issue, cwd } => self.bind_worktree(mark, issue, cwd),
             Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
             Effect::OpenIssueUrl(url) => self.open_issue_url(url),
+            Effect::OpenLink(url) => self.open_link(url),
+            Effect::LinearPr { url } => self.fetch_linear_pr(url),
             Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),
         }
     }

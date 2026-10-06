@@ -383,10 +383,9 @@ fn detail_lists_bindings_tabs_and_panes_with_live_status() {
         frame.contains("wA:p1  idle") && frame.contains("▶ wA:p2  working"),
         "{frame}"
     );
-    // No raw URL row: Linear's own issue page has no URL property, and `u`
-    // opens the issue, which the hint line offers.
+    // No raw URL row: Linear's own issue page has no URL property; `u`
+    // opens the issue.
     assert!(!frame.contains("https://linear.app"), "{frame}");
-    assert!(frame.contains("u Linear"), "{frame}");
     insta::assert_snapshot!("linear_detail", frame);
 }
 
@@ -1070,7 +1069,7 @@ fn a_first_fetch_failure_has_no_last_good_and_no_dismiss() {
 // -- the three actions (R20, AE6) -------------------------------------------
 
 #[test]
-fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
+fn detail_cursor_starts_on_the_working_pane_and_return_focuses_it() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
@@ -1079,7 +1078,7 @@ fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
         Some(board_tui::view::IssueRowKind::Pane(1)),
         "the page opens on the working pane, wA:p2"
     );
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     let requests = log.lock().unwrap();
     let (method, params) = requests.last().unwrap();
     assert_eq!(method, "pane.focus");
@@ -1088,7 +1087,7 @@ fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
     drop(requests);
     assert_eq!(toast(&d), "focused pane wA:p2");
     press(&mut d, KeyCode::Char('k'));
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert_eq!(log.lock().unwrap().last().unwrap().1["pane_id"], "wA:p1");
 }
 
@@ -1100,7 +1099,7 @@ fn a_gone_pane_toasts_and_changes_nothing_else() {
     });
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert_eq!(toast(&d), "pane is closed; refresh");
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert!(!d.app.should_quit);
@@ -1111,10 +1110,11 @@ fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert!(toast(&d).contains("HERDR_SOCKET_PATH"), "{}", toast(&d));
     // `linear.issue` since the issue page: opening a card reads it. What this
-    // test pins is that `o` with no socket sends nothing MORE than that.
+    // test pins is that Return on a pane with no socket sends nothing MORE
+    // than that.
     assert_eq!(
         methods(&log),
         vec![
@@ -1213,8 +1213,12 @@ fn a_card_without_bindings_explains_instead_of_acting() {
         d.app.linear.as_ref().unwrap().detail.as_deref(),
         Some("WEB-3308")
     );
-    press(&mut d, KeyCode::Char('o'));
-    assert_eq!(toast(&d), "this card has no recorded pane");
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "no row, nothing to follow"
+    );
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
@@ -1244,7 +1248,7 @@ fn a_focus_the_daemon_cannot_carry_out_is_toasted_with_its_reason() {
     let client = fake_with(bound_with_view()).with_pane_focus_error("herdr is not running");
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     let text = toast(&d);
     assert!(text.starts_with("pane wA:p2:"), "{text}");
     assert!(text.contains("herdr is not running"), "{text}");
@@ -3623,7 +3627,7 @@ fn a_back_step_shows_the_previous_page_immediately() {
         Some("WEB-3302")
     );
     let frame = draw(&d.app, W, H);
-    assert!(frame.contains("Sub-issues"), "{frame}");
+    assert!(frame.contains("SUB-ISSUES"), "{frame}");
 }
 
 /// The generation the reducer issues must be the generation the driver hands
@@ -3834,19 +3838,17 @@ fn the_back_stack_stops_growing_at_its_cap() {
 /// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
 /// page's own issue whatever row is selected.
 #[test]
-fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
+fn return_focuses_a_pane_row_and_the_issue_keys_need_no_row() {
     let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
     let (client, log) = RecordingClient::new(client);
     let mut d = linear_driver_deferred(client, start_with_socket());
     open_page_with_document(&mut d);
     d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
 
-    // On a pane row, `o` focuses it.
-    press(&mut d, KeyCode::Char('o'));
+    // On a pane row, Return focuses it.
+    press(&mut d, KeyCode::Enter);
     assert_eq!(toast(&d), "focused pane wA:p2");
 
-    // On an issue row, `o` says what it is for rather than focusing the first
-    // pane it can find.
     for _ in 0..5 {
         press(&mut d, KeyCode::Char('k'));
     }
@@ -3854,8 +3856,6 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
         page_selection(&d),
         Some(IssueRowKind::Issue("WEB-3319".into()))
     );
-    press(&mut d, KeyCode::Char('o'));
-    assert!(toast(&d).contains("o focuses a pane"), "{}", toast(&d));
 
     // `y` still copies the page's own worktree path from an issue row.
     press(&mut d, KeyCode::Char('y'));
@@ -4028,8 +4028,11 @@ fn a_truncated_document_says_so_and_does_not_print_a_false_count() {
 
     let frame = draw(&d.app, W, H);
     // The count says the total is at least this, not exactly this.
-    assert!(frame.contains("Sub-issues  1/2+"), "{frame}");
-    assert!(!frame.contains("Sub-issues  1/2 "), "{frame}");
+    assert!(
+        frame.contains("SUB-ISSUES") && frame.contains(" 1/2+ "),
+        "{frame}"
+    );
+    assert!(!frame.contains(" 1/2 "), "{frame}");
     // And Activity says where the rest is.
     assert!(frame.contains("the rest is in Linear"), "{frame}");
 }
@@ -4044,7 +4047,10 @@ fn an_untruncated_document_prints_a_plain_count_and_no_note() {
     assert!(d.deliver_pending_linear_issue());
 
     let frame = draw(&d.app, W, H);
-    assert!(frame.contains("Sub-issues  1/2"), "{frame}");
+    assert!(
+        frame.contains("SUB-ISSUES") && frame.contains(" 1/2 "),
+        "{frame}"
+    );
     assert!(!frame.contains("1/2+"), "{frame}");
     assert!(!frame.contains("the rest is in Linear"), "{frame}");
 }
@@ -4452,6 +4458,7 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
 
 mod bar;
 mod focus;
+mod issue;
 mod landing;
 mod layout;
 mod marks;

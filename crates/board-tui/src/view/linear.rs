@@ -95,9 +95,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
             draw_board(app, state, f, area);
             draw_error(state, f, area);
         }
-        // A page, not an overlay: it replaces the board rather than sitting
-        // over it, at every width.
-        Screen::LinearDetail => super::linear_issue::draw(app, state, f, area),
+        Screen::LinearDetail => draw_issue_screen(app, state, f, area),
         Screen::Help => {
             draw_backdrop(app, state, f, area, app.help_return_to);
             draw_help(app, state, f, area);
@@ -139,10 +137,46 @@ pub(super) fn scrub(f: &mut Frame) {
 /// What an overlay covers: the not-bound screen when it opened there, the
 /// board otherwise.
 fn draw_backdrop(app: &App, state: &LinearState, f: &mut Frame, area: Rect, under: Screen) {
-    if under == Screen::LinearNotBound {
-        draw_not_bound(app, state, f, area);
-    } else {
+    match under {
+        Screen::LinearNotBound => draw_not_bound(app, state, f, area),
+        Screen::LinearDetail => draw_issue_screen(app, state, f, area),
+        _ => draw_board(app, state, f, area),
+    }
+}
+
+/// The open issue: a modal over the board faded behind it, or the issue over
+/// the whole board. The bar is drawn after, unfaded, either way.
+fn draw_issue_screen(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
+    use super::linear_issue::{open_rect, open_slot, Look};
+    let Some(slot) = open_slot(state) else {
+        return draw_board(app, state, f, area);
+    };
+    let (rect, look) = open_rect(app, state, area);
+    if look == Look::Modal {
         draw_board(app, state, f, area);
+        // The board under a modal takes no clicks.
+        app.hit_map.borrow_mut().clear();
+        let bar = super::linear_issue::bar_rows(state, area);
+        let behind = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(bar));
+        fade_outside(state, f, behind, rect);
+    }
+    super::linear_issue::draw(app, state, &slot, f, rect, look);
+}
+
+/// Every cell of `area` outside `keep` blended toward the app background
+/// (KTD6), so whatever drew there recedes without a muted style of its own.
+fn fade_outside(state: &LinearState, f: &mut Frame, area: Rect, keep: Rect) {
+    let buf = f.buffer_mut();
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if keep.contains((x, y).into()) {
+                continue;
+            }
+            let cell = &mut buf[(x, y)];
+            cell.fg = state.theme.fade(cell.fg);
+            cell.bg = state.theme.fade(cell.bg);
+        }
     }
 }
 
@@ -318,6 +352,10 @@ fn description_lines(issue: &LinearIssue, overlay: CardOverlay<'_>, width: usize
 
 /// `spans` cut to `width` display cells, the last kept span ending in `…`
 /// when anything was cut.
+pub(super) fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    clip(spans, width)
+}
+
 fn clip(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let mut used = 0;
     let mut out = vec![];
@@ -337,7 +375,7 @@ fn clip(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     out
 }
 
-fn spans_width(spans: &[Span<'_>]) -> usize {
+pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| s.content.width()).sum()
 }
 
@@ -1597,7 +1635,16 @@ fn shows_bar(app: &App) -> bool {
             .map_or(Screen::LinearBoard, |p| p.return_to),
         other => other,
     };
-    matches!(under, Screen::LinearBoard | Screen::LinearError)
+    matches!(
+        under,
+        Screen::LinearBoard | Screen::LinearError | Screen::LinearDetail
+    )
+}
+
+/// Whether the screen on show, or the one under its overlay, is the issue.
+fn on_issue(app: &App) -> bool {
+    app.screen == Screen::LinearDetail
+        || (app.screen == Screen::Help && app.help_return_to == Screen::LinearDetail)
 }
 
 fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
@@ -1608,7 +1655,12 @@ fn draw_bottom(app: &App, f: &mut Frame, area: Rect) {
         return;
     }
     if shows_bar(app) {
-        if board_fits(state, area) {
+        let fits = if on_issue(app) {
+            super::linear_issue::bar_rows(state, area) > 0
+        } else {
+            board_fits(state, area)
+        };
+        if fits {
             draw_bar(app, state, f, area);
         }
         return;
@@ -1645,6 +1697,27 @@ fn bar_item(state: &LinearState, item: &BarItem, label: String, selected: bool) 
     Span::styled(format!(" {label} "), style)
 }
 
+/// The issue's tip while it is open, else the board's.
+fn tip_text(app: &App, state: &LinearState, width: u16) -> String {
+    if !on_issue(app) {
+        return state.bar_tip(width);
+    }
+    if width < super::linear_issue::MODAL_MIN {
+        return format!(
+            "Esc goes back · Enter opens the row · e and o need {} cells",
+            super::linear_issue::MODAL_MIN
+        );
+    }
+    match state.issue_mode {
+        crate::app::IssueMode::Window => {
+            "Esc goes back · e expands · o pins it · u opens it in Linear".into()
+        }
+        crate::app::IssueMode::Expanded => {
+            "Esc goes back · e shrinks to a window · o pins it".into()
+        }
+    }
+}
+
 /// Controls left, the tip centred and alerts right on one row; three
 /// centred rows (tip, alerts, controls) when they do not fit side by side.
 fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
@@ -1656,7 +1729,8 @@ fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
         _ => None,
     };
     let mut controls = vec![];
-    if layout.hint {
+    // `?` opens help on the issue, not the bar, so the hint stays off there.
+    if layout.hint && !on_issue(app) {
         let (key, rest) = BAR_HINT.split_at(1);
         controls.push(Span::styled(format!(" {key}"), t.text()));
         controls.push(Span::styled(format!("{rest} "), t.dim()));
@@ -1692,7 +1766,7 @@ fn draw_bar(app: &App, state: &LinearState, f: &mut Frame, area: Rect) {
                 vec![
                     Span::styled(icon::INFO, t.accent()),
                     Span::styled(
-                        format!(" {}", line(&state.bar_tip(area.width))),
+                        format!(" {}", line(&tip_text(app, state, area.width))),
                         t.secondary(),
                     ),
                 ],

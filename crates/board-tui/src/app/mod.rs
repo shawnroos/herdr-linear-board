@@ -41,6 +41,7 @@ mod help;
 mod linear;
 mod linear_bar;
 mod linear_cursor;
+mod linear_issue;
 mod linear_picker;
 mod mouse;
 mod move_column;
@@ -54,8 +55,8 @@ mod switcher;
 pub use effect::Effect;
 pub use linear::{
     mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays, Density,
-    LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
-    StripView, WriteFailure,
+    DetailError, DetailStep, IssueMode, LinearArrival, LinearFailure, LinearState, LinearWrite,
+    LocalStateSignals, PaneRow, PrRead, SpaceList, StripView, WriteFailure,
 };
 pub use linear_bar::{item_width, BarItem, BarLayout, BAR_GAP, BAR_HINT, CONTROLS};
 pub use linear_cursor::{

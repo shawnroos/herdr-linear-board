@@ -162,6 +162,13 @@ pub enum Effect {
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.
     OpenIssueUrl(String),
+    /// Linear mode: open an attachment or pull request link with the
+    /// platform opener.
+    OpenLink(String),
+    /// Linear mode: read one pull request's `gh` detail through `linear.pr`.
+    LinearPr {
+        url: String,
+    },
     /// Linear mode: copy a binding's worktree path; `missing` when the
     /// binding's state is `worktree_missing`.
     CopyWorktreePath {

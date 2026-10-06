@@ -143,7 +143,7 @@ fn failure_text(failure: &LinearFailure) -> String {
             "this list needs a newer work plugin; update it".to_string()
         }
         LinearFailure::TimedOut(limit) => super::linear::read_timeout_text(*limit),
-        LinearFailure::Failed(text) => super::sanitise(text),
+        LinearFailure::Failed(text) | LinearFailure::GhUnavailable(text) => super::sanitise(text),
     }
 }
 

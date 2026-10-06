@@ -139,13 +139,16 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearBoard, "click view", "choose a view to bind"),
     (Screen::LinearBoard, "wheel", "focus card"),
     (Screen::LinearBoard, "Shift+wheel", "page hidden columns"),
-    (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
-    (Screen::LinearDetail, "o", "focus selected pane"),
+    (Screen::LinearDetail, "↑/↓ k/j", "rows, then scroll"),
+    (Screen::LinearDetail, "PgUp/PgDn", "scroll a page"),
+    (Screen::LinearDetail, "Enter", "open issue / pane / link"),
+    (Screen::LinearDetail, "e", "expand / window (wide)"),
+    (Screen::LinearDetail, "o", "pin beside the board"),
     (Screen::LinearDetail, "u", "open issue in Linear"),
     (Screen::LinearDetail, "y", "copy worktree path"),
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
-    (Screen::LinearDetail, "Esc", "back to board"),
+    (Screen::LinearDetail, "Esc ⌫ ←", "back an issue, then close"),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
     (
@@ -182,8 +185,8 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        149,
-        "the interaction contract must stay at exactly 149 bindings (87 upstream + 57 Linear mode + 5 session pane)"
+        152,
+        "the interaction contract must stay at exactly 152 bindings (87 upstream + 60 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {
