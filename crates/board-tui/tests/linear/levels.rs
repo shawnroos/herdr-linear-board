@@ -360,3 +360,22 @@ fn the_agents_own_cwd_wins_over_herdrs_for_the_pane_it_named() {
     let state = d.app.linear.as_ref().unwrap();
     assert_eq!(state.detail.as_deref(), Some("WEB-3307"));
 }
+
+#[test]
+fn a_board_started_beside_an_agent_never_renames_its_pane() {
+    let (client, log) =
+        RecordingClient::new(SessionBound(fake_with(bound_with_view()), "WEB-3307"));
+    let start = LinearStart {
+        origin: OriginContext {
+            plugin_id: Some("herdr-board".into()),
+            entrypoint: Some("session".into()),
+            ..level_start().origin
+        },
+        ..level_start()
+    };
+    let mut d = beside_driver(client, start, agent());
+    d.handle(Msg::LinearRefresh);
+    let sent = methods(&log);
+    assert!(sent.iter().any(|m| m == "linear.snapshot"), "{sent:?}");
+    assert!(!sent.iter().any(|m| m == "pane.set_title"), "{sent:?}");
+}

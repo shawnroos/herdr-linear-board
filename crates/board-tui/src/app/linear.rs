@@ -1235,10 +1235,16 @@ fn arrived(app: &mut App, result: Result<LinearSnapshot, LinearFailure>) -> Vec<
         Ok(mut snapshot) => {
             sanitise_snapshot(&mut snapshot);
             order_tabs(&mut snapshot);
-            effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
-                &snapshot,
-                &state.workspace_id,
-            )));
+            // A board started beside an agent keeps the label its opener gave
+            // it: `scripts/open-board.sh` takes any `Linear: …` pane for the
+            // board and would toggle the agent's side pane instead.
+            let beside = state.level.as_ref().is_some_and(|l| l.start.is_some());
+            if !beside {
+                effects.push(Effect::SetLinearPaneTitle(crate::view::linear_pane_title(
+                    &snapshot,
+                    &state.workspace_id,
+                )));
+            }
             state.error = None;
             state.stale_daemon = None;
             state.fetched_at = Some(now);

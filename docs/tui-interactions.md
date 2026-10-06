@@ -138,7 +138,7 @@ A Linear board that knows its own herdr pane (`HERDR_PANE_ID` and `HERDR_SOCKET_
 | Space level | A level change waits while an issue modal, the filter, the bar, help or a picker is open, and applies on the next return to the board | none | none | Same | `a_split_opening_under_a_modal_waits_until_the_modal_closes`, `the_filter_holds_a_level_change_until_it_closes` |
 | Any level | An older daemon without `pane.context` | none | none | Same | `an_older_daemon_without_the_pane_read_stays_at_the_space_level` |
 
-`board tui --session` starts this board at the split level beside the agent named in `BOARD_SESSION_*`. That agent's issue comes from `linear.session.get` with the agent's own cwd, which wins over herdr's cwd for its pane, so the start works against a daemon without `pane.context` too (`board_tui_session_starts_at_the_split_level_for_the_named_agent_even_on_an_older_daemon`, `the_agents_own_cwd_wins_over_herdrs_for_the_pane_it_named`). With no bound issue it shows the space board.
+`board tui --session` starts this board at the split level beside the agent named in `BOARD_SESSION_*`. That agent's issue comes from `linear.session.get` with the agent's own cwd, which wins over herdr's cwd for its pane, so the start works against a daemon without `pane.context` too (`board_tui_session_starts_at_the_split_level_for_the_named_agent_even_on_an_older_daemon`, `the_agents_own_cwd_wins_over_herdrs_for_the_pane_it_named`). With no bound issue it shows the space board. It never renames its pane: `scripts/open-board.sh` takes a `Linear: …` pane for the board (`a_board_started_beside_an_agent_never_renames_its_pane`; e2e 45 reads the label).
 
 ## Session side pane (legacy)
 
