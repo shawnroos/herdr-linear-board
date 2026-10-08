@@ -1,6 +1,7 @@
 //! `board mcp`: a stdio MCP server that forwards each tool call to one boardd
-//! method. Its only state is the caller's resolved herdr pane; it validates
-//! nothing the daemon validates.
+//! method. Its only state is the caller's resolved herdr pane, kept only for
+//! a caller with no Claude session id; it validates nothing the daemon
+//! validates.
 //! stdout carries only the MCP JSON-RPC stream, so nothing here may print
 //! through `render.rs`; diagnostics go to stderr.
 
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use anyhow::{anyhow, Context, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::db::clean_owner;
+use board_core::error_code;
 use board_core::protocol::{
     ActivityClaims, BoardNotifyParams, BoardPaneCloseParams, BoardPaneContext, BoardPaneOpenParams,
     CallerCandidate, CallerLocation, CallerResolveResult, LinearActivityListParams,
@@ -36,7 +38,6 @@ use crate::daemon::connect_or_start;
 /// server's own tools back to the board as Linear writes.
 const SERVER_NAME: &str = "board";
 const ACTIVITY_LIMIT: usize = 500;
-const NOT_FOUND: i32 = 2;
 
 pub(crate) fn run() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -95,7 +96,8 @@ impl std::fmt::Display for CallerError {
                     f,
                     "Ask the person whether this session runs in one of these panes, or in herdr \
                      at all. Only after they confirm one, call this tool again with `pane` set \
-                     to that pane value."
+                     to that pane value. If the person says this session is not in herdr, \
+                     call again with an explicit `space`."
                 )
             }
             CallerError::UnknownPane(pane) => write!(
@@ -110,8 +112,11 @@ impl std::fmt::Display for CallerError {
 impl std::error::Error for CallerError {}
 
 impl Caller {
-    /// Only a resolved location is cached; an unconfirmed or missing one is
-    /// asked again on the next call.
+    /// With a Claude session id boardd remembers the confirmed pane and checks
+    /// it is still open, so every call asks boardd. Without one, this process
+    /// caches a resolved location instead; an unconfirmed or missing one is
+    /// asked again on the next call. A failed lookup without a named pane
+    /// (an older boardd, say) falls back to the env claims alone.
     fn locate(
         confirmed: &Mutex<Option<CallerLocation>>,
         pane: Option<String>,
@@ -122,18 +127,28 @@ impl Caller {
             pane,
             env_text(CLAUDE_SESSION_ENV),
         );
-        let cached = confirmed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let resolution = resolve(&query, env_text, |params| match (&params.pane, cached) {
+        let cached = match query.claude_session_id {
+            Some(_) => None,
+            None => confirmed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        };
+        let named = query.pane().is_some();
+        let resolution = match resolve(&query, env_text, |params| match (&params.pane, cached) {
             (None, Some(location)) => Ok(CallerResolveResult::Resolved { location }),
             _ => client.caller_resolve(params),
-        })?;
-        let named = query.pane().is_some();
+        }) {
+            Ok(resolution) => resolution,
+            Err(error) if !named => {
+                eprintln!("board mcp: pane lookup failed, using env only: {error:#}");
+                return Ok(Caller::at(None, false));
+            }
+            Err(error) => return Err(error),
+        };
         match resolution.result {
             CallerResolveResult::Resolved { location } => {
-                if resolution.source == Source::Daemon {
+                if resolution.source == Source::Daemon && query.claude_session_id.is_none() {
                     *confirmed.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some(location.clone());
                 }
@@ -340,7 +355,7 @@ fn tool_error(error: &anyhow::Error) -> CallToolResult {
 struct SpaceArgs {
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -350,7 +365,7 @@ struct IssueArgs {
     issue: String,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -362,7 +377,7 @@ struct BindArgs {
     cwd: Option<String>,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
     branch: Option<String>,
     tab: Option<String>,
@@ -375,7 +390,7 @@ struct UnbindArgs {
     cwd: Option<String>,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -389,7 +404,7 @@ struct MarkArgs {
     text: Option<String>,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -401,7 +416,7 @@ struct UnmarkArgs {
     kind: Option<String>,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -413,7 +428,7 @@ struct NoteArgs {
     body: String,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -421,7 +436,7 @@ struct NoteArgs {
 struct NotifyArgs {
     title: String,
     body: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -433,7 +448,7 @@ struct AskToShowArgs {
     reason: Option<String>,
     /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -449,7 +464,7 @@ struct OpenBoardArgs {
     card: Option<i64>,
     /// true opens this session's side pane instead: your bound issue, your lane, or the bind hint. Takes no space, issue or card.
     session: Option<bool>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -461,7 +476,7 @@ struct CloseBoardArgs {
     card: Option<i64>,
     /// true closes this session's side pane.
     session: Option<bool>,
-    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment.
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
     pane: Option<String>,
 }
 
@@ -620,6 +635,7 @@ impl BoardMcp {
     )]
     async fn notify(&self, Parameters(args): Parameters<NotifyArgs>) -> CallToolResult {
         self.forward_as(args.pane, move |c, caller| {
+            caller.require_pane()?;
             c.board_notify(&BoardNotifyParams {
                 origin_socket: caller.origin_socket(),
                 title: args.title,
@@ -689,7 +705,7 @@ impl BoardMcp {
                     .flatten(),
             };
             c.board_pane_open(&params).map_err(|error| {
-                if caller.remembered && rpc_code(&error) == Some(NOT_FOUND) {
+                if caller.remembered && rpc_code(&error) == Some(error_code::NOT_FOUND) {
                     *confirmed.lock().unwrap_or_else(PoisonError::into_inner) = None;
                     error.context(
                         "the pane this session confirmed earlier may have closed; ask the \

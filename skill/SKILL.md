@@ -311,7 +311,12 @@ board import work-store [--dry-run]
 - `board linear session [WORKSPACE_ID]` prints what the board knows about this agent session:
   `{space, space_bound, binding, column, marks, pending_requests}`. The space defaults to
   `$HERDR_WORKSPACE_ID`, the session to `$HERDR_SOCKET_PATH`, and the worktree to the current
-  directory. It never starts the daemon; when boardd is down it fails with the socket path.
+  directory. It never starts the daemon; when boardd is down and a space was given, it fails
+  with the socket path. With no space (no argument and incomplete `HERDR_*` env) it looks up this
+  session's pane instead and exits 0 even when boardd is down. When no pane is confirmed it
+  prints `{"state":"unconfirmed","candidates":[...]}` or `{"state":"not_in_herdr","reason":...}`
+  instead of the session document. The session document has no `state` field, so branch on
+  `state`, not on the exit code.
 - `board linear status-line` prints one line for Claude Code's status line, for example
   `ENG-148 · In progress · 12m · !? · ◉1`: the bound issue, its column, how long the worktree
   has been bound, the issue's mark glyphs, and the space's pending show-requests. Other outputs:
@@ -345,14 +350,16 @@ it is not running. Use these tools for links, marks, notes, notifications, show-
 boards; use Linear's MCP server for anything that changes Linear. Ownership comes
 from the herdr pane this session runs in, plus `CLAUDE_CODE_SESSION_ID`. The pane comes from
 `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID` when all three are set. When they are
-missing, boardd looks for Claude panes in this session's folder. `open_board`, `close_board`, and
-a tool that needs a `space` you did not pass, then fail with an "unconfirmed" error that lists
-them; with an explicit `space` the call proceeds without a pane, and `bind`/`unbind` proceed and
+missing, boardd looks for Claude panes in this session's folder. `open_board`, `close_board`,
+`notify`, and a tool that needs a `space` you did not pass, then fail with an "unconfirmed" error
+that lists them; with an explicit `space` the call proceeds without a pane, and `bind`/`unbind` proceed and
 add the candidates under `caller`. `board caller --pane X` prints `{"state":"not_in_herdr","pane":X}`
 when no session lists X. Ask the person whether this session runs in one of those panes
 (or in herdr at all). Only after they confirm one, call again with `pane` set to its
 `<session>/<pane id>` value; boardd remembers it for this Claude session, so later calls need no
-`pane`. A `pane` always overrides the environment. A call with no pane and no claims owns nothing,
+`pane`. If the person says this session is not in herdr, call again with an explicit `space`.
+`board caller --json` shows the candidates read-only, without calling a tool. A `pane` always
+overrides the environment. A call with no pane and no claims owns nothing,
 and only the person can clear what it writes.
 
 | Tool | Does |

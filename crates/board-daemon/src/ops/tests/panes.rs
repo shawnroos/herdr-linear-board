@@ -1054,7 +1054,7 @@ fn caller_resolve_drops_a_remembered_pane_that_closed_and_looks_up_the_folder() 
 }
 
 #[test]
-fn caller_resolve_drops_a_remembered_pane_whose_session_is_gone() {
+fn caller_resolve_keeps_but_skips_a_remembered_pane_it_cannot_reach() {
     let one = one_claude_session("Alpha");
     let d = caller_daemon(vec![session_entry("default", &one.socket)]);
     remember(&d, "sess-s", "/tmp/hb-caller-no-such-herdr.sock", "w1:p2");
@@ -1065,7 +1065,91 @@ fn caller_resolve_drops_a_remembered_pane_whose_session_is_gone() {
     );
 
     assert_eq!(v["state"], "unconfirmed", "{v}");
-    assert!(d.caller_locations.lock().unwrap().is_empty());
+    let kept = d.caller_locations.lock().unwrap();
+    assert_eq!(
+        kept.get("sess-s").map(|l| l.pane_id.as_str()),
+        Some("w1:p2"),
+        "a herdr that did not answer is no proof the pane closed"
+    );
+}
+
+#[test]
+fn caller_resolve_uses_a_kept_remembered_pane_once_its_session_answers_again() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+    remember(&d, "sess-s", "/tmp/hb-caller-no-such-herdr.sock", "w1:p2");
+    resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "claude_session_id": "sess-s", "remembered_only": true}),
+    );
+    d.caller_locations
+        .lock()
+        .unwrap()
+        .get_mut("sess-s")
+        .unwrap()
+        .socket = socket_of(&one);
+
+    let v = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "claude_session_id": "sess-s", "remembered_only": true}),
+    );
+
+    assert_eq!(v["state"], "resolved", "{v}");
+    assert_eq!(v["location"]["pane_id"], "w1:p2", "{v}");
+}
+
+#[test]
+fn caller_resolve_strips_control_and_format_characters_from_candidates() {
+    let mut pane = claude_pane("w1:p2", "w1", CALLER_DIR);
+    pane["title"] = json!("claude \u{202E}evil\u{1b}[31m red\u{7}\u{E0041}");
+    let one = caller_session(vec![pane], &[("w1", "api\u{1b}[0m\u{2066}")]);
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["candidates"][0]["title"], "claude evil[31m red", "{v}");
+    assert_eq!(v["candidates"][0]["workspace_label"], "api[0m", "{v}");
+}
+
+#[test]
+fn caller_resolve_offers_a_pane_whose_foreground_cwd_is_the_caller_folder() {
+    let mut pane = claude_pane("w1:p2", "w1", "/work/elsewhere");
+    pane["foreground_cwd"] = json!(CALLER_DIR);
+    let one = caller_session(vec![pane], &[("w1", "Alpha")]);
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["state"], "unconfirmed", "{v}");
+    assert_eq!(v["candidates"][0]["pane"], "default/w1:p2", "{v}");
+}
+
+#[test]
+fn caller_resolve_gives_up_quickly_on_a_session_that_never_answers() {
+    let one = one_claude_session("Alpha");
+    let dir = tempfile::tempdir().unwrap();
+    let hung = dir.path().join("hung.sock");
+    // Accepts connections into its backlog and never reads or replies.
+    let _hung = std::os::unix::net::UnixListener::bind(&hung).unwrap();
+    let d = caller_daemon(vec![
+        session_entry("hung", &hung),
+        session_entry("default", &one.socket),
+    ]);
+    remember(&d, "sess-s", &hung.to_string_lossy(), "w1:p2");
+
+    let started = std::time::Instant::now();
+    let v = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "claude_session_id": "sess-s"}),
+    );
+    let took = started.elapsed();
+
+    assert_eq!(v["state"], "unconfirmed", "{v}");
+    assert_eq!(v["candidates"][0]["pane"], "default/w1:p2", "{v}");
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "one wedged session held caller.resolve for {took:?}"
+    );
 }
 
 #[test]

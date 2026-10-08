@@ -979,7 +979,8 @@ retry passes `pane`. Shell callers use `board caller --json [--pane X]`, which p
 
 A pane confirmed with `pane` is remembered by boardd in memory, keyed by the Claude session id, so
 later calls from any process of that session resolve without asking, after one `pane.get` shows
-the pane still exists; a closed pane is forgotten. Nothing is written to SQLite; a daemon restart
+the pane still exists. A pane herdr reports gone is forgotten; a session that does not answer
+keeps the memory but it is not used for that call. Nothing is written to SQLite; a daemon restart
 clears it. The hooks use `CLAUDE_PROJECT_DIR` (where the session started, which is
 the pane's cwd) before the payload's `cwd`, read the remembered choice, and never confirm a pane:
 `linear report` records activity without a space, and `linear session` prints the candidates or a

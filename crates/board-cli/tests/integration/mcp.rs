@@ -1,12 +1,14 @@
 //! `board mcp`: the stdio MCP server driven over its real stdin/stdout with
 //! hand-written JSON-RPC, against a real daemon or a recording fake boardd.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use board_core::client::{BoardClient, UnixClient};
@@ -801,19 +803,47 @@ fn opened() -> Value {
     })
 }
 
+/// The panes a fake boardd remembers, by Claude session id. A test empties
+/// it to stand for boardd finding the remembered pane closed.
+type Remembered = Arc<Mutex<BTreeMap<String, String>>>;
+
 /// A boardd whose folder lookup offers `candidates` and that resolves any
 /// session-qualified pane; every other method it does not know is refused.
 fn caller_boardd(socket: &Path, candidates: Vec<Value>) -> Receiver<Request> {
-    scripted_boardd(socket, move |request| match request.method.as_str() {
-        "caller.resolve" => match request.params["pane"].as_str() {
-            Some(pane) => Ok(location_of(pane)),
-            None if candidates.is_empty() => Ok(json!({"state": "not_in_herdr"})),
-            None => Ok(json!({"state": "unconfirmed", "candidates": candidates})),
-        },
+    caller_boardd_remembering(socket, candidates).0
+}
+
+/// [`caller_boardd`] that, like boardd, remembers a pane confirmed with a
+/// Claude session id and resolves that session's later lookups to it.
+fn caller_boardd_remembering(
+    socket: &Path,
+    candidates: Vec<Value>,
+) -> (Receiver<Request>, Remembered) {
+    let remembered = Remembered::default();
+    let memory = Arc::clone(&remembered);
+    let requests = scripted_boardd(socket, move |request| match request.method.as_str() {
+        "caller.resolve" => {
+            let session = request.params["claude_session_id"].as_str();
+            let mut memory = memory.lock().unwrap();
+            match (request.params["pane"].as_str(), session) {
+                (Some(pane), Some(session)) => {
+                    memory.insert(session.to_string(), pane.to_string());
+                    Ok(location_of(pane))
+                }
+                (Some(pane), None) => Ok(location_of(pane)),
+                (None, _) => match session.and_then(|s| memory.get(s)) {
+                    Some(pane) => Ok(location_of(pane)),
+                    None if candidates.is_empty() => Ok(json!({"state": "not_in_herdr"})),
+                    None => Ok(json!({"state": "unconfirmed", "candidates": candidates})),
+                },
+            }
+        }
         "board.pane.open" => Ok(opened()),
         "board.notify" => Ok(json!({"shown": true})),
+        "linear.mark.set" => Ok(done_mark(request.params["space"].as_str().unwrap_or(""))),
         other => Err((3, format!("fake boardd does not answer {other}"))),
-    })
+    });
+    (requests, remembered)
 }
 
 fn fake_env<'a>(
@@ -915,13 +945,14 @@ fn ae2_one_folder_candidate_is_offered_never_used_until_the_caller_names_it() {
     let seen = drain(&requests);
     assert_eq!(
         methods(&seen),
-        ["linear.mark.set"],
-        "the confirmed pane is reused with no new lookup"
+        ["caller.resolve", "linear.mark.set"],
+        "boardd is asked again, so it can check the confirmed pane still exists"
     );
-    assert_eq!(seen[0].params["space"], "w1");
-    assert_eq!(seen[0].params["owner"]["herdr_pane_id"], "w1:p2");
-    assert_eq!(seen[0].params["owner"]["herdr_socket"], "/tmp/default.sock");
-    assert_eq!(seen[0].params["owner"]["claude_session_id"], "sess-1");
+    assert!(seen[0].params.get("pane").is_none(), "{}", seen[0].params);
+    assert_eq!(seen[1].params["space"], "w1");
+    assert_eq!(seen[1].params["owner"]["herdr_pane_id"], "w1:p2");
+    assert_eq!(seen[1].params["owner"]["herdr_socket"], "/tmp/default.sock");
+    assert_eq!(seen[1].params["owner"]["claude_session_id"], "sess-1");
 
     mcp.finish();
 }
@@ -1070,14 +1101,217 @@ fn a_remembered_pane_that_closed_asks_the_caller_to_confirm_again() {
     mcp.initialize();
 
     let text = error_text(&mcp.call("open_board", json!({"issue": "ENG-1"})));
-    assert!(text.contains("pane"), "{text}");
-    assert!(text.contains("confirm"), "{text}");
+    assert!(text.contains(CLOSED_HINT), "{text}");
 
     mcp.finish();
     assert_eq!(
         methods(&drain(&requests)),
         ["caller.resolve", "board.pane.open"]
     );
+}
+
+const CLOSED_HINT: &str = "may have closed";
+
+/// A boardd that resolves only a named pane, opens the first board and then
+/// answers every open with the not-found code a closed origin pane gets.
+fn closing_boardd(socket: &Path) -> Receiver<Request> {
+    let opens = AtomicUsize::new(0);
+    scripted_boardd(socket, move |request| match request.method.as_str() {
+        "caller.resolve" => match request.params["pane"].as_str() {
+            Some(pane) => Ok(location_of(pane)),
+            None => Ok(json!({"state": "not_in_herdr"})),
+        },
+        "board.pane.open" if opens.fetch_add(1, Ordering::SeqCst) == 0 => Ok(opened()),
+        "board.pane.open" => Err((
+            2,
+            "origin pane w1:p2 is not in the caller's herdr session".into(),
+        )),
+        "linear.mark.set" => Ok(done_mark("w1")),
+        other => Err((3, format!("unexpected {other}"))),
+    })
+}
+
+#[test]
+fn without_a_session_id_a_cached_pane_that_closed_is_dropped_and_asked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let requests = closing_boardd(&socket);
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &[]));
+    mcp.initialize();
+
+    structured(&mcp.call(
+        "open_board",
+        json!({"issue": "ENG-1", "pane": "default/w1:p2"}),
+    ));
+    drain(&requests);
+
+    let text = error_text(&mcp.call("open_board", json!({"issue": "ENG-2"})));
+    assert!(text.contains(CLOSED_HINT), "{text}");
+    assert_eq!(
+        methods(&drain(&requests)),
+        ["board.pane.open"],
+        "the process cache served the pane"
+    );
+
+    mcp.call("mark", json!({"issue": "ENG-1", "kind": "done"}));
+    let seen = drain(&requests);
+    assert_eq!(
+        methods(&seen)[0],
+        "caller.resolve",
+        "the closed pane left the cache"
+    );
+    assert!(
+        seen.iter()
+            .all(|r| r.params["owner"]["herdr_pane_id"] != "w1:p2"),
+        "the closed pane was used again"
+    );
+
+    mcp.finish();
+}
+
+#[test]
+fn a_not_found_for_an_env_or_named_pane_carries_no_closed_pane_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let _requests = scripted_boardd(&socket, |request| match request.method.as_str() {
+        "caller.resolve" => Ok(location_of(
+            request.params["pane"].as_str().unwrap_or("s/w1:p2"),
+        )),
+        "board.pane.open" => Err((2, "origin pane is not in the caller's herdr session".into())),
+        other => Err((3, format!("unexpected {other}"))),
+    });
+    let mut env_mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &FULL_ENV));
+    env_mcp.initialize();
+    let text = error_text(&env_mcp.call("open_board", json!({"issue": "ENG-1"})));
+    assert!(!text.contains(CLOSED_HINT), "env pane: {text}");
+    let text = error_text(&env_mcp.call(
+        "open_board",
+        json!({"issue": "ENG-1", "pane": "default/w1:p2"}),
+    ));
+    assert!(!text.contains(CLOSED_HINT), "named pane: {text}");
+    env_mcp.finish();
+
+    let mut named = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    named.initialize();
+    let text = error_text(&named.call(
+        "open_board",
+        json!({"issue": "ENG-1", "pane": "default/w1:p2"}),
+    ));
+    assert!(!text.contains(CLOSED_HINT), "named pane: {text}");
+    named.finish();
+}
+
+#[test]
+fn a_confirmed_pane_boardd_reports_gone_is_not_used_by_the_next_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let (requests, remembered) =
+        caller_boardd_remembering(&socket, vec![candidate("default", "w1:p2", "api", "t")]);
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    mcp.initialize();
+
+    structured(&mcp.call(
+        "open_board",
+        json!({"issue": "ENG-1", "pane": "default/w1:p2"}),
+    ));
+    drain(&requests);
+    remembered.lock().unwrap().clear();
+
+    let text = error_text(&mcp.call("mark", json!({"issue": "ENG-1", "kind": "done"})));
+    assert!(text.contains("default/w1:p2"), "{text}");
+
+    mcp.finish();
+    assert_eq!(
+        methods(&drain(&requests)),
+        ["caller.resolve"],
+        "nothing is written under the closed pane"
+    );
+}
+
+/// A boardd from before `caller.resolve`: it refuses the method by name.
+fn old_boardd(socket: &Path) -> Receiver<Request> {
+    scripted_boardd(socket, |request| match request.method.as_str() {
+        "caller.resolve" => Err((1, "unknown method: caller.resolve".into())),
+        "board.notify" => Ok(json!({"shown": true})),
+        "linear.state.get" => Ok(json!({"space": request.params["space"]})),
+        other => Err((3, format!("unexpected {other}"))),
+    })
+}
+
+#[test]
+fn an_old_boardd_without_caller_resolve_still_serves_tools_that_need_no_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let requests = old_boardd(&socket);
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    mcp.initialize();
+
+    assert_eq!(
+        structured(&mcp.call("notify", json!({"title": "hi"})))["shown"],
+        true
+    );
+    assert_eq!(
+        structured(&mcp.call("state", json!({"space": "w7"})))["space"],
+        "w7"
+    );
+    let text = error_text(&mcp.call("state", json!({"space": "w7", "pane": "default/w1:p2"})));
+    assert!(
+        text.contains("caller.resolve"),
+        "a named pane still fails: {text}"
+    );
+
+    mcp.finish();
+    assert_eq!(
+        methods(&drain(&requests)),
+        [
+            "caller.resolve",
+            "board.notify",
+            "caller.resolve",
+            "linear.state.get",
+            "caller.resolve"
+        ]
+    );
+}
+
+#[test]
+fn notify_refuses_with_the_candidates_when_the_pane_is_unconfirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let requests = unconfirmed_boardd(&socket, dir.path().to_path_buf());
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    mcp.initialize();
+
+    let result = mcp.call("notify", json!({"title": "hi"}));
+    let text = error_text(&result);
+    assert!(text.contains("default/w1:p2"), "{text}");
+    assert_eq!(result["structuredContent"]["state"], "unconfirmed");
+
+    mcp.finish();
+    assert_eq!(methods(&drain(&requests)), ["caller.resolve"]);
+}
+
+#[test]
+fn every_pane_argument_and_the_unconfirmed_error_name_the_not_in_herdr_way_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let _requests = unconfirmed_boardd(&socket, dir.path().to_path_buf());
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    mcp.initialize();
+
+    let way_out = "call again with an explicit `space`";
+    let tools = mcp.tools();
+    let with_pane: Vec<_> = tools
+        .iter()
+        .filter_map(|tool| tool["inputSchema"]["properties"]["pane"]["description"].as_str())
+        .collect();
+    assert_eq!(with_pane.len(), TOOLS.len(), "{tools:?}");
+    for description in with_pane {
+        assert!(description.contains(way_out), "{description}");
+    }
+    let text = error_text(&mcp.call("mark", json!({"issue": "ENG-1", "kind": "done"})));
+    assert!(text.contains(way_out), "{text}");
+
+    mcp.finish();
 }
 
 fn done_mark(space: &str) -> Value {

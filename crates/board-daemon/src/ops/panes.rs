@@ -13,10 +13,14 @@ use super::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use board_core::db::NewBoardPane;
 use board_core::engine::{match_caller, parse_pane_filter, CallerPane};
-use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement};
+use board_core::text::strip_control_and_format;
+use board_herdr::{
+    NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement, SocketDeadlines,
+};
 
 /// Rename `pane_id` in the session `origin_socket` belongs to.
 ///
@@ -139,8 +143,24 @@ pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<
     Ok(json!(result))
 }
 
-/// The location remembered for `id`, if its pane still exists. A closed pane
-/// or an unreachable session drops the entry, so the caller is asked again.
+/// One herdr session's share of a `caller.resolve`: a session that accepts
+/// and never answers costs about this long instead of the 30 s default read.
+const CALLER_DEADLINES: SocketDeadlines = SocketDeadlines {
+    connect: Duration::from_secs(2),
+    read: Duration::from_secs(2),
+    write: Duration::from_secs(2),
+    handshake: Duration::from_secs(2),
+    request: Duration::from_secs(2),
+    method_grace: Duration::from_secs(1),
+};
+
+fn connect_for_caller(socket: &str) -> board_herdr::Result<board_herdr::HerdrClient> {
+    crate::herdr_conn::connect_checked_within(Path::new(socket), CALLER_DEADLINES)
+}
+
+/// The location remembered for `id`, if its pane still exists. Only herdr
+/// reporting the pane gone drops the entry, so the caller is asked again; a
+/// session that cannot be reached keeps it but it is not used for this call.
 fn live_remembered(d: &Arc<Daemon>, id: &str) -> Option<CallerLocation> {
     let location = d
         .caller_locations
@@ -148,18 +168,21 @@ fn live_remembered(d: &Arc<Daemon>, id: &str) -> Option<CallerLocation> {
         .unwrap_or_else(PoisonError::into_inner)
         .get(id)
         .cloned()?;
-    let alive = crate::herdr_conn::connect_checked(Path::new(&location.socket))
+    let alive = connect_for_caller(&location.socket)
         .and_then(|mut client| client.pane_get(&location.pane_id));
     match alive {
         Ok(Some(_)) => return Some(location),
         Ok(None) => {
             tracing::info!(pane = %location.pane_id, "caller.resolve dropped a closed remembered pane")
         }
-        Err(error) => tracing::warn!(
-            socket = %location.socket,
-            %error,
-            "caller.resolve dropped a remembered pane it could not reach"
-        ),
+        Err(error) => {
+            tracing::warn!(
+                socket = %location.socket,
+                %error,
+                "caller.resolve could not reach a remembered pane; skipping it for this call"
+            );
+            return None;
+        }
     }
     let mut locations = d
         .caller_locations
@@ -182,16 +205,15 @@ fn session_caller_panes(
         Some(id) => pane.pane_id == id,
         None => pane.agent.as_deref() == Some("claude"),
     };
-    let listed =
-        crate::herdr_conn::connect_checked(Path::new(&entry.socket_path)).and_then(|mut client| {
-            let panes = client.pane_list(None)?;
-            let workspaces = if panes.iter().any(may_hit) {
-                client.workspace_list()?
-            } else {
-                Vec::new()
-            };
-            Ok((panes, workspaces))
-        });
+    let listed = connect_for_caller(&entry.socket_path).and_then(|mut client| {
+        let panes = client.pane_list(None)?;
+        let workspaces = if panes.iter().any(may_hit) {
+            client.workspace_list()?
+        } else {
+            Vec::new()
+        };
+        Ok((panes, workspaces))
+    });
     let (panes, workspaces) = match listed {
         Ok(listed) => listed,
         Err(error) => {
@@ -206,8 +228,8 @@ fn session_caller_panes(
     };
     let labels: BTreeMap<String, String> = workspaces
         .into_iter()
-        .filter(|w| !w.label.is_empty())
-        .map(|w| (w.workspace_id, w.label))
+        .map(|w| (w.workspace_id, strip_control_and_format(&w.label)))
+        .filter(|(_, label)| !label.is_empty())
         .collect();
     panes
         .into_iter()
@@ -221,7 +243,7 @@ fn session_caller_panes(
             agent: pane.agent,
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
-            title: pane.title,
+            title: pane.title.map(|title| strip_control_and_format(&title)),
         })
         .collect()
 }

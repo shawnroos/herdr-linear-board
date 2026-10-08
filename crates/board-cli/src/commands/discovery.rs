@@ -84,13 +84,15 @@ pub(crate) fn cmd_session(sub: SessionCmd, ctx: &mut Ctx) -> Result<()> {
     }
 }
 
-const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const SNAPSHOT_RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Asked of a running boardd only: a snapshot never starts one.
 fn remembered_location() -> Option<CallerLocation> {
     let cwd = canonical_text(std::env::current_dir().ok()?);
     let mut client = UnixClient::connect(&paths::socket_path()).ok()?;
-    client.set_read_timeout(Some(RESOLVE_TIMEOUT)).ok()?;
+    client
+        .set_read_timeout(Some(SNAPSHOT_RESOLVE_TIMEOUT))
+        .ok()?;
     resolve_remembered(cwd, env_text(CLAUDE_SESSION_ENV), |params| {
         client.caller_resolve(params)
     })

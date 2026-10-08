@@ -83,18 +83,32 @@ pub enum Error {
     Validation(#[from] ValidationError),
 }
 
+/// The protocol's numeric error codes (see `docs/protocol.md`), as
+/// [`Error::code`] returns them.
+pub mod error_code {
+    pub const BAD_REQUEST: i32 = 1;
+    pub const NOT_FOUND: i32 = 2;
+    pub const INVALID_STATE: i32 = 3;
+    pub const HERDR_UNAVAILABLE: i32 = 4;
+    pub const INTERNAL: i32 = 5;
+    pub const PLUGIN_UNAVAILABLE: i32 = 6;
+    pub const PLUGIN_OP_UNSUPPORTED: i32 = 7;
+}
+
 impl Error {
     /// Map onto the protocol's numeric error codes (see `docs/protocol.md`).
     pub fn code(&self) -> i32 {
         match self {
-            Error::BadRequest(_) => 1,
-            Error::NotFound(_) => 2,
-            Error::InvalidState(_) => 3,
+            Error::BadRequest(_) => error_code::BAD_REQUEST,
+            Error::NotFound(_) => error_code::NOT_FOUND,
+            Error::InvalidState(_) => error_code::INVALID_STATE,
             Error::Validation(v) => v.code(),
-            Error::HerdrUnavailable(_) => 4,
-            Error::PluginUnavailable(_) => 6,
-            Error::PluginOpUnsupported(_) => 7,
-            Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => 5,
+            Error::HerdrUnavailable(_) => error_code::HERDR_UNAVAILABLE,
+            Error::PluginUnavailable(_) => error_code::PLUGIN_UNAVAILABLE,
+            Error::PluginOpUnsupported(_) => error_code::PLUGIN_OP_UNSUPPORTED,
+            Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => {
+                error_code::INTERNAL
+            }
         }
     }
 }

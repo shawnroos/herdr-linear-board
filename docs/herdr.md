@@ -465,13 +465,16 @@ pane in this order, and stop at the first answer:
 2. **Env.** `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`, only when all three are
    set. No lookup runs.
 3. **A remembered choice.** A pane the caller confirmed earlier, kept by boardd for that Claude
-   session id. boardd checks it with one `pane.get` before using it; a closed pane (or a session
-   that no longer answers) is forgotten and the lookup moves on.
+   session id. boardd checks it with one `pane.get` before using it. A pane herdr reports gone is
+   forgotten. A session that does not answer keeps the memory, but the memory is not used for that
+   call. Either way the lookup moves on.
 4. **Folder candidates.** boardd lists every running herdr session (`herdr session list --json`),
    connects to each through the 0.9.x / protocol-22 gate, reads `pane.list` (and `workspace.list`
    for the labels, only when the session has a Claude pane), and keeps the panes whose `agent` is `claude` and whose `cwd` or `foreground_cwd` equals the
-   caller's folder after canonicalization. A session that cannot be reached is skipped. The lookup
-   is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
+   caller's folder after canonicalization. A session that cannot be reached, or does not answer
+   within about 2 s, is skipped; the sessions are asked one after another, so a hung session
+   costs a lookup about that long. Candidate titles and workspace labels have control and format
+   characters stripped. The lookup is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
    `pane.list`; a foreground process named `claude` set it (observed in scenario 46).
 
 **It never guesses.** A folder match is an `unconfirmed` answer, even when exactly one pane
@@ -489,12 +492,18 @@ would otherwise stop matching.
 **The remembered choice lives in boardd's memory.** A pane that resolves through an explicit `pane`
 is stored against the caller's Claude session id (`CLAUDE_CODE_SESSION_ID` for `board mcp` and
 `board caller`, the payload's `session_id` for hooks; the two are the same value). Every later call
-from that session, in any process, resolves to it without asking. Nothing is written to SQLite, so
+from that session, in any process, resolves to it without asking the person. `board mcp` asks
+boardd on every call, so boardd's `pane.get` check runs each time; only without a Claude session
+id does `board mcp` keep the confirmed pane in its own process. Nothing is written to SQLite, so
 a daemon restart clears the memory and the agent confirms again. A caller without a Claude session
 id gets no memory. The hooks read the remembered choice but never confirm a pane themselves:
 `board linear report` (like `board linear snapshot`) asks with `remembered_only`, so boardd skips
 the folder lookup, and records activity without a space when nothing is remembered, and
-`board linear session` prints the candidates (or a no-space notice) and exits 0.
+`board linear session` prints the candidates (or a no-space notice) and exits 0. With `--json`
+that is `{"state":"unconfirmed","candidates":[...]}` or `{"state":"not_in_herdr","reason":...}`
+instead of the session document, which has no `state` field. A `board mcp` tool whose lookup
+fails without a named pane (an older boardd that lacks `caller.resolve`, say) logs the error to
+stderr and runs with the env claims alone.
 
 **What stays env-only, and why.**
 

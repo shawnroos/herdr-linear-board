@@ -563,9 +563,9 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
      one. A bare id found in several sessions is `unconfirmed`; a pane no session lists is
      `not_in_herdr`. Neither is remembered.
   2. Without `pane`, a location remembered for `claude_session_id` is checked with one
-     `pane.get` on its socket and returned as `resolved` while the pane exists. A closed pane or
-     an unreachable session drops the memory, and the lookup continues as if nothing was
-     remembered.
+     `pane.get` on its socket and returned as `resolved` while the pane exists. A pane herdr
+     reports gone drops the memory. A session that cannot be reached keeps it, but it is not used
+     for this call. Either way the lookup continues as if nothing was remembered.
   3. Without `pane` and with `remembered_only: true` (default `false`, omitted from the wire when
      false), nothing more is looked up: the answer is `not_in_herdr`. Callers that never confirm a
      pane themselves, such as `board linear report` and `board linear snapshot`, send it.
@@ -577,8 +577,9 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
      never resolves, so a session outside herdr in the same folder cannot take over a pane.
   `candidates[].pane` is the `<session>/<pane id>` value to send back as `pane`, and `socket` is
   the session's socket as the registry lists it, because pane ids repeat across sessions. A
-  session that cannot be reached or fails the protocol gate is skipped and logged, never an
-  error. The memory lives in the daemon process only and is cleared by a restart. A
+  session that cannot be reached, fails the protocol gate, or does not answer within about 2 s is
+  skipped and logged, never an error. Candidate `title` and `workspace_label` have control and
+  format characters stripped. The memory lives in the daemon process only and is cleared by a restart. A
   `claude_session_id` that is not 1 to 128 ASCII letters, digits, `_ - .` is error 1 before any
   herdr call; a daemon without herdr, or a failed session listing, is error 4.
 

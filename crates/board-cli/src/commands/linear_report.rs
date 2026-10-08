@@ -25,7 +25,7 @@ use crate::daemon::connect_or_start;
 const REPORT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The pane lookup's share of [`REPORT_TIMEOUT`]; the rest is kept for the
 /// activity record, which must not be lost to a slow lookup.
-const RESOLVE_TIMEOUT: Duration = Duration::from_secs(1);
+const HOOK_RESOLVE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const READ_PREFIXES: [&str; 4] = ["get_", "list_", "search_", "extract_"];
 
@@ -90,7 +90,7 @@ fn remembered_location(
         hook_cwd(payload.get("cwd").and_then(Value::as_str)),
         Some(claude_session_id.to_string()),
         |params| {
-            client.set_read_timeout(Some(time_left(deadline)?.min(RESOLVE_TIMEOUT)))?;
+            client.set_read_timeout(Some(time_left(deadline)?.min(HOOK_RESOLVE_TIMEOUT)))?;
             client.caller_resolve(params)
         },
     )

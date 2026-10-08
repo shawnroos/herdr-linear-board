@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use board_core::client::RpcClientError;
+use board_core::error_code;
 use board_core::paths::session_name_from_socket;
 use board_core::protocol::{
     CallerCandidate, CallerLocation, CallerResolveParams, CallerResolveResult,
@@ -16,7 +17,6 @@ pub(crate) const HERDR_WORKSPACE_ID: &str = "HERDR_WORKSPACE_ID";
 pub(crate) const CLAUDE_SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 const HERDR_TAB_ID: &str = "HERDR_TAB_ID";
 const DEFAULT_SESSION: &str = "default";
-const HERDR_UNAVAILABLE: i32 = 4;
 
 pub(crate) fn env_text(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|value| !value.is_empty())
@@ -189,7 +189,7 @@ pub(crate) fn resolve_remembered(
 }
 
 fn is_herdr_unavailable(error: &anyhow::Error) -> bool {
-    rpc_error(error).is_some_and(|rpc| rpc.code == HERDR_UNAVAILABLE)
+    rpc_error(error).is_some_and(|rpc| rpc.code == error_code::HERDR_UNAVAILABLE)
 }
 
 #[cfg(test)]
@@ -260,7 +260,7 @@ mod tests {
     fn herdr_unavailable_is_not_in_herdr_only_without_a_pane() {
         let unavailable = || -> Result<CallerResolveResult> {
             Err(anyhow!(RpcClientError::new(
-                4,
+                error_code::HERDR_UNAVAILABLE,
                 None,
                 "no herdr".into(),
                 None
@@ -270,7 +270,12 @@ mod tests {
         assert_eq!(resolution.result, CallerResolveResult::NotInHerdr);
         assert!(resolve(&query(Some("s/w1:p1")), env(&[]), |_| unavailable()).is_err());
         let bad = resolve(&query(None), env(&[]), |_| {
-            Err(anyhow!(RpcClientError::new(1, None, "bad".into(), None)))
+            Err(anyhow!(RpcClientError::new(
+                error_code::BAD_REQUEST,
+                None,
+                "bad".into(),
+                None
+            )))
         });
         assert!(bad.is_err());
     }
