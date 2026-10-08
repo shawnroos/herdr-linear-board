@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::spawner::{RuntimeHandle, Spawner};
 use board_core::config::Config;
-use board_core::protocol::{BoardChangedReason, Event, RunOutcome};
+use board_core::protocol::{BoardChangedReason, CallerLocation, Event, RunOutcome};
 use board_herdr::{HerdrClient, HerdrError, NotificationSound};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch, Mutex as AsyncMutex};
@@ -175,6 +175,9 @@ pub struct Daemon {
     pub sched: Mutex<Sched>,
     pub watch: Mutex<WatchState>,
     pub linear: crate::linear::LinearService,
+    /// Claude session id → the pane that session confirmed through
+    /// `caller.resolve`. In memory only: a restart makes the agent confirm again.
+    pub caller_locations: Mutex<HashMap<String, CallerLocation>>,
     shutdown_tx: watch::Sender<bool>,
     stopping: AtomicBool,
     #[cfg(test)]
@@ -212,6 +215,7 @@ impl Daemon {
             sched: Mutex::new(Sched::default()),
             watch: Mutex::new(WatchState::default()),
             linear: crate::linear::LinearService::default(),
+            caller_locations: Mutex::new(HashMap::new()),
             shutdown_tx,
             stopping: AtomicBool::new(false),
             #[cfg(test)]

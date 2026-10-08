@@ -2,6 +2,7 @@
 //! to `herdr pane rename` itself.
 
 use super::*;
+use std::path::Path;
 
 /// A fake Herdr that answers `pane.rename` with the renamed pane, so the test
 /// can read back the exact params the daemon sent.
@@ -746,4 +747,342 @@ fn board_notify_refuses_an_empty_title_before_any_herdr_call() {
     assert_eq!(err.code(), 1);
     assert!(err.to_string().contains("title"), "{err}");
     assert!(herdr.methods().is_empty(), "herdr was contacted");
+}
+
+const CALLER_DIR: &str = "/work/repo-d";
+const CALLER_READS: &[&str] = &["ping", "pane.list", "workspace.list"];
+
+fn claude_pane(pane_id: &str, workspace_id: &str, cwd: &str) -> Value {
+    let mut pane = testkit::pane_info(pane_id);
+    pane["workspace_id"] = json!(workspace_id);
+    pane["tab_id"] = json!(format!("{workspace_id}:t1"));
+    pane["agent"] = json!("claude");
+    pane["cwd"] = json!(cwd);
+    pane["title"] = json!(format!("claude in {pane_id}"));
+    pane
+}
+
+/// A fake herdr session that lists `panes` and one workspace per
+/// `(id, label)`, and panics on anything else, so a mutation fails the test.
+fn caller_session(panes: Vec<Value>, workspaces: &[(&str, &str)]) -> FakeHerdr {
+    let workspaces: Vec<Value> = workspaces
+        .iter()
+        .map(|(id, label)| {
+            json!({
+                "workspace_id": id, "label": label, "number": 1,
+                "focused": false, "active_tab_id": "", "agent_status": "idle"
+            })
+        })
+        .collect();
+    testkit::herdr_server()
+        .on("pane.list", move |req| {
+            testkit::reply(req, json!({"type": "pane_list", "panes": panes}))
+        })
+        .on("workspace.list", move |req| {
+            testkit::reply(req, json!({"workspaces": workspaces}))
+        })
+        .serve()
+}
+
+/// One session holding a single Claude pane `w1:p2` in [`CALLER_DIR`].
+fn one_claude_session(label: &str) -> FakeHerdr {
+    caller_session(
+        vec![claude_pane("w1:p2", "w1", CALLER_DIR)],
+        &[("w1", label)],
+    )
+}
+
+fn socket_of(herdr: &FakeHerdr) -> String {
+    herdr.socket.to_string_lossy().into_owned()
+}
+
+fn session_entry(name: &str, socket: &Path) -> SessionEntry {
+    SessionEntry {
+        name: name.into(),
+        default: name == "default",
+        running: true,
+        socket_path: socket.to_string_lossy().into_owned(),
+    }
+}
+
+fn caller_daemon(entries: Vec<SessionEntry>) -> Arc<Daemon> {
+    let default_socket = entries
+        .first()
+        .map(|e| PathBuf::from(&e.socket_path))
+        .unwrap_or_else(|| PathBuf::from("/tmp/board-test.sock"));
+    test_daemon_with_registry(
+        Config::default(),
+        Some(SessionRegistry::with_entries(default_socket, entries)),
+    )
+}
+
+fn resolve(d: &Arc<Daemon>, params: Value) -> Value {
+    handle_request(d, "caller.resolve", params).unwrap()
+}
+
+fn assert_only_reads(herdr: &FakeHerdr) {
+    for method in herdr.methods() {
+        assert!(
+            CALLER_READS.contains(&method.as_str()),
+            "caller.resolve sent {method} to herdr"
+        );
+    }
+}
+
+#[test]
+fn caller_resolve_offers_a_claude_pane_from_every_session_with_its_socket() {
+    let one = one_claude_session("Alpha");
+    let two = caller_session(
+        vec![claude_pane("w3:p1", "w3", CALLER_DIR)],
+        &[("w3", "Beta")],
+    );
+    let d = caller_daemon(vec![
+        session_entry("default", &one.socket),
+        session_entry("work", &two.socket),
+    ]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["state"], "unconfirmed", "{v}");
+    let candidates = v["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 2, "{v}");
+    assert_eq!(candidates[0]["pane"], "default/w1:p2");
+    assert_eq!(candidates[0]["socket"], socket_of(&one));
+    assert_eq!(candidates[0]["workspace_label"], "Alpha");
+    assert_eq!(candidates[0]["title"], "claude in w1:p2");
+    assert_eq!(candidates[1]["pane"], "work/w3:p1");
+    assert_eq!(candidates[1]["socket"], socket_of(&two));
+    assert_eq!(candidates[1]["workspace_label"], "Beta");
+    // The whole session is listed, not one workspace.
+    assert_eq!(one.requests_for("pane.list")[0]["params"], json!({}));
+    assert_only_reads(&one);
+    assert_only_reads(&two);
+}
+
+#[test]
+fn caller_resolve_skips_an_unreachable_session() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![
+        session_entry("default", &one.socket),
+        session_entry("gone", Path::new("/tmp/hb-caller-no-such-herdr.sock")),
+    ]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["state"], "unconfirmed", "{v}");
+    let candidates = v["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1, "{v}");
+    assert_eq!(candidates[0]["pane"], "default/w1:p2");
+}
+
+#[test]
+fn caller_resolve_never_asks_a_wrong_protocol_session_for_panes() {
+    let one = one_claude_session("Alpha");
+    let old = testkit::herdr_server()
+        .protocol(board_herdr::SUPPORTED_HERDR_PROTOCOL - 1)
+        .serve();
+    let d = caller_daemon(vec![
+        session_entry("default", &one.socket),
+        session_entry("old", &old.socket),
+    ]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["candidates"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(old.methods(), vec!["ping"]);
+}
+
+#[test]
+fn caller_resolve_ignores_a_stopped_session() {
+    let one = one_claude_session("Alpha");
+    let stopped = caller_session(vec![claude_pane("w1:p2", "w1", CALLER_DIR)], &[]);
+    let mut entry = session_entry("stopped", &stopped.socket);
+    entry.running = false;
+    let d = caller_daemon(vec![session_entry("default", &one.socket), entry]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v["candidates"].as_array().unwrap().len(), 1, "{v}");
+    assert!(
+        stopped.methods().is_empty(),
+        "a stopped session was contacted"
+    );
+}
+
+#[test]
+fn caller_resolve_reports_not_in_herdr_when_nothing_matches() {
+    let mut shell = testkit::pane_info("w1:p1");
+    shell["cwd"] = json!(CALLER_DIR);
+    let one = caller_session(
+        vec![shell, claude_pane("w1:p2", "w1", "/work/other")],
+        &[("w1", "Alpha")],
+    );
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR}));
+
+    assert_eq!(v, json!({"state": "not_in_herdr"}));
+}
+
+#[test]
+fn caller_resolve_session_qualified_pane_picks_one_of_two_repeated_ids() {
+    let one = one_claude_session("Alpha");
+    let two = one_claude_session("Beta");
+    let d = caller_daemon(vec![
+        session_entry("default", &one.socket),
+        session_entry("work", &two.socket),
+    ]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR, "pane": "work/w1:p2"}));
+
+    assert_eq!(
+        v,
+        json!({
+            "state": "resolved",
+            "location": {
+                "session": "work",
+                "socket": two.socket.to_string_lossy(),
+                "workspace_id": "w1",
+                "tab_id": "w1:t1",
+                "pane_id": "w1:p2",
+            }
+        })
+    );
+    // Naming the session means no other session is asked.
+    assert!(one.methods().is_empty(), "{:?}", one.methods());
+    assert_only_reads(&two);
+}
+
+#[test]
+fn caller_resolve_bare_pane_repeated_across_sessions_stays_unconfirmed() {
+    let one = one_claude_session("Alpha");
+    let two = one_claude_session("Beta");
+    let d = caller_daemon(vec![
+        session_entry("default", &one.socket),
+        session_entry("work", &two.socket),
+    ]);
+
+    let v = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "w1:p2", "claude_session_id": "sess-s"}),
+    );
+
+    assert_eq!(v["state"], "unconfirmed", "{v}");
+    assert_eq!(v["candidates"].as_array().unwrap().len(), 2, "{v}");
+    assert!(d.caller_locations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn caller_resolve_pane_that_matches_nothing_is_not_in_herdr() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let v = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "default/w9:p9", "claude_session_id": "sess-s"}),
+    );
+
+    assert_eq!(v, json!({"state": "not_in_herdr"}));
+    assert!(d.caller_locations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn caller_resolve_remembers_a_confirmed_pane_for_its_claude_session() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let confirmed = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "default/w1:p2", "claude_session_id": "sess-s"}),
+    );
+    assert_eq!(confirmed["state"], "resolved", "{confirmed}");
+    let asked = one.methods().len();
+
+    // A different folder proves the answer comes from memory, not a lookup.
+    let remembered = resolve(
+        &d,
+        json!({"cwd": "/elsewhere", "claude_session_id": "sess-s"}),
+    );
+
+    assert_eq!(remembered, confirmed);
+    assert_eq!(one.methods().len(), asked, "herdr was asked again");
+}
+
+#[test]
+fn caller_resolve_does_not_hand_one_sessions_memory_to_another() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+    resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "default/w1:p2", "claude_session_id": "sess-s"}),
+    );
+
+    let other = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "claude_session_id": "sess-t"}),
+    );
+
+    assert_eq!(other["state"], "unconfirmed", "{other}");
+}
+
+#[test]
+fn caller_resolve_with_pane_and_no_session_id_remembers_nothing() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let v = resolve(&d, json!({"cwd": CALLER_DIR, "pane": "default/w1:p2"}));
+
+    assert_eq!(v["state"], "resolved", "{v}");
+    assert!(d.caller_locations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn caller_resolve_explicit_pane_replaces_a_remembered_one() {
+    let one = caller_session(
+        vec![
+            claude_pane("w1:p2", "w1", CALLER_DIR),
+            claude_pane("w1:p3", "w1", CALLER_DIR),
+        ],
+        &[("w1", "Alpha")],
+    );
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+    resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "default/w1:p2", "claude_session_id": "sess-s"}),
+    );
+    resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "pane": "default/w1:p3", "claude_session_id": "sess-s"}),
+    );
+
+    let v = resolve(
+        &d,
+        json!({"cwd": CALLER_DIR, "claude_session_id": "sess-s"}),
+    );
+
+    assert_eq!(v["location"]["pane_id"], "w1:p3", "{v}");
+}
+
+#[test]
+fn caller_resolve_refuses_a_malformed_session_id_before_herdr() {
+    let one = one_claude_session("Alpha");
+    let d = caller_daemon(vec![session_entry("default", &one.socket)]);
+
+    let err = handle_request(
+        &d,
+        "caller.resolve",
+        json!({"cwd": CALLER_DIR, "claude_session_id": "bad id\n"}),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code(), 1);
+    assert!(err.to_string().contains("session id"), "{err}");
+    assert!(one.methods().is_empty(), "herdr was contacted");
+}
+
+#[test]
+fn caller_resolve_without_a_session_registry_is_herdr_unavailable() {
+    let d = test_daemon(Config::default());
+    let err = handle_request(&d, "caller.resolve", json!({"cwd": CALLER_DIR})).unwrap_err();
+    assert_eq!(err.code(), 4);
 }

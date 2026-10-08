@@ -1,6 +1,7 @@
 //! Pane operations in the **caller's own** herdr session: `pane.set_title`,
 //! `pane.focus`, the agent-opened board (`board.pane.open`/`board.pane.close`)
-//! and `board.notify`.
+//! and `board.notify`, plus `caller.resolve`, the read-only search for the
+//! pane a caller runs in across every herdr session.
 //!
 //! The daemon owns every Herdr interaction (`AGENTS.md`), so a client that
 //! wants its own pane border relabelled asks for it here instead of shelling
@@ -14,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use board_core::db::NewBoardPane;
+use board_core::engine::{match_caller, parse_pane_filter, CallerPane};
 use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement};
 
 /// Rename `pane_id` in the session `origin_socket` belongs to.
@@ -82,6 +84,100 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
         focused: true,
         gone: false,
     }))
+}
+
+/// Find the herdr pane a caller runs in, read-only. A pane the caller names
+/// resolves and is remembered for its Claude session; without one, the
+/// remembered pane wins, and otherwise a folder lookup across every running
+/// session only offers candidates.
+pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<Value> {
+    let claude_session = p
+        .claude_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = claude_session {
+        check_claude_session_id(id)?;
+    }
+    let pane = p.pane.as_deref().map(str::trim).filter(|v| !v.is_empty());
+
+    if pane.is_none() {
+        if let Some(id) = claude_session {
+            let remembered = d
+                .caller_locations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(id)
+                .cloned();
+            if let Some(location) = remembered {
+                return Ok(json!(CallerResolveResult::Resolved { location }));
+            }
+        }
+    }
+
+    let registry = d
+        .session_registry
+        .as_ref()
+        .ok_or_else(|| Error::HerdrUnavailable("herdr not connected".into()))?;
+    let entries = registry
+        .list()
+        .map_err(|e| Error::HerdrUnavailable(format!("listing herdr sessions: {e:#}")))?;
+    let only_session = pane.and_then(|v| parse_pane_filter(v).session);
+    let panes: Vec<CallerPane> = entries
+        .iter()
+        .filter(|e| e.running && !e.socket_path.is_empty())
+        .filter(|e| only_session.as_ref().is_none_or(|s| *s == e.name))
+        .flat_map(session_caller_panes)
+        .collect();
+
+    let result = match_caller(&panes, &p.cwd, pane);
+    if let (Some(id), CallerResolveResult::Resolved { location }) = (claude_session, &result) {
+        d.caller_locations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_string(), location.clone());
+    }
+    Ok(json!(result))
+}
+
+/// Every pane of one session, labelled with its workspace. A session that
+/// cannot be reached or fails the gate is skipped: one dead session must not
+/// hide the caller's pane in another.
+fn session_caller_panes(entry: &crate::session::SessionEntry) -> Vec<CallerPane> {
+    let listed = crate::herdr_conn::connect_checked(Path::new(&entry.socket_path))
+        .and_then(|mut client| Ok((client.pane_list(None)?, client.workspace_list()?)));
+    let (panes, workspaces) = match listed {
+        Ok(listed) => listed,
+        Err(error) => {
+            tracing::warn!(
+                session = %entry.name,
+                socket = %entry.socket_path,
+                %error,
+                "caller.resolve skipped a herdr session"
+            );
+            return Vec::new();
+        }
+    };
+    let labels: BTreeMap<String, String> = workspaces
+        .into_iter()
+        .filter(|w| !w.label.is_empty())
+        .map(|w| (w.workspace_id, w.label))
+        .collect();
+    panes
+        .into_iter()
+        .map(|pane| CallerPane {
+            session: entry.name.clone(),
+            socket: entry.socket_path.clone(),
+            workspace_label: labels.get(&pane.workspace_id).cloned(),
+            workspace_id: pane.workspace_id,
+            tab_id: pane.tab_id,
+            pane_id: pane.pane_id,
+            agent: pane.agent,
+            cwd: pane.cwd,
+            foreground_cwd: pane.foreground_cwd,
+            title: pane.title,
+        })
+        .collect()
 }
 
 const BOARD_PLUGIN_ID: &str = "herdr-board";
@@ -179,18 +275,24 @@ fn session_identity(p: &BoardPaneOpenParams) -> Result<ShowEnv> {
         env.push(("BOARD_SESSION_CWD", cwd.clone()));
     }
     if let Some(id) = &p.claude_session_id {
-        let ok = (1..=MAX_CLAUDE_SESSION_ID).contains(&id.len())
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
-        if !ok {
-            return Err(Error::BadRequest(format!(
-                "claude session id {id:?} is not a session id"
-            )));
-        }
+        check_claude_session_id(id)?;
         env.push(("BOARD_SESSION_CLAUDE", id.clone()));
     }
     Ok(env)
+}
+
+fn check_claude_session_id(id: &str) -> Result<()> {
+    let ok = (1..=MAX_CLAUDE_SESSION_ID).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::BadRequest(format!(
+            "claude session id {id:?} is not a session id"
+        )))
+    }
 }
 
 fn origin_socket_key(origin_socket: &str) -> Result<(PathBuf, String)> {
