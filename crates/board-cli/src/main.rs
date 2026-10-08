@@ -1,6 +1,7 @@
 //! board — the single CLI binary.
 
 mod args;
+mod caller;
 mod commands;
 mod context;
 mod daemon;
@@ -154,6 +155,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Cmd::Version => cmd_version(cli.json),
         Cmd::Skill => print_skill(),
         Cmd::Mcp => mcp::run(),
+        Cmd::Caller { pane } => commands::caller::cmd_caller(pane, cli.json),
         Cmd::Board { sub } => cmd_board(sub, &mut ctx),
         Cmd::Project { sub } => cmd_project(sub, &mut ctx),
         Cmd::Template { sub } => cmd_template(sub, &mut ctx),

@@ -6,10 +6,10 @@ use board_core::protocol::{
 };
 use serde_json::json;
 
-use super::env_text;
 use crate::args::{
     HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
 };
+use crate::caller::env_text;
 use crate::context::Ctx;
 use crate::helpers::{efforts_str, harness_capabilities, union_efforts};
 use crate::render::{emit, emit_line};

@@ -17,7 +17,8 @@ use board_core::protocol::{
 use board_core::text::strip_control_and_format;
 use serde_json::{json, Value};
 
-use super::{canonical_text, env_text};
+use super::canonical_text;
+use crate::caller::env_text;
 use crate::render::{emit, emit_line};
 
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);

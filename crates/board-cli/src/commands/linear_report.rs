@@ -14,6 +14,7 @@ use board_core::db::is_issue_identifier;
 use board_core::protocol::{ActivityClaims, LinearActivityRecordParams};
 use serde_json::Value;
 
+use crate::caller::{env_id, env_text};
 use crate::daemon::connect_or_start;
 
 /// Claude Code kills a hook at 30 s. This bounds the whole report, including
@@ -68,16 +69,6 @@ fn claims_from_environment() -> ActivityClaims {
         card_id: env_id("BOARD_CARD_ID"),
         run_id: env_id("BOARD_RUN_ID"),
     }
-}
-
-fn env_text(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
-}
-
-/// Same rule as `board mcp`: a rescued pane carries an empty `BOARD_RUN_ID`
-/// on purpose, so an empty or malformed id is no claim.
-fn env_id(key: &str) -> Option<i64> {
-    env_text(key).and_then(|value| value.trim().parse().ok())
 }
 
 /// `None` means the payload is not a Linear write worth recording: a read, a
