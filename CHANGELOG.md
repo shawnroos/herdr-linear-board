@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- [#10](https://github.com/nelsonPires5/herdr-board/pull/10) fix: Board tools and hooks find the agent's herdr pane when Claude Code drops herdr's variables, once the person confirms the pane.
+
 ## [0.18.0] - 2026-10-05
 
 ### Added
