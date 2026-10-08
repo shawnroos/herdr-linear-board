@@ -59,7 +59,7 @@ The work plugin's `/work setup` reports "not in herdr" for the same reason. The 
 - R6. The lookup is read-only: it never mutates herdr.
 
 **Surfaces**
-- R7. `board mcp` tools use the resolved location for claims, default space and `origin_pane`. Every tool that uses the caller's location accepts an optional `pane`. An unconfirmed result is a tool error that lists the candidates and says to retry with `pane`.
+- R7. `board mcp` tools use the resolved location for claims, default space and `origin_pane`. Every tool that uses the caller's location accepts an optional `pane`. An unconfirmed result is a tool error that lists the candidates and tells the agent to ask the person whether this session runs in one of them (or in herdr at all) before passing `pane`.
 - R8. `board linear report` and `board linear session` use the resolver within their existing time budgets and never fail because of it. They use a remembered choice (R11) and never confirm a pane themselves. `linear session` prints a short notice naming the candidates and how to confirm one when the result is unconfirmed, and exits 0 when it finds no space.
 
 **Follow-on and report**
@@ -203,15 +203,15 @@ U1 and U2 have no dependencies on each other and can run in parallel. U3 needs b
 - **Dependencies:** U3.
 - **Files:**
   - `crates/board-cli/src/caller.rs` (new): the precedence helper. It also folds the duplicate `env_text` / `env_id` helpers in `mcp.rs` and `linear_report.rs`.
-  - `crates/board-cli/src/mcp.rs`: `Caller::from_environment` uses the helper; `pane` is added to every tool that uses the caller's location (`state`, `panes_for_issue`, `mark`, `unmark`, `note`, `notify`, `ask_to_show`, `withdraw_show`, `open_board`, `close_board`, `bind`, `unbind`); the `space` docstrings stop saying "this pane's HERDR_WORKSPACE_ID".
+  - `crates/board-cli/src/mcp.rs`: `Caller::from_environment` uses the helper; `pane` is added to every tool that uses the caller's location (`state`, `panes_for_issue`, `mark`, `unmark`, `note`, `ask_to_show`, `withdraw_show`, `open_board`, `close_board`, `bind`, `unbind`) and to `notify`, which needs only a herdr socket that a `<session>/<pane id>` value supplies; the `space` docstrings stop saying "this pane's HERDR_WORKSPACE_ID".
   - `crates/board-cli/src/commands/caller.rs` (new) plus its clap entry under `crates/board-cli/src/args/`: the `board caller --json` verb (KTD9), with output through `render.rs`.
   - `crates/board-cli/tests/integration/mcp.rs`, `crates/board-cli/tests/integration/caller.rs` (new).
 - **Approach:**
   1. Fill `claims.herdr_pane_id`, `herdr_workspace_id` and `herdr_socket` from the resolved location, so space defaults, writes and `origin_pane` all follow one source.
   2. Send `CLAUDE_CODE_SESSION_ID` as the session id on every resolve.
-  3. Render an unconfirmed result as a tool error whose text lists the candidates and the `pane` value to retry with.
+  3. Render an unconfirmed result as a tool error that lists the candidates and their `pane` values, and tells the agent to confirm with the person that this session runs in one of them before retrying. It never suggests retrying without asking.
   4. `recording_boardd` answers one request; add a multi-request variant for tests that make two calls.
-- **Execution note:** Before U5 starts, verify KTD10's assumption on the host with a read-only check: in a session that claimed a spare, `board mcp`'s `CLAUDE_CODE_SESSION_ID` equals the `session_id` its hooks receive. Record the result in the PR.
+- **Execution note:** Before U5 starts, confirm KTD10's assumption from the board's own data, not by reading another process's environment. Evidence so far: Claude Code's record for the spare (pid 93006) carries the same session id as the w2 session's transcript, which is what hooks receive as `session_id`. The remaining check: activity rows that session wrote through `board mcp` and through `board linear report` carry the same Claude session id. Record the result in the PR.
 - **Test scenarios:**
   - Covers AE1. With full env and no `pane`, `open_board` sends `board.pane.open` with the env pane, and the daemon sees no `caller.resolve`.
   - Covers AE7. With full env and `pane` naming another pane, the call resolves through the pane filter and opens beside the named pane.
@@ -240,7 +240,7 @@ U1 and U2 have no dependencies on each other and can run in parallel. U3 needs b
 - **Approach:**
   1. Both hooks send the hook payload's `session_id` and the KTD1 cwd. They never pass `pane`, so they only use a remembered choice and never confirm one.
   2. `linear report`: the resolve call gets its own read timeout of at most 1 s, capped by what remains of `REPORT_TIMEOUT`. On timeout or error it drops that connection and sends `linear.activity.record` on a fresh connection with today's claims, so the activity record is never lost to the lookup.
-  3. `linear session`: when unconfirmed, it prints a one-line notice naming the candidates and saying the agent confirms one with `pane`. With no space, it prints a notice and exits 0 (KTD7).
+  3. `linear session`: when unconfirmed, it prints a one-line notice naming the candidates and saying the agent asks the person which one is this session before confirming it with `pane`. With no space, it prints a notice and exits 0 (KTD7).
   4. The status-line mode is untouched.
 - **Test scenarios:**
   - Covers AE4. `linear report` with no env and no remembered location exits 0 with empty stdout and records activity without a space.
@@ -269,12 +269,12 @@ U1 and U2 have no dependencies on each other and can run in parallel. U3 needs b
   - `docs/upstream/claude-code-spare-env.md` (the R10 report).
 - **Approach:**
   1. Copy `e2e/43-open-board-pane.sh`. In the scenario's ephemeral session, create a disposable pane that reports `agent: claude` with cwd D, as `e2e/fake-bin/managed-agent-report.py` does.
-  2. Run `board mcp` with every `HERDR_*` variable unset, cwd D and a fixed `CLAUDE_CODE_SESSION_ID`.
+  2. Run `board mcp` with every `HERDR_*` variable unset, cwd D and a fixed `CLAUDE_CODE_SESSION_ID`. To prove the memory lives in the daemon, not the mcp process cache, the later checks use a second process with the same session id (`board caller --json`).
   3. Assert `open_board` without `pane` refuses and names the candidate, then a retry with its `<session>/<pane id>` opens beside it.
   4. Add a second Claude pane in D, then assert a fresh session id gets both candidates.
   5. Prefix every herdr mutation with `HERDR MUTATION:`.
 - **Test scenarios:**
-  - Covers AE2. One Claude pane in D: refusal names it; retry with `pane` opens beside it; a later `state` call without `pane` reports that pane's space.
+  - Covers AE2. One Claude pane in D: refusal names it; retry with `pane` opens beside it; a separate `board caller --json` with the same session id reports that pane as resolved.
   - Covers AE3. Two Claude panes in D: refusal names both; retry with `pane` opens beside the chosen one.
 - **Verification:** `./scripts/sandbox.sh gates` passes, including the live suite with scenario 46. The `test_docs.py` pins pass.
 
