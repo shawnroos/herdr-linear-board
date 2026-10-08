@@ -3,10 +3,17 @@
 //! choice for the Claude session, then a folder lookup that only offers
 //! candidates). Each surface passes its own cwd and Claude session id.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use board_core::client::RpcClientError;
 use board_core::paths::session_name_from_socket;
-use board_core::protocol::{CallerLocation, CallerResolveParams, CallerResolveResult};
+use board_core::protocol::{
+    CallerCandidate, CallerLocation, CallerResolveParams, CallerResolveResult,
+};
+use board_core::text::strip_control_and_format;
+
+use crate::commands::canonical_text;
 
 pub(crate) const HERDR_SOCKET_PATH: &str = "HERDR_SOCKET_PATH";
 pub(crate) const HERDR_PANE_ID: &str = "HERDR_PANE_ID";
@@ -44,6 +51,44 @@ pub(crate) enum Source {
 pub(crate) struct Resolution {
     pub(crate) result: CallerResolveResult,
     pub(crate) source: Source,
+}
+
+/// A hook's directory for the folder lookup: the session's launch directory
+/// first, because herdr's pane cwd is where `claude` started and the session
+/// may have moved into a subdirectory or worktree since.
+pub(crate) fn hook_cwd(payload_cwd: Option<&str>) -> String {
+    let cwd = env_text("CLAUDE_PROJECT_DIR")
+        .or_else(|| {
+            payload_cwd
+                .filter(|cwd| !cwd.is_empty())
+                .map(str::to_string)
+        })
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    canonical_text(cwd)
+}
+
+/// Candidates on one line for text a person or an agent reads. Titles are
+/// terminal titles, so every field is stripped of control characters.
+pub(crate) fn candidate_list(candidates: &[CallerCandidate]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{} (workspace {}, title {:?})",
+                strip_control_and_format(&candidate.pane),
+                strip_control_and_format(
+                    candidate
+                        .workspace_label
+                        .as_deref()
+                        .unwrap_or(&candidate.workspace_id)
+                ),
+                strip_control_and_format(candidate.title.as_deref().unwrap_or_default())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The env location, only when all three herdr variables are set. A named

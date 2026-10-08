@@ -365,14 +365,15 @@ mod session {
     use board_core::client::BoardClient;
     use board_core::protocol::{
         LinearBindParams, LinearMarkSetParams, LinearSessionGetParams, LinearSessionGetResult,
-        LinearShowRequestParams, MarkKind,
+        LinearShowRequestParams, LinearSnapshotParams, MarkKind, Request,
     };
     use serde_json::{json, Value};
+    use std::sync::mpsc::Receiver;
 
     use super::super::report::{
         daemon_with_bound_space, daemon_with_bound_space_and, git_worktree,
     };
-    use super::super::{json_output, TestDaemon, BOARD_BIN};
+    use super::super::{json_output, scripted_boardd, TestDaemon, BOARD_BIN};
 
     const HERDR_SOCKET: &str = "/tmp/herdr-test.sock";
 
@@ -408,6 +409,7 @@ mod session {
             .env_remove("HERDR_PANE_ID")
             .env_remove("HERDR_PLUGIN_ID")
             .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("CLAUDE_PROJECT_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -715,5 +717,225 @@ mod session {
         for cell in ["WEB-1", "attention", "wA"] {
             assert!(text.contains(cell), "{text}");
         }
+    }
+
+    fn resolved_at(workspace: &str) -> Value {
+        json!({"state": "resolved", "location": {
+            "session": "work", "socket": "/tmp/work.sock", "workspace_id": workspace,
+            "tab_id": "w7:t1", "pane_id": "w7:p3",
+        }})
+    }
+
+    fn two_candidates() -> Value {
+        let candidate = |pane: &str, label: &str| {
+            json!({
+                "pane": format!("work/{pane}"), "session": "work", "socket": "/tmp/work.sock",
+                "workspace_id": "w7", "workspace_label": label, "tab_id": "w7:t1",
+                "pane_id": pane, "title": "claude \u{1b}[31mtitle",
+            })
+        };
+        json!({"state": "unconfirmed", "candidates": [
+            candidate("w7:p3", "api"), candidate("w7:p4", "web"),
+        ]})
+    }
+
+    fn scripted(
+        socket: &Path,
+        resolve: Value,
+        other: impl Fn(&Request) -> Option<Value> + Send + Sync + 'static,
+    ) -> Receiver<Request> {
+        scripted_boardd(socket, move |request| match request.method.as_str() {
+            "caller.resolve" => Ok(resolve.clone()),
+            method => other(request).ok_or_else(|| (3, format!("unexpected {method}"))),
+        })
+    }
+
+    fn requests(rx: &Receiver<Request>) -> Vec<Request> {
+        let mut seen = Vec::new();
+        while let Ok(request) = rx.recv_timeout(Duration::from_millis(300)) {
+            seen.push(request);
+        }
+        seen
+    }
+
+    fn session_hook(socket: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
+        let (out, _) = board_with_stdin(socket, cwd, cwd, args, &[], stdin);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    }
+
+    #[test]
+    fn a_remembered_pane_gives_the_session_its_space_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().canonicalize().unwrap();
+        let socket = cwd.join("boardd.sock");
+        let context = json!({
+            "space": "w7", "space_bound": true,
+            "binding": {"worktree_path": "/wt", "issue": "WEB-9", "bound_at": null},
+            "column": "In Progress", "marks": [], "pending_requests": 0,
+        });
+        let rx = scripted(&socket, resolved_at("w7"), move |request| {
+            (request.method == "linear.session.get").then(|| context.clone())
+        });
+
+        let out = session_hook(&socket, &cwd, &["linear", "session"], &claude_input(&cwd));
+
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("WEB-9") && text.contains("w7"), "{text}");
+        let seen = requests(&rx);
+        let resolve = &seen[0];
+        assert_eq!(resolve.method, "caller.resolve");
+        assert_eq!(resolve.params["claude_session_id"], "claude-1");
+        assert_eq!(resolve.params["cwd"], cwd.to_str().unwrap());
+        assert!(resolve.params.get("pane").is_none(), "{:?}", resolve.params);
+        let get: LinearSessionGetParams = serde_json::from_value(seen[1].params.clone()).unwrap();
+        assert_eq!(get.space, "w7");
+        assert_eq!(get.herdr_pane_id.as_deref(), Some("w7:p3"));
+        assert_eq!(get.herdr_socket.as_deref(), Some("/tmp/work.sock"));
+        assert_eq!(get.claude_session_id.as_deref(), Some("claude-1"));
+    }
+
+    #[test]
+    fn an_unconfirmed_pane_prints_the_candidates_and_exits_0() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().canonicalize().unwrap();
+        let socket = cwd.join("boardd.sock");
+        let rx = scripted(&socket, two_candidates(), |_| None);
+
+        let out = session_hook(&socket, &cwd, &["linear", "session"], &claude_input(&cwd));
+
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        for needle in ["work/w7:p3", "work/w7:p4", "Ask the person", "`pane`"] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let seen = requests(&rx);
+        assert!(
+            seen.iter().all(|r| r.method == "caller.resolve"),
+            "{seen:?}"
+        );
+
+        let out = session_hook(
+            &socket,
+            &cwd,
+            &["linear", "session", "--json"],
+            &claude_input(&cwd),
+        );
+        let doc = json_output(&out);
+        assert_eq!(doc["state"], "unconfirmed", "{doc}");
+        assert_eq!(doc["candidates"][1]["pane"], "work/w7:p4", "{doc}");
+    }
+
+    #[test]
+    fn without_a_space_the_session_prints_a_notice_and_exits_0() {
+        let td = TestDaemon::start(&[]);
+        let dir = tempfile::tempdir().unwrap();
+
+        let out = session_hook(
+            &td.socket,
+            dir.path(),
+            &["linear", "session"],
+            &claude_input(dir.path()),
+        );
+
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("no herdr space"), "{text}");
+    }
+
+    #[test]
+    fn without_herdr_env_or_a_daemon_the_session_exits_0_and_starts_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("boardd.sock");
+
+        let (out, elapsed) = board_with_stdin(
+            &socket,
+            dir.path(),
+            dir.path(),
+            &["linear", "session"],
+            &[],
+            &claude_input(dir.path()),
+        );
+
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!socket.exists(), "the session verb started a daemon");
+    }
+
+    #[test]
+    fn snapshot_without_a_space_uses_the_remembered_pane() {
+        let td = TestDaemon::start(&[]);
+        let document = serde_json::to_value(
+            td.client()
+                .linear_snapshot(&LinearSnapshotParams {
+                    workspace_id: "w7".into(),
+                    origin_socket: None,
+                    force: false,
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("boardd.sock");
+        let rx = scripted(&socket, resolved_at("w7"), move |request| {
+            (request.method == "linear.snapshot").then(|| document.clone())
+        });
+
+        let (out, _) = board_with_stdin(
+            &socket,
+            dir.path(),
+            dir.path(),
+            &["linear", "snapshot", "--json"],
+            &[("CLAUDE_CODE_SESSION_ID", "claude-1")],
+            "",
+        );
+
+        assert_eq!(json_output(&out)["workspace"]["id"], "w7");
+        let seen = requests(&rx);
+        assert_eq!(seen[0].method, "caller.resolve");
+        assert_eq!(seen[0].params["claude_session_id"], "claude-1");
+        let snapshot: LinearSnapshotParams =
+            serde_json::from_value(seen[1].params.clone()).unwrap();
+        assert_eq!(snapshot.workspace_id, "w7");
+        assert_eq!(snapshot.origin_socket.as_deref(), Some("/tmp/work.sock"));
+    }
+
+    #[test]
+    fn snapshot_with_only_unconfirmed_candidates_keeps_its_exit_64() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("boardd.sock");
+        let rx = scripted(&socket, two_candidates(), |_| None);
+
+        let (out, _) = board_with_stdin(
+            &socket,
+            dir.path(),
+            dir.path(),
+            &["linear", "snapshot", "--json"],
+            &[],
+            "",
+        );
+
+        assert_eq!(out.status.code(), Some(64));
+        let error = super::super::json_error(&out);
+        assert_eq!(error["error"]["kind"], "cli");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("HERDR_WORKSPACE_ID"),
+            "{error}"
+        );
+        assert!(requests(&rx).iter().all(|r| r.method == "caller.resolve"));
     }
 }

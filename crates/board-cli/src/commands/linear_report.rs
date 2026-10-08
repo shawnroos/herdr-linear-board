@@ -9,17 +9,25 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use board_core::client::BoardClient;
+use board_core::client::{BoardClient, UnixClient};
 use board_core::db::is_issue_identifier;
-use board_core::protocol::{ActivityClaims, LinearActivityRecordParams};
+use board_core::protocol::{
+    ActivityClaims, CallerLocation, CallerResolveResult, LinearActivityRecordParams,
+};
 use serde_json::Value;
 
-use crate::caller::{env_id, env_text};
+use crate::caller::{
+    env_id, env_text, hook_cwd, resolve, CallerQuery, HERDR_PANE_ID, HERDR_SOCKET_PATH,
+    HERDR_WORKSPACE_ID,
+};
 use crate::daemon::connect_or_start;
 
 /// Claude Code kills a hook at 30 s. This bounds the whole report, including
 /// the up-to-3 s wait in `connect_or_start` for an auto-started boardd.
 const REPORT_TIMEOUT: Duration = Duration::from_secs(5);
+/// The pane lookup's share of [`REPORT_TIMEOUT`]; the rest is kept for the
+/// activity record, which must not be lost to a slow lookup.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const READ_PREFIXES: [&str; 4] = ["get_", "list_", "search_", "extract_"];
 
@@ -48,26 +56,79 @@ fn report(deadline: Instant) -> Result<()> {
         .context("reading the hook payload")?;
     let payload: Value = serde_json::from_str(&input).context("the hook payload is not JSON")?;
     let current_dir = std::env::current_dir().ok();
-    let Some(params) = activity_params(&payload, claims_from_environment(), current_dir) else {
+    let Some(mut params) = activity_params(&payload, claims_from_environment(), current_dir) else {
         return Ok(());
     };
     let mut client = connect_or_start()?;
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        bail!("no time left to reach boardd");
+    match remembered_location(&mut client, &payload, deadline) {
+        Ok(Some(location)) => params.claims = located_claims(location),
+        Ok(None) => {}
+        // A timed-out read can still deliver its late reply on this
+        // connection, where it would be taken for the record's answer.
+        Err(error) => {
+            eprintln!("board linear report: pane lookup failed: {error:#}");
+            client = connect_or_start()?;
+        }
     }
-    client.set_read_timeout(Some(remaining))?;
+    client.set_read_timeout(Some(time_left(deadline)?))?;
     client.linear_activity_record(&params)?;
     Ok(())
 }
 
+/// The env location, or the pane this Claude session confirmed earlier. A
+/// hook never confirms one itself, so a folder candidate is no location, and
+/// without a session id there is nothing remembered to ask for.
+fn remembered_location(
+    client: &mut UnixClient,
+    payload: &Value,
+    deadline: Instant,
+) -> Result<Option<CallerLocation>> {
+    let Some(claude_session_id) = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let query = CallerQuery {
+        cwd: hook_cwd(payload.get("cwd").and_then(Value::as_str)),
+        pane: None,
+        claude_session_id: Some(claude_session_id.to_string()),
+    };
+    let resolution = resolve(&query, env_text, |params| {
+        client.set_read_timeout(Some(time_left(deadline)?.min(RESOLVE_TIMEOUT)))?;
+        client.caller_resolve(params)
+    })?;
+    Ok(match resolution.result {
+        CallerResolveResult::Resolved { location } => Some(location),
+        CallerResolveResult::Unconfirmed { .. } | CallerResolveResult::NotInHerdr => None,
+    })
+}
+
+fn time_left(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        bail!("no time left to reach boardd");
+    }
+    Ok(remaining)
+}
+
 fn claims_from_environment() -> ActivityClaims {
     ActivityClaims {
-        herdr_socket: env_text("HERDR_SOCKET_PATH"),
-        herdr_pane_id: env_text("HERDR_PANE_ID"),
-        herdr_workspace_id: env_text("HERDR_WORKSPACE_ID"),
+        herdr_socket: env_text(HERDR_SOCKET_PATH),
+        herdr_pane_id: env_text(HERDR_PANE_ID),
+        herdr_workspace_id: env_text(HERDR_WORKSPACE_ID),
         card_id: env_id("BOARD_CARD_ID"),
         run_id: env_id("BOARD_RUN_ID"),
+    }
+}
+
+fn located_claims(location: CallerLocation) -> ActivityClaims {
+    ActivityClaims {
+        herdr_socket: Some(location.socket),
+        herdr_pane_id: Some(location.pane_id),
+        herdr_workspace_id: Some(location.workspace_id),
+        ..claims_from_environment()
     }
 }
 

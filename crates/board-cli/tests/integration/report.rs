@@ -9,13 +9,15 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use board_core::client::{BoardClient, UnixClient};
+use std::sync::mpsc::Receiver;
+
 use board_core::protocol::{
-    ActivityClaims, LinearActivityListParams, LinearBindParams, LinearImportParams,
-    LinearStateGetParams, MarkKind,
+    ActivityClaims, LinearActivityListParams, LinearActivityRecordParams, LinearBindParams,
+    LinearImportParams, LinearStateGetParams, MarkKind, Request,
 };
 use serde_json::{json, Value};
 
-use super::{TestDaemon, BOARD_BIN};
+use super::{scripted_boardd, TestDaemon, BOARD_BIN};
 
 const HERDR_SOCKET: &str = "/tmp/herdr-test.sock";
 /// The verb's own bound is 5 s; the slack covers process start on a busy box.
@@ -47,6 +49,8 @@ impl Report<'_> {
             .env_remove("HERDR_PLUGIN_ID")
             .env_remove("BOARD_CARD_ID")
             .env_remove("BOARD_RUN_ID")
+            .env_remove("CLAUDE_PROJECT_DIR")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -466,4 +470,198 @@ fn a_daemon_that_never_answers_exits_0_within_the_timeout() {
         elapsed >= Duration::from_secs(4),
         "returned before the daemon could answer: {elapsed:?}"
     );
+}
+
+fn recorded(claims: &Value) -> Value {
+    json!({
+        "activity": {
+            "id": 1, "space": claims["herdr_workspace_id"], "tool_name": "t", "issue": null,
+            "claims": claims, "created_at": "2026-10-08 10:00:00",
+        },
+        "outcome": "recorded",
+    })
+}
+
+/// A boardd stand-in that answers `caller.resolve` with `resolve` after
+/// `stall`, and records any activity.
+fn resolving_boardd(socket: &Path, resolve: Value, stall: Duration) -> Receiver<Request> {
+    scripted_boardd(socket, move |request| match request.method.as_str() {
+        "caller.resolve" => {
+            std::thread::sleep(stall);
+            Ok(resolve.clone())
+        }
+        "linear.activity.record" => Ok(recorded(&request.params["claims"])),
+        other => Err((3, format!("unexpected {other}"))),
+    })
+}
+
+fn requests(rx: &Receiver<Request>) -> Vec<Request> {
+    let mut seen = Vec::new();
+    while let Ok(request) = rx.recv_timeout(Duration::from_millis(300)) {
+        seen.push(request);
+    }
+    seen
+}
+
+fn record_of(seen: &[Request]) -> LinearActivityRecordParams {
+    let records: Vec<_> = seen
+        .iter()
+        .filter(|r| r.method == "linear.activity.record")
+        .collect();
+    assert_eq!(records.len(), 1, "{seen:?}");
+    serde_json::from_value(records[0].params.clone()).unwrap()
+}
+
+fn resolved_at(pane: &str, workspace: &str) -> Value {
+    json!({"state": "resolved", "location": {
+        "session": "work", "socket": "/tmp/work.sock", "workspace_id": workspace,
+        "tab_id": "w7:t1", "pane_id": pane,
+    }})
+}
+
+fn one_candidate() -> Value {
+    json!({"state": "unconfirmed", "candidates": [{
+        "pane": "work/w7:p3", "session": "work", "socket": "/tmp/work.sock",
+        "workspace_id": "w7", "workspace_label": "api", "tab_id": "w7:t1",
+        "pane_id": "w7:p3", "title": "claude",
+    }]})
+}
+
+fn scripted_report<'a>(
+    dir: &'a Path,
+    socket: &'a Path,
+    claims: &'a [(&'a str, &'a str)],
+) -> Report<'a> {
+    Report {
+        socket,
+        home: dir,
+        cwd: dir,
+        claims,
+    }
+}
+
+fn a_save_comment(cwd: &Path) -> String {
+    payload(
+        "mcp__claude_ai_Linear__save_comment",
+        cwd,
+        content(json!({"id": "c-1"})),
+    )
+}
+
+#[test]
+fn without_herdr_env_or_a_remembered_pane_activity_is_recorded_without_a_space() {
+    let td = TestDaemon::start(&[]);
+    let dir = tempfile::tempdir().unwrap();
+
+    let (out, elapsed) = for_daemon(&td, dir.path(), &[]).run(&a_save_comment(dir.path()));
+
+    assert_silent_success(&out);
+    assert!(elapsed < EXIT_WITHIN, "took {elapsed:?}");
+    let recorded = activity(&td);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].space, None);
+    assert_eq!(recorded[0].claims, ActivityClaims::default());
+}
+
+#[test]
+fn a_remembered_pane_attributes_the_activity_to_its_space_and_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("boardd.sock");
+    let rx = resolving_boardd(&socket, resolved_at("w7:p3", "w7"), Duration::ZERO);
+
+    let (out, _) = scripted_report(dir.path(), &socket, &[]).run(&a_save_comment(dir.path()));
+
+    assert_silent_success(&out);
+    let seen = requests(&rx);
+    let resolve = seen
+        .iter()
+        .find(|r| r.method == "caller.resolve")
+        .expect("no caller.resolve");
+    assert_eq!(resolve.params["claude_session_id"], "s-1");
+    assert!(resolve.params.get("pane").is_none(), "{:?}", resolve.params);
+    let record = record_of(&seen);
+    assert_eq!(record.claims.herdr_workspace_id.as_deref(), Some("w7"));
+    assert_eq!(record.claims.herdr_pane_id.as_deref(), Some("w7:p3"));
+    assert_eq!(
+        record.claims.herdr_socket.as_deref(),
+        Some("/tmp/work.sock")
+    );
+}
+
+#[test]
+fn a_folder_candidate_nobody_confirmed_leaves_the_activity_without_a_space() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("boardd.sock");
+    let rx = resolving_boardd(&socket, one_candidate(), Duration::ZERO);
+
+    let (out, _) = scripted_report(dir.path(), &socket, &[]).run(&a_save_comment(dir.path()));
+
+    assert_silent_success(&out);
+    let seen = requests(&rx);
+    assert!(
+        seen.iter().any(|r| r.method == "caller.resolve"),
+        "{seen:?}"
+    );
+    assert_eq!(record_of(&seen).claims, ActivityClaims::default());
+}
+
+#[test]
+fn full_herdr_env_records_without_asking_the_resolver() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("boardd.sock");
+    let rx = resolving_boardd(&socket, resolved_at("w7:p3", "w7"), Duration::ZERO);
+    let claims = pane_claims();
+
+    let (out, _) = scripted_report(dir.path(), &socket, &claims).run(&a_save_comment(dir.path()));
+
+    assert_silent_success(&out);
+    let seen = requests(&rx);
+    assert!(
+        seen.iter().all(|r| r.method != "caller.resolve"),
+        "{seen:?}"
+    );
+    assert_eq!(
+        record_of(&seen).claims.herdr_pane_id.as_deref(),
+        Some("wA:p2")
+    );
+}
+
+#[test]
+fn a_stalled_resolve_still_records_the_activity_on_a_fresh_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("boardd.sock");
+    let rx = resolving_boardd(&socket, resolved_at("w7:p3", "w7"), Duration::from_secs(4));
+
+    let (out, elapsed) = scripted_report(dir.path(), &socket, &[]).run(&a_save_comment(dir.path()));
+
+    assert_silent_success(&out);
+    assert!(elapsed < EXIT_WITHIN, "took {elapsed:?}");
+    let first = rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("the activity was never recorded");
+    assert_eq!(first.method, "linear.activity.record");
+    let record: LinearActivityRecordParams = serde_json::from_value(first.params).unwrap();
+    assert_eq!(record.claims, ActivityClaims::default());
+}
+
+#[test]
+fn the_resolver_is_asked_about_the_project_dir_before_the_payload_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().canonicalize().unwrap();
+    let sub = project.join("crates/sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let socket = dir.path().join("boardd.sock");
+    let rx = resolving_boardd(&socket, one_candidate(), Duration::ZERO);
+    let claims = [("CLAUDE_PROJECT_DIR", project.to_str().unwrap())];
+
+    let (out, _) = scripted_report(dir.path(), &socket, &claims).run(&a_save_comment(&sub));
+
+    assert_silent_success(&out);
+    let seen = requests(&rx);
+    let resolve = seen
+        .iter()
+        .find(|r| r.method == "caller.resolve")
+        .expect("no caller.resolve");
+    assert_eq!(resolve.params["cwd"], project.to_str().unwrap());
+    assert_eq!(record_of(&seen).cwd.as_deref(), sub.to_str());
 }
