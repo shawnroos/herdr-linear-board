@@ -9,15 +9,16 @@ use crate::protocol::{
     BoardArchiveParams, BoardCreateParams, BoardGetParams, BoardListParams, BoardListResult,
     BoardNotifyParams, BoardNotifyResult, BoardOpenParams, BoardPaneCloseParams,
     BoardPaneCloseResult, BoardPaneOpenParams, BoardPaneOpenResult, BoardRenameParams,
-    BoardSelectParams, BoardSnapshot, CardArchiveParams, CardCreateParams, CardDetail,
-    CardListParams, CardMoveParams, CardUpdateParams, CardVisibility, ColumnCreateParams,
-    ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams, CommentAddParams,
-    CommentDeleteParams, CommentGetParams, CommentHistoryParams, CommentUpdateParams, DaemonStatus,
-    DeletedResult, Event, GroupingConfig, HarnessCapabilitiesParams, HarnessListResult,
-    LinearActivityListParams, LinearActivityListResult, LinearActivityRecordParams,
-    LinearActivityRecordResult, LinearBindParams, LinearChange, LinearGroupingGetParams,
-    LinearGroupingGetResult, LinearGroupingSetParams, LinearIdParams, LinearImportParams,
-    LinearImportResult, LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
+    BoardSelectParams, BoardSnapshot, CallerResolveParams, CallerResolveResult, CardArchiveParams,
+    CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams, CardVisibility,
+    ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
+    CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
+    CommentUpdateParams, DaemonStatus, DeletedResult, Event, GroupingConfig,
+    HarnessCapabilitiesParams, HarnessListResult, LinearActivityListParams,
+    LinearActivityListResult, LinearActivityRecordParams, LinearActivityRecordResult,
+    LinearBindParams, LinearChange, LinearGroupingGetParams, LinearGroupingGetResult,
+    LinearGroupingSetParams, LinearIdParams, LinearImportParams, LinearImportResult,
+    LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
     LinearMarkClearParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
     LinearRemoved, LinearReplace, LinearSessionGetParams, LinearSessionGetResult,
     LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams,
@@ -520,6 +521,12 @@ pub trait BoardClient {
     fn pane_focus(&mut self, p: &PaneFocusParams) -> anyhow::Result<PaneFocusResult> {
         Ok(serde_json::from_value(
             self.call("pane.focus", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn caller_resolve(&mut self, p: &CallerResolveParams) -> anyhow::Result<CallerResolveResult> {
+        Ok(serde_json::from_value(
+            self.call("caller.resolve", serde_json::to_value(p)?)?,
         )?)
     }
 
