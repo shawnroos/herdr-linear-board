@@ -193,7 +193,6 @@ impl FakeBoardClient {
         self
     }
 
-    /// Seed what `caller.resolve` answers.
     pub fn with_caller_resolve(mut self, result: CallerResolveResult) -> FakeBoardClient {
         self.linear.caller = Ok(result);
         self

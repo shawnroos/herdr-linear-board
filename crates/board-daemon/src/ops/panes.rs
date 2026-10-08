@@ -103,15 +103,12 @@ pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<
 
     if pane.is_none() {
         if let Some(id) = claude_session {
-            let remembered = d
-                .caller_locations
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(id)
-                .cloned();
-            if let Some(location) = remembered {
+            if let Some(location) = live_remembered(d, id) {
                 return Ok(json!(CallerResolveResult::Resolved { location }));
             }
+        }
+        if p.remembered_only {
+            return Ok(json!(CallerResolveResult::NotInHerdr));
         }
     }
 
@@ -122,12 +119,14 @@ pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<
     let entries = registry
         .list()
         .map_err(|e| Error::HerdrUnavailable(format!("listing herdr sessions: {e:#}")))?;
-    let only_session = pane.and_then(|v| parse_pane_filter(v).session);
+    let filter = pane.map(parse_pane_filter);
+    let only_session = filter.as_ref().and_then(|f| f.session.as_ref());
+    let only_pane = filter.as_ref().map(|f| f.pane_id.as_str());
     let panes: Vec<CallerPane> = entries
         .iter()
         .filter(|e| e.running && !e.socket_path.is_empty())
-        .filter(|e| only_session.as_ref().is_none_or(|s| *s == e.name))
-        .flat_map(session_caller_panes)
+        .filter(|e| only_session.is_none_or(|s| *s == e.name))
+        .flat_map(|e| session_caller_panes(e, only_pane))
         .collect();
 
     let result = match_caller(&panes, &p.cwd, pane);
@@ -140,12 +139,59 @@ pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<
     Ok(json!(result))
 }
 
-/// Every pane of one session, labelled with its workspace. A session that
-/// cannot be reached or fails the gate is skipped: one dead session must not
-/// hide the caller's pane in another.
-fn session_caller_panes(entry: &crate::session::SessionEntry) -> Vec<CallerPane> {
-    let listed = crate::herdr_conn::connect_checked(Path::new(&entry.socket_path))
-        .and_then(|mut client| Ok((client.pane_list(None)?, client.workspace_list()?)));
+/// The location remembered for `id`, if its pane still exists. A closed pane
+/// or an unreachable session drops the entry, so the caller is asked again.
+fn live_remembered(d: &Arc<Daemon>, id: &str) -> Option<CallerLocation> {
+    let location = d
+        .caller_locations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(id)
+        .cloned()?;
+    let alive = crate::herdr_conn::connect_checked(Path::new(&location.socket))
+        .and_then(|mut client| client.pane_get(&location.pane_id));
+    match alive {
+        Ok(Some(_)) => return Some(location),
+        Ok(None) => {
+            tracing::info!(pane = %location.pane_id, "caller.resolve dropped a closed remembered pane")
+        }
+        Err(error) => tracing::warn!(
+            socket = %location.socket,
+            %error,
+            "caller.resolve dropped a remembered pane it could not reach"
+        ),
+    }
+    let mut locations = d
+        .caller_locations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if locations.get(id) == Some(&location) {
+        locations.remove(id);
+    }
+    None
+}
+
+/// Every pane of one session, labelled with its workspace when one of them
+/// could become a hit. A session that cannot be reached or fails the gate is
+/// skipped: one dead session must not hide the caller's pane in another.
+fn session_caller_panes(
+    entry: &crate::session::SessionEntry,
+    only_pane: Option<&str>,
+) -> Vec<CallerPane> {
+    let may_hit = |pane: &board_herdr::PaneInfo| match only_pane {
+        Some(id) => pane.pane_id == id,
+        None => pane.agent.as_deref() == Some("claude"),
+    };
+    let listed =
+        crate::herdr_conn::connect_checked(Path::new(&entry.socket_path)).and_then(|mut client| {
+            let panes = client.pane_list(None)?;
+            let workspaces = if panes.iter().any(may_hit) {
+                client.workspace_list()?
+            } else {
+                Vec::new()
+            };
+            Ok((panes, workspaces))
+        });
     let (panes, workspaces) = match listed {
         Ok(listed) => listed,
         Err(error) => {

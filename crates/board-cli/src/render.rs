@@ -716,16 +716,8 @@ impl Render for CallerResolveResult {
                     "TITLE".to_string(),
                 ]];
                 rows.extend(candidates.iter().map(|candidate| {
-                    vec![
-                        strip_control_and_format(&candidate.pane),
-                        strip_control_and_format(
-                            candidate
-                                .workspace_label
-                                .as_deref()
-                                .unwrap_or(&candidate.workspace_id),
-                        ),
-                        strip_control_and_format(candidate.title.as_deref().unwrap_or_default()),
-                    ]
+                    let (pane, workspace, title) = crate::caller::candidate_text(candidate);
+                    vec![pane, workspace, title]
                 }));
                 table(out, &rows)
             }

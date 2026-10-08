@@ -13,11 +13,12 @@ mod scope;
 use std::io::Write;
 
 use anyhow::{anyhow, Result};
-use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::client::{BoardClient, UnixClient};
 use clap::{error::ErrorKind, Parser};
 use serde_json::{json, Value};
 
 use args::{Cli, Cmd, DaemonCmd};
+use caller::rpc_error;
 use commands::board::cmd_board;
 use commands::card::{cmd_card, cmd_move};
 use commands::column::cmd_column;
@@ -254,12 +255,6 @@ fn exit_code(error: &anyhow::Error) -> i32 {
         },
         None => CLI_ERROR_CODE,
     }
-}
-
-fn rpc_error(error: &anyhow::Error) -> Option<&RpcClientError> {
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RpcClientError>())
 }
 
 fn render_error(error: &anyhow::Error, json_requested: bool) {

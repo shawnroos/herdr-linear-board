@@ -8,15 +8,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{anyhow, Context, Result};
-use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::client::{BoardClient, UnixClient};
 use board_core::db::clean_owner;
 use board_core::protocol::{
     ActivityClaims, BoardNotifyParams, BoardPaneCloseParams, BoardPaneContext, BoardPaneOpenParams,
-    LinearActivityListParams, LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams,
-    LinearNoteSetParams, LinearOwner, LinearShowRequestParams, LinearShowWithdrawParams,
-    LinearState, LinearStateGetParams, LinearUnbindParams, MarkKind,
+    CallerCandidate, CallerLocation, CallerResolveResult, LinearActivityListParams,
+    LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
+    LinearOwner, LinearShowRequestParams, LinearShowWithdrawParams, LinearState,
+    LinearStateGetParams, LinearUnbindParams, MarkKind,
 };
-use board_core::protocol::{CallerCandidate, CallerLocation, CallerResolveResult};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::caller::{
-    env_id, env_text, resolve, CallerQuery, Source, HERDR_PANE_ID, HERDR_SOCKET_PATH,
-    HERDR_WORKSPACE_ID,
+    candidate_text, env_id, env_text, resolve, rpc_error, CallerQuery, Source, CLAUDE_SESSION_ENV,
+    HERDR_PANE_ID, HERDR_SOCKET_PATH, HERDR_WORKSPACE_ID,
 };
 use crate::commands::canonical_text;
 use crate::daemon::connect_or_start;
@@ -36,7 +36,6 @@ use crate::daemon::connect_or_start;
 /// server's own tools back to the board as Linear writes.
 const SERVER_NAME: &str = "board";
 const ACTIVITY_LIMIT: usize = 500;
-const CLAUDE_SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 const NOT_FOUND: i32 = 2;
 
 pub(crate) fn run() -> Result<()> {
@@ -86,15 +85,10 @@ impl std::fmt::Display for CallerError {
                      These Claude panes run in this session's folder:"
                 )?;
                 for candidate in candidates {
+                    let (pane, workspace, title) = candidate_text(candidate);
                     writeln!(
                         f,
-                        "- pane {:?}: workspace {:?}, title {:?}",
-                        candidate.pane,
-                        candidate
-                            .workspace_label
-                            .as_deref()
-                            .unwrap_or(&candidate.workspace_id),
-                        candidate.title.as_deref().unwrap_or_default()
+                        "- pane {pane:?}: workspace {workspace:?}, title {title:?}"
                     )?;
                 }
                 write!(
@@ -116,21 +110,18 @@ impl std::fmt::Display for CallerError {
 impl std::error::Error for CallerError {}
 
 impl Caller {
-    /// Explicit pane, then env, then the location this process confirmed,
-    /// then boardd. Only a resolved location is cached; an unconfirmed or
-    /// missing one is asked again on the next call.
+    /// Only a resolved location is cached; an unconfirmed or missing one is
+    /// asked again on the next call.
     fn locate(
         confirmed: &Mutex<Option<CallerLocation>>,
         pane: Option<String>,
         client: &mut UnixClient,
     ) -> Result<Caller> {
-        let query = CallerQuery {
-            cwd: canonical_text(PathBuf::from(cwd_or_current(None))),
-            pane: pane
-                .map(|pane| pane.trim().to_string())
-                .filter(|pane| !pane.is_empty()),
-            claude_session_id: env_text(CLAUDE_SESSION_ENV),
-        };
+        let query = CallerQuery::new(
+            canonical_text(PathBuf::from(cwd_or_current(None))),
+            pane,
+            env_text(CLAUDE_SESSION_ENV),
+        );
         let cached = confirmed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -139,7 +130,7 @@ impl Caller {
             (None, Some(location)) => Ok(CallerResolveResult::Resolved { location }),
             _ => client.caller_resolve(params),
         })?;
-        let named = query.pane.is_some();
+        let named = query.pane().is_some();
         match resolution.result {
             CallerResolveResult::Resolved { location } => {
                 if resolution.source == Source::Daemon {
@@ -153,8 +144,8 @@ impl Caller {
                 candidates: Some(candidates),
                 ..Caller::at(None, false)
             }),
-            CallerResolveResult::NotInHerdr => match query.pane {
-                Some(pane) => Err(CallerError::UnknownPane(pane).into()),
+            CallerResolveResult::NotInHerdr => match query.pane() {
+                Some(pane) => Err(CallerError::UnknownPane(pane.to_string()).into()),
                 None => Ok(Caller::at(None, false)),
             },
         }
@@ -210,11 +201,7 @@ impl Caller {
     fn with_note<T: Serialize>(&self, result: T) -> Result<Value> {
         let mut value = serde_json::to_value(result)?;
         if let (Some(candidates), Some(object)) = (&self.candidates, value.as_object_mut()) {
-            let message = CallerError::Unconfirmed(candidates.clone()).to_string();
-            object.insert(
-                "caller".into(),
-                json!({"state": "unconfirmed", "candidates": candidates, "message": message}),
-            );
+            object.insert("caller".into(), unconfirmed_body(candidates));
         }
         Ok(value)
     }
@@ -306,19 +293,19 @@ fn refused(message: &str) -> CallToolResult {
 }
 
 fn rpc_code(error: &anyhow::Error) -> Option<i32> {
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RpcClientError>())
-        .map(|rpc| rpc.code)
+    rpc_error(error).map(|rpc| rpc.code)
+}
+
+fn unconfirmed_body(candidates: &[CallerCandidate]) -> Value {
+    let message = CallerError::Unconfirmed(candidates.to_vec()).to_string();
+    json!({"state": "unconfirmed", "candidates": candidates, "message": message})
 }
 
 fn tool_error(error: &anyhow::Error) -> CallToolResult {
     if let Some(caller) = error.downcast_ref::<CallerError>() {
         let message = caller.to_string();
         let body = match caller {
-            CallerError::Unconfirmed(candidates) => {
-                json!({"state": "unconfirmed", "candidates": candidates, "message": message})
-            }
+            CallerError::Unconfirmed(candidates) => unconfirmed_body(candidates),
             CallerError::UnknownPane(pane) => {
                 json!({"state": "not_in_herdr", "pane": pane, "message": message})
             }
@@ -327,9 +314,7 @@ fn tool_error(error: &anyhow::Error) -> CallToolResult {
         result.content = vec![rmcp::model::ContentBlock::text(message)];
         return result;
     }
-    let rpc = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RpcClientError>());
+    let rpc = rpc_error(error);
     let body = match rpc {
         Some(rpc) => json!({
             "code": rpc.code,

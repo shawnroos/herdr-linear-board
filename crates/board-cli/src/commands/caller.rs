@@ -8,23 +8,17 @@ use board_core::protocol::CallerResolveResult;
 use serde_json::json;
 
 use super::canonical_text;
-use crate::caller::{env_text, resolve, CallerQuery};
+use crate::caller::{env_text, resolve, CallerQuery, CLAUDE_SESSION_ENV};
 use crate::daemon::connect_or_start;
 use crate::render::{emit, emit_line};
 
 pub(crate) fn cmd_caller(pane: Option<String>, json: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("reading the working directory")?;
-    let query = CallerQuery {
-        cwd: canonical_text(cwd),
-        pane: pane
-            .map(|pane| pane.trim().to_string())
-            .filter(|pane| !pane.is_empty()),
-        claude_session_id: env_text("CLAUDE_CODE_SESSION_ID"),
-    };
+    let query = CallerQuery::new(canonical_text(cwd), pane, env_text(CLAUDE_SESSION_ENV));
     let resolution = resolve(&query, env_text, |params| {
         connect_or_start()?.caller_resolve(params)
     })?;
-    match (&resolution.result, &query.pane) {
+    match (&resolution.result, query.pane()) {
         (CallerResolveResult::NotInHerdr, Some(pane)) => emit_line(
             &json!({"state": "not_in_herdr", "pane": pane}),
             json,

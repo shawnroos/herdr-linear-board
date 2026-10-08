@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use crate::protocol::{CallerCandidate, CallerLocation, CallerResolveResult};
 
-/// One herdr pane as the caller-match rule sees it, free of herdr types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallerPane {
     pub session: String,
@@ -17,7 +16,6 @@ pub struct CallerPane {
     pub title: Option<String>,
 }
 
-/// A parsed `pane` argument: `<session>/<pane id>` or a bare pane id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneFilter {
     pub session: Option<String>,
@@ -27,19 +25,10 @@ pub struct PaneFilter {
 /// Pane ids (`w2:p2`) never hold a `/`, so the last `/` separates the session.
 pub fn parse_pane_filter(value: &str) -> PaneFilter {
     let value = value.trim();
-    match value.rsplit_once('/') {
-        Some((session, pane_id)) if !session.is_empty() => PaneFilter {
-            session: Some(session.to_string()),
-            pane_id: pane_id.to_string(),
-        },
-        Some((_, pane_id)) => PaneFilter {
-            session: None,
-            pane_id: pane_id.to_string(),
-        },
-        None => PaneFilter {
-            session: None,
-            pane_id: value.to_string(),
-        },
+    let (session, pane_id) = value.rsplit_once('/').unwrap_or(("", value));
+    PaneFilter {
+        session: (!session.is_empty()).then(|| session.to_string()),
+        pane_id: pane_id.to_string(),
     }
 }
 

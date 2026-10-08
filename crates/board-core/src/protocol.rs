@@ -1063,6 +1063,8 @@ pub struct CallerResolveParams {
     pub pane: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remembered_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

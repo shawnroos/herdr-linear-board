@@ -465,10 +465,11 @@ pane in this order, and stop at the first answer:
 2. **Env.** `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`, only when all three are
    set. No lookup runs.
 3. **A remembered choice.** A pane the caller confirmed earlier, kept by boardd for that Claude
-   session id.
+   session id. boardd checks it with one `pane.get` before using it; a closed pane (or a session
+   that no longer answers) is forgotten and the lookup moves on.
 4. **Folder candidates.** boardd lists every running herdr session (`herdr session list --json`),
-   connects to each through the 0.9.x / protocol-22 gate, reads `pane.list` and `workspace.list`,
-   and keeps the panes whose `agent` is `claude` and whose `cwd` or `foreground_cwd` equals the
+   connects to each through the 0.9.x / protocol-22 gate, reads `pane.list` (and `workspace.list`
+   for the labels, only when the session has a Claude pane), and keeps the panes whose `agent` is `claude` and whose `cwd` or `foreground_cwd` equals the
    caller's folder after canonicalization. A session that cannot be reached is skipped. The lookup
    is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
    `pane.list`; a foreground process named `claude` set it (observed in scenario 46).
@@ -491,7 +492,8 @@ is stored against the caller's Claude session id (`CLAUDE_CODE_SESSION_ID` for `
 from that session, in any process, resolves to it without asking. Nothing is written to SQLite, so
 a daemon restart clears the memory and the agent confirms again. A caller without a Claude session
 id gets no memory. The hooks read the remembered choice but never confirm a pane themselves:
-`board linear report` records activity without a space when nothing is remembered, and
+`board linear report` (like `board linear snapshot`) asks with `remembered_only`, so boardd skips
+the folder lookup, and records activity without a space when nothing is remembered, and
 `board linear session` prints the candidates (or a no-space notice) and exits 0.
 
 **What stays env-only, and why.**

@@ -966,6 +966,39 @@ fn ae3_two_candidates_are_both_named_and_a_retry_opens_beside_the_chosen_one() {
 }
 
 #[test]
+fn the_unconfirmed_error_strips_control_characters_from_candidate_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("fake.sock");
+    let _requests = caller_boardd(
+        &socket,
+        vec![candidate(
+            "default",
+            "w1:p2",
+            "api\u{1b}[0m",
+            "claude \u{1b}[31mred\u{7}",
+        )],
+    );
+    let mut mcp = Mcp::spawn(fake_env(dir.path(), &socket, dir.path(), &NO_HERDR_ENV));
+    mcp.initialize();
+
+    let result = mcp.call("open_board", json!({"issue": "ENG-1"}));
+    let text = error_text(&result);
+    let message = result["structuredContent"]["message"].as_str().unwrap();
+
+    mcp.finish();
+    for rendered in [text.as_str(), message] {
+        assert!(
+            rendered
+                .contains(r#"- pane "default/w1:p2": workspace "api[0m", title "claude [31mred""#),
+            "{rendered}"
+        );
+        for escaped in ["\u{1b}", "\u{7}", "\\u{1b}", "\\u{7}"] {
+            assert!(!rendered.contains(escaped), "{escaped:?} in {rendered}");
+        }
+    }
+}
+
+#[test]
 fn an_unconfirmed_result_is_not_remembered_so_the_next_call_resolves_again() {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("fake.sock");

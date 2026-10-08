@@ -2,9 +2,8 @@ use anyhow::{anyhow, bail, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::paths;
 use board_core::protocol::{
-    CallerLocation, CallerResolveResult, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT,
-    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    CallerLocation, LinearIssueParams, LinearListKind, LinearListParams, LinearSnapshotParams,
+    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use serde_json::json;
 
@@ -13,7 +12,9 @@ use super::canonical_text;
 use crate::args::{
     HarnessCmd, LinearCmd, LinearProjectCmd, LinearSpaceCmd, LinearViewCmd, SessionCmd, SpaceCmd,
 };
-use crate::caller::{env_text, resolve, CallerQuery, Resolution};
+use crate::caller::{
+    env_text, resolve_remembered, CLAUDE_SESSION_ENV, HERDR_SOCKET_PATH, HERDR_WORKSPACE_ID,
+};
 use crate::context::Ctx;
 use crate::helpers::{efforts_str, harness_capabilities, union_efforts};
 use crate::render::{emit, emit_line};
@@ -85,27 +86,18 @@ pub(crate) fn cmd_session(sub: SessionCmd, ctx: &mut Ctx) -> Result<()> {
 
 const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The pane this Claude session confirmed earlier, asked of a running boardd
-/// only. A folder candidate is no location: a snapshot never confirms one.
+/// Asked of a running boardd only: a snapshot never starts one.
 fn remembered_location() -> Option<CallerLocation> {
-    let query = CallerQuery {
-        cwd: canonical_text(std::env::current_dir().ok()?),
-        pane: None,
-        claude_session_id: env_text("CLAUDE_CODE_SESSION_ID"),
-    };
+    let cwd = canonical_text(std::env::current_dir().ok()?);
     let mut client = UnixClient::connect(&paths::socket_path()).ok()?;
     client.set_read_timeout(Some(RESOLVE_TIMEOUT)).ok()?;
-    match resolve(&query, env_text, |params| client.caller_resolve(params)) {
-        Ok(Resolution {
-            result: CallerResolveResult::Resolved { location },
-            ..
-        }) => Some(location),
-        Ok(_) => None,
-        Err(error) => {
-            eprintln!("board linear snapshot: pane lookup failed: {error:#}");
-            None
-        }
-    }
+    resolve_remembered(cwd, env_text(CLAUDE_SESSION_ENV), |params| {
+        client.caller_resolve(params)
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("board linear snapshot: pane lookup failed: {error:#}");
+        None
+    })
 }
 
 pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
@@ -115,9 +107,9 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             // Resolved before connecting, so a missing id never starts a daemon.
             let (workspace_id, origin_socket) = match workspace_id
                 .filter(|id| !id.is_empty())
-                .or_else(|| env_text("HERDR_WORKSPACE_ID"))
+                .or_else(|| env_text(HERDR_WORKSPACE_ID))
             {
-                Some(id) => (id, env_text("HERDR_SOCKET_PATH")),
+                Some(id) => (id, env_text(HERDR_SOCKET_PATH)),
                 None => remembered_location()
                     .map(|location| (location.workspace_id, Some(location.socket)))
                     .ok_or_else(|| anyhow!("no space id given and $HERDR_WORKSPACE_ID is unset"))?,
@@ -136,7 +128,7 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
             let document = with_read_timeout(ctx, LINEAR_ISSUE_CLIENT_TIMEOUT, |client| {
                 client.linear_issue(&LinearIssueParams {
                     issue,
-                    origin_socket: env_text("HERDR_SOCKET_PATH"),
+                    origin_socket: env_text(HERDR_SOCKET_PATH),
                 })
             })?;
             let text = serde_json::to_string_pretty(&document)?;
@@ -169,7 +161,7 @@ fn linear_list(ctx: &mut Ctx, kind: LinearListKind, id: Option<String>) -> Resul
         client.linear_list(&LinearListParams {
             kind,
             id,
-            origin_socket: env_text("HERDR_SOCKET_PATH"),
+            origin_socket: env_text(HERDR_SOCKET_PATH),
         })
     })?;
     emit(&list, json)

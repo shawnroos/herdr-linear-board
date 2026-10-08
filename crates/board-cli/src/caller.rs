@@ -1,8 +1,3 @@
-//! Where a calling agent sits in herdr: an explicit pane, then the
-//! `HERDR_*` environment, then the daemon's `caller.resolve` (a remembered
-//! choice for the Claude session, then a folder lookup that only offers
-//! candidates). Each surface passes its own cwd and Claude session id.
-
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -18,6 +13,7 @@ use crate::commands::canonical_text;
 pub(crate) const HERDR_SOCKET_PATH: &str = "HERDR_SOCKET_PATH";
 pub(crate) const HERDR_PANE_ID: &str = "HERDR_PANE_ID";
 pub(crate) const HERDR_WORKSPACE_ID: &str = "HERDR_WORKSPACE_ID";
+pub(crate) const CLAUDE_SESSION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
 const HERDR_TAB_ID: &str = "HERDR_TAB_ID";
 const DEFAULT_SESSION: &str = "default";
 const HERDR_UNAVAILABLE: i32 = 4;
@@ -32,13 +28,39 @@ pub(crate) fn env_id(key: &str) -> Option<i64> {
     env_text(key).and_then(|value| value.trim().parse().ok())
 }
 
-/// What a caller asks: its own directory, an optional `<session>/<pane id>`
-/// it names on purpose, and its Claude session id.
+pub(crate) fn rpc_error(error: &anyhow::Error) -> Option<&RpcClientError> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<RpcClientError>())
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CallerQuery {
     pub(crate) cwd: String,
-    pub(crate) pane: Option<String>,
+    pane: Option<String>,
     pub(crate) claude_session_id: Option<String>,
+    remembered_only: bool,
+}
+
+impl CallerQuery {
+    pub(crate) fn new(
+        cwd: String,
+        pane: Option<String>,
+        claude_session_id: Option<String>,
+    ) -> CallerQuery {
+        CallerQuery {
+            cwd,
+            pane: pane
+                .map(|pane| pane.trim().to_string())
+                .filter(|pane| !pane.is_empty()),
+            claude_session_id,
+            remembered_only: false,
+        }
+    }
+
+    pub(crate) fn pane(&self) -> Option<&str> {
+        self.pane.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,30 +91,35 @@ pub(crate) fn hook_cwd(payload_cwd: Option<&str>) -> String {
     canonical_text(cwd)
 }
 
-/// Candidates on one line for text a person or an agent reads. Titles are
-/// terminal titles, so every field is stripped of control characters.
+/// A candidate's pane, workspace label (or id) and title for text a person or
+/// an agent reads. Titles are terminal titles, so each is stripped of control
+/// characters.
+pub(crate) fn candidate_text(candidate: &CallerCandidate) -> (String, String, String) {
+    (
+        strip_control_and_format(&candidate.pane),
+        strip_control_and_format(
+            candidate
+                .workspace_label
+                .as_deref()
+                .unwrap_or(&candidate.workspace_id),
+        ),
+        strip_control_and_format(candidate.title.as_deref().unwrap_or_default()),
+    )
+}
+
 pub(crate) fn candidate_list(candidates: &[CallerCandidate]) -> String {
     candidates
         .iter()
         .map(|candidate| {
-            format!(
-                "{} (workspace {}, title {:?})",
-                strip_control_and_format(&candidate.pane),
-                strip_control_and_format(
-                    candidate
-                        .workspace_label
-                        .as_deref()
-                        .unwrap_or(&candidate.workspace_id)
-                ),
-                strip_control_and_format(candidate.title.as_deref().unwrap_or_default())
-            )
+            let (pane, workspace, title) = candidate_text(candidate);
+            format!("{pane} (workspace {workspace}, title {title:?})")
         })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// The env location, only when all three herdr variables are set. A named
-/// session's socket names its session; any other socket is the default one.
+/// A named session's socket names its session; any other socket is the
+/// default one.
 pub(crate) fn env_location(env: impl Fn(&str) -> Option<String>) -> Option<CallerLocation> {
     let socket = env(HERDR_SOCKET_PATH)?;
     let pane_id = env(HERDR_PANE_ID)?;
@@ -115,11 +142,7 @@ pub(crate) fn resolve(
     env: impl Fn(&str) -> Option<String>,
     daemon: impl FnOnce(&CallerResolveParams) -> Result<CallerResolveResult>,
 ) -> Result<Resolution> {
-    let pane = query
-        .pane
-        .as_deref()
-        .map(str::trim)
-        .filter(|pane| !pane.is_empty());
+    let pane = query.pane();
     if pane.is_none() {
         if let Some(location) = env_location(env) {
             return Ok(Resolution {
@@ -132,6 +155,7 @@ pub(crate) fn resolve(
         cwd: query.cwd.clone(),
         pane: pane.map(str::to_string),
         claude_session_id: query.claude_session_id.clone(),
+        remembered_only: query.remembered_only,
     };
     let result = match daemon(&params) {
         Ok(result) => result,
@@ -146,11 +170,26 @@ pub(crate) fn resolve(
     })
 }
 
+/// The env location, or the pane boardd remembers for this Claude session.
+/// For callers that never confirm a pane: a folder candidate is no location,
+/// so boardd is told not to look one up.
+pub(crate) fn resolve_remembered(
+    cwd: String,
+    claude_session_id: Option<String>,
+    daemon: impl FnOnce(&CallerResolveParams) -> Result<CallerResolveResult>,
+) -> Result<Option<CallerLocation>> {
+    let query = CallerQuery {
+        remembered_only: true,
+        ..CallerQuery::new(cwd, None, claude_session_id)
+    };
+    Ok(match resolve(&query, env_text, daemon)?.result {
+        CallerResolveResult::Resolved { location } => Some(location),
+        CallerResolveResult::Unconfirmed { .. } | CallerResolveResult::NotInHerdr => None,
+    })
+}
+
 fn is_herdr_unavailable(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<RpcClientError>())
-        .any(|rpc| rpc.code == HERDR_UNAVAILABLE)
+    rpc_error(error).is_some_and(|rpc| rpc.code == HERDR_UNAVAILABLE)
 }
 
 #[cfg(test)]
@@ -175,11 +214,7 @@ mod tests {
     ];
 
     fn query(pane: Option<&str>) -> CallerQuery {
-        CallerQuery {
-            cwd: "/repo".into(),
-            pane: pane.map(Into::into),
-            claude_session_id: Some("sess".into()),
-        }
+        CallerQuery::new("/repo".into(), pane.map(Into::into), Some("sess".into()))
     }
 
     #[test]
@@ -238,6 +273,26 @@ mod tests {
             Err(anyhow!(RpcClientError::new(1, None, "bad".into(), None)))
         });
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn a_blank_pane_is_no_pane() {
+        assert_eq!(query(Some("  ")).pane(), None);
+        assert_eq!(query(Some(" s/w1:p1 ")).pane(), Some("s/w1:p1"));
+    }
+
+    #[test]
+    fn a_remembered_only_lookup_says_so_and_drops_candidates() {
+        let candidates = CallerResolveResult::Unconfirmed {
+            candidates: Vec::new(),
+        };
+        let location = resolve_remembered("/repo".into(), Some("sess".into()), |params| {
+            assert!(params.remembered_only);
+            assert_eq!(params.pane, None);
+            Ok(candidates)
+        })
+        .unwrap();
+        assert_eq!(location, None);
     }
 
     #[test]

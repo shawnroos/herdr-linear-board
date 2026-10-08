@@ -793,6 +793,11 @@ mod session {
         assert_eq!(resolve.params["claude_session_id"], "claude-1");
         assert_eq!(resolve.params["cwd"], cwd.to_str().unwrap());
         assert!(resolve.params.get("pane").is_none(), "{:?}", resolve.params);
+        assert!(
+            resolve.params.get("remembered_only").is_none(),
+            "the session hook needs the folder candidates: {:?}",
+            resolve.params
+        );
         let get: LinearSessionGetParams = serde_json::from_value(seen[1].params.clone()).unwrap();
         assert_eq!(get.space, "w7");
         assert_eq!(get.herdr_pane_id.as_deref(), Some("w7:p3"));
@@ -905,6 +910,11 @@ mod session {
         let seen = requests(&rx);
         assert_eq!(seen[0].method, "caller.resolve");
         assert_eq!(seen[0].params["claude_session_id"], "claude-1");
+        assert_eq!(
+            seen[0].params["remembered_only"], true,
+            "{:?}",
+            seen[0].params
+        );
         let snapshot: LinearSnapshotParams =
             serde_json::from_value(seen[1].params.clone()).unwrap();
         assert_eq!(snapshot.workspace_id, "w7");

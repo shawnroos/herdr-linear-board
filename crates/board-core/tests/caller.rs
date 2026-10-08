@@ -247,6 +247,7 @@ fn caller_resolve_wire_shape_is_pinned() {
         cwd: "/work/repo".into(),
         pane: None,
         claude_session_id: None,
+        remembered_only: false,
     };
     assert_eq!(
         serde_json::to_value(&params).unwrap(),
@@ -258,6 +259,17 @@ fn caller_resolve_wire_shape_is_pinned() {
     .unwrap();
     assert_eq!(params.pane.as_deref(), Some("default/w1:p1"));
     assert_eq!(params.claude_session_id.as_deref(), Some("abc"));
+    assert!(!params.remembered_only);
+    let remembered_only = CallerResolveParams {
+        cwd: "/work/repo".into(),
+        pane: None,
+        claude_session_id: None,
+        remembered_only: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&remembered_only).unwrap(),
+        json!({"cwd": "/work/repo", "remembered_only": true})
+    );
 
     let resolved = CallerResolveResult::Resolved {
         location: CallerLocation {
@@ -318,6 +330,7 @@ fn the_fake_client_answers_caller_resolve_with_the_seeded_result() {
         cwd: "/work/repo".into(),
         pane: None,
         claude_session_id: Some("abc".into()),
+        remembered_only: false,
     };
     let mut fake = FakeBoardClient::new().unwrap();
     assert_eq!(

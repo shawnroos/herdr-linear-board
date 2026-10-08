@@ -578,6 +578,11 @@ fn a_remembered_pane_attributes_the_activity_to_its_space_and_pane() {
         .find(|r| r.method == "caller.resolve")
         .expect("no caller.resolve");
     assert_eq!(resolve.params["claude_session_id"], "s-1");
+    assert_eq!(
+        resolve.params["remembered_only"], true,
+        "{:?}",
+        resolve.params
+    );
     assert!(resolve.params.get("pane").is_none(), "{:?}", resolve.params);
     let record = record_of(&seen);
     assert_eq!(record.claims.herdr_workspace_id.as_deref(), Some("w7"));

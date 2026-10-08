@@ -11,13 +11,11 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::db::is_issue_identifier;
-use board_core::protocol::{
-    ActivityClaims, CallerLocation, CallerResolveResult, LinearActivityRecordParams,
-};
+use board_core::protocol::{ActivityClaims, CallerLocation, LinearActivityRecordParams};
 use serde_json::Value;
 
 use crate::caller::{
-    env_id, env_text, hook_cwd, resolve, CallerQuery, HERDR_PANE_ID, HERDR_SOCKET_PATH,
+    env_id, env_text, hook_cwd, resolve_remembered, HERDR_PANE_ID, HERDR_SOCKET_PATH,
     HERDR_WORKSPACE_ID,
 };
 use crate::daemon::connect_or_start;
@@ -75,9 +73,7 @@ fn report(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-/// The env location, or the pane this Claude session confirmed earlier. A
-/// hook never confirms one itself, so a folder candidate is no location, and
-/// without a session id there is nothing remembered to ask for.
+/// Without a session id there is nothing remembered to ask for.
 fn remembered_location(
     client: &mut UnixClient,
     payload: &Value,
@@ -90,19 +86,14 @@ fn remembered_location(
     else {
         return Ok(None);
     };
-    let query = CallerQuery {
-        cwd: hook_cwd(payload.get("cwd").and_then(Value::as_str)),
-        pane: None,
-        claude_session_id: Some(claude_session_id.to_string()),
-    };
-    let resolution = resolve(&query, env_text, |params| {
-        client.set_read_timeout(Some(time_left(deadline)?.min(RESOLVE_TIMEOUT)))?;
-        client.caller_resolve(params)
-    })?;
-    Ok(match resolution.result {
-        CallerResolveResult::Resolved { location } => Some(location),
-        CallerResolveResult::Unconfirmed { .. } | CallerResolveResult::NotInHerdr => None,
-    })
+    resolve_remembered(
+        hook_cwd(payload.get("cwd").and_then(Value::as_str)),
+        Some(claude_session_id.to_string()),
+        |params| {
+            client.set_read_timeout(Some(time_left(deadline)?.min(RESOLVE_TIMEOUT)))?;
+            client.caller_resolve(params)
+        },
+    )
 }
 
 fn time_left(deadline: Instant) -> Result<Duration> {

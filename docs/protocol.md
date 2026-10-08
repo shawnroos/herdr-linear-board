@@ -551,21 +551,27 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   (sound `none`) in the caller's own session. `title` and `body` have control and format
   characters stripped first; a title that is empty after that is error 1 before any herdr call.
   Error 4 for an unavailable socket, the protocol gate, or a herdr refusal.
-- `caller.resolve {cwd, pane?, claude_session_id?}` →
+- `caller.resolve {cwd, pane?, claude_session_id?, remembered_only?}` →
   `{state:"resolved", location:{session, socket, workspace_id, tab_id, pane_id}}` |
   `{state:"unconfirmed", candidates:[{pane, session, socket, workspace_id, workspace_label?,
   tab_id, pane_id, title?}]}` | `{state:"not_in_herdr"}` — find the herdr pane a caller runs in
   when its environment has no `HERDR_*` variables. Read-only: herdr only ever receives the
-  protocol gate, `pane.list` and `workspace.list`. The order is:
+  protocol gate, `pane.get`, `pane.list` and `workspace.list`. The order is:
   1. With `pane` (`<session>/<pane id>`, or a bare pane id), boardd lists the panes of that session
      (or of every session for a bare id). Exactly one hit is `resolved`, and when
      `claude_session_id` is given boardd remembers that location for it, replacing any earlier
      one. A bare id found in several sessions is `unconfirmed`; a pane no session lists is
      `not_in_herdr`. Neither is remembered.
-  2. Without `pane`, a location remembered for `claude_session_id` is returned as `resolved`
-     with no herdr call.
-  3. Otherwise boardd lists every running session from `herdr session list --json`, then runs
-     `pane.list` (whole session) and `workspace.list` on each. Panes whose `agent` is `claude`
+  2. Without `pane`, a location remembered for `claude_session_id` is checked with one
+     `pane.get` on its socket and returned as `resolved` while the pane exists. A closed pane or
+     an unreachable session drops the memory, and the lookup continues as if nothing was
+     remembered.
+  3. Without `pane` and with `remembered_only: true` (default `false`, omitted from the wire when
+     false), nothing more is looked up: the answer is `not_in_herdr`. Callers that never confirm a
+     pane themselves, such as `board linear report` and `board linear snapshot`, send it.
+  4. Otherwise boardd lists every running session from `herdr session list --json`, then runs
+     `pane.list` (whole session) on each, and `workspace.list` only on a session that has a pane
+     that could match (a Claude pane, or the pane named by `pane`). Panes whose `agent` is `claude`
      and whose `cwd` or `foreground_cwd` equals `cwd` (both canonicalized) are returned as
      `unconfirmed` candidates, however many there are; none is `not_in_herdr`. A folder match
      never resolves, so a session outside herdr in the same folder cannot take over a pane.
