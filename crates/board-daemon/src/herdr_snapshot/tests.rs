@@ -12,6 +12,7 @@ fn make_pane(pane_id: &str, agent_status: AgentStatus) -> PaneInfo {
         agent: None,
         agent_status,
         cwd: None,
+        foreground_cwd: None,
         title: None,
         focused: false,
         revision: 0,

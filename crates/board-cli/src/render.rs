@@ -11,8 +11,8 @@ use anyhow::Result;
 use board_core::capability::HarnessCapabilities;
 use board_core::model::{Board, Card, Column, Comment, CommentHistory, CommentRecord};
 use board_core::protocol::{
-    BoardSnapshot, CardDetail, DaemonStatus, LinearImportItem, LinearImportKind,
-    LinearImportResult, LinearListEnvelope, LinearListResult, LinearListStatus,
+    BoardSnapshot, CallerResolveResult, CardDetail, DaemonStatus, LinearImportItem,
+    LinearImportKind, LinearImportResult, LinearListEnvelope, LinearListResult, LinearListStatus,
     LinearSessionGetResult, ProjectDetail, ProjectListResult, ProjectOpenResult, SessionListResult,
     SpaceListResult,
 };
@@ -691,6 +691,39 @@ fn import_row(outcome: &str, item: &LinearImportItem, note: String) -> Vec<Strin
         strip_control_and_format(&item.key),
         strip_control_and_format(&note),
     ]
+}
+
+impl Render for CallerResolveResult {
+    fn render(&self, out: &mut dyn Write) -> io::Result<()> {
+        match self {
+            CallerResolveResult::Resolved { location } => writeln!(
+                out,
+                "resolved  {}/{}  workspace {}  tab {}  socket {}",
+                location.session,
+                location.pane_id,
+                location.workspace_id,
+                location.tab_id,
+                location.socket
+            ),
+            CallerResolveResult::Unconfirmed { candidates } => {
+                writeln!(
+                    out,
+                    "unconfirmed: Claude panes in this folder. Confirm the one this session runs in with `board caller --pane <PANE>`."
+                )?;
+                let mut rows = vec![vec![
+                    "PANE".to_string(),
+                    "WORKSPACE".to_string(),
+                    "TITLE".to_string(),
+                ]];
+                rows.extend(candidates.iter().map(|candidate| {
+                    let (pane, workspace, title) = crate::caller::candidate_text(candidate);
+                    vec![pane, workspace, title]
+                }));
+                table(out, &rows)
+            }
+            CallerResolveResult::NotInHerdr => writeln!(out, "not in herdr"),
+        }
+    }
 }
 
 #[cfg(test)]

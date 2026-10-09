@@ -6,6 +6,8 @@
 mod support;
 pub(crate) use support::*;
 
+#[path = "integration/caller.rs"]
+mod caller;
 #[path = "integration/cards.rs"]
 mod cards;
 #[path = "integration/columns.rs"]

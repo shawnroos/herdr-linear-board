@@ -353,8 +353,10 @@ Observed on Herdr 0.9.0 / protocol 22 (2026-09-14), read-only, from a herdr-owne
 pane it owns. `HERDR_PLUGIN_CONTEXT_JSON` (`PluginInvocationContext` in
 `herdr api schema --json`) is set only for a pane opened by `plugin pane open`, and
 every field in it is nullable, `workspace_id` included. The board therefore reads
-`HERDR_WORKSPACE_ID` first and the context's `workspace_id` second; a directory is
-never used as a space identity.
+`HERDR_WORKSPACE_ID` first and the context's `workspace_id` second. A directory alone is
+never a space identity: when a Claude session has lost these variables, its folder only yields
+candidate panes that the caller must confirm (see "Finding the caller's pane without herdr env"
+below).
 
 **How the CLI selects a session.** Three mechanisms, in the order the CLI applies them:
 
@@ -443,6 +445,78 @@ Linear's GraphQL `CustomView` exposes its board grouping through `viewPreference
 (`issueGrouping`, `issueSubGrouping`, `issueNesting`, `layout`, `hiddenColumns`, `hiddenRows`,
 `columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
 schema, 2026-09-29).
+
+## Finding the caller's pane without herdr env (observed 2026-10-08)
+
+**Why env is not enough.** Claude Code pre-starts "warm spare" sessions from its own daemon. A
+`claude` typed in a herdr pane can take over a spare, and that session's tools, hooks and MCP
+servers then run without any `HERDR_*` variable, although the pane's shell has them. Reproduced on
+the host with Claude Code 2.1.294 and herdr 0.9.3: a plain shell in the pane printed
+`HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`; the claimed session's `env` held none
+of them. The upstream report is [upstream/claude-code-spare-env.md](upstream/claude-code-spare-env.md).
+
+**The order the board applies.** `board mcp`, `board caller` and the Linear hooks find the caller's
+pane in this order, and stop at the first answer:
+
+1. **An explicit pane.** The caller passes `pane` (an MCP tool argument, or `board caller --pane`)
+   as `<session>/<pane id>`. It wins over env, because the caller named it on purpose and a nested
+   session can inherit a parent's pane id. Pane ids repeat across herdr sessions (`w1:p2` exists in
+   each), so the session name qualifies it.
+2. **Env.** `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`, only when all three are
+   set. No lookup runs.
+3. **A remembered choice.** A pane the caller confirmed earlier, kept by boardd for that Claude
+   session id. boardd checks it with one `pane.get` before using it. A pane herdr reports gone is
+   forgotten. A session that does not answer keeps the memory, but the memory is not used for that
+   call. Either way the lookup moves on.
+4. **Folder candidates.** boardd lists every running herdr session (`herdr session list --json`),
+   connects to each through the 0.9.x / protocol-22 gate, reads `pane.list` (and `workspace.list`
+   for the labels, only when the session has a Claude pane), and keeps the panes whose `agent` is `claude` and whose `cwd` or `foreground_cwd` equals the
+   caller's folder after canonicalization. A session that cannot be reached, or does not answer
+   within about 2 s, is skipped; the sessions are asked one after another, so a hung session
+   costs a lookup about that long. Candidate titles and workspace labels have control and format
+   characters stripped. The lookup is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
+   `pane.list`; a foreground process named `claude` set it (observed in scenario 46).
+
+**It never guesses.** A folder match is an `unconfirmed` answer, even when exactly one pane
+matches: a Claude session outside herdr in the same folder would otherwise take over another
+pane's identity, and a wrong pane misattributes writes and opens the board in someone else's tab.
+A tool that needs the caller's pane refuses with the candidates and tells the agent to ask the
+person which one is this session (or whether it runs in herdr at all) before passing `pane`. A
+shell pane, whose agent is not `claude`, is never a candidate.
+
+**Which folder.** `board mcp` and `board caller` use their process cwd. The hooks use
+`CLAUDE_PROJECT_DIR` (the session's launch directory) first, then the hook payload's `cwd`: herdr's
+pane cwd is where `claude` started, and a session that later moved into a subdirectory or worktree
+would otherwise stop matching.
+
+**The remembered choice lives in boardd's memory.** A pane that resolves through an explicit `pane`
+is stored against the caller's Claude session id (`CLAUDE_CODE_SESSION_ID` for `board mcp` and
+`board caller`, the payload's `session_id` for hooks; the two are the same value). Every later call
+from that session, in any process, resolves to it without asking the person. `board mcp` asks
+boardd on every call, so boardd's `pane.get` check runs each time; only without a Claude session
+id does `board mcp` keep the confirmed pane in its own process. Nothing is written to SQLite, so
+a daemon restart clears the memory and the agent confirms again. A caller without a Claude session
+id gets no memory. The hooks read the remembered choice but never confirm a pane themselves:
+`board linear report` (like `board linear snapshot`) asks with `remembered_only`, so boardd skips
+the folder lookup, and records activity without a space when nothing is remembered, and
+`board linear session` prints the candidates (or a no-space notice) and exits 0. With `--json`
+that is `{"state":"unconfirmed","candidates":[...]}` or `{"state":"not_in_herdr","reason":...}`
+instead of the session document, which has no `state` field. A `board mcp` tool whose lookup
+fails without a named pane (an older boardd that lacks `caller.resolve`, say) logs the error to
+stderr and runs with the env claims alone.
+
+**What stays env-only, and why.**
+
+- `board done` and `board comment` (the run-identity check). The daemon treats a pane match as
+  proof that the caller is that run's agent, so an inferred pane would widen trust. Panes the daemon
+  spawns always carry env.
+- The TUI, `board tui --session` and the scope path. They run in panes herdr starts itself, with
+  full env.
+- `board linear status-line`. Its 200 ms budget cannot hold a daemon round trip plus one
+  herdr call per session.
+
+Env that is present but wrong (a nested or background session carrying a parent's
+`HERDR_PANE_ID`, above) is out of reach: env comes before any lookup, so the board cannot detect it.
 
 ## Herdr 0.9.3 against the 0.9.0 schema (observed 2026-10-05)
 

@@ -68,7 +68,8 @@ at each operation boundary rather than treated as a one-time startup check:
   gated.
 - New pane operations are checked before `pane.get`/`pane.focus` for `run.focus` and `pane.focus`,
   `pane.get`/`plugin.pane.open`/`plugin.pane.close` for `board.pane.open` and `board.pane.close`,
-  `notification.show` for `board.notify`,
+  `notification.show` for `board.notify`, `pane.list`/`workspace.list` in each session for
+  `caller.resolve`,
   `pane.rename` for `pane.set_title`, `session.snapshot` for the `linear.snapshot` pane-status read, and `pane.list`/`pane.layout`/`pane.split`/`pane.rename`, agent calls, and the
   configured runner used by placement and rescue.
 
@@ -101,7 +102,7 @@ and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
 `space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
-`board.pane.open`, `board.pane.close`, `board.notify`,
+`board.pane.open`, `board.pane.close`, `board.notify`, `caller.resolve`,
 `linear.snapshot`, `linear.list`, `linear.issue`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.space.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
 `linear.note.*`, `linear.show.*`, `linear.session.get`, `linear.activity.*`, `linear.import`), in addition to the
@@ -550,6 +551,37 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   (sound `none`) in the caller's own session. `title` and `body` have control and format
   characters stripped first; a title that is empty after that is error 1 before any herdr call.
   Error 4 for an unavailable socket, the protocol gate, or a herdr refusal.
+- `caller.resolve {cwd, pane?, claude_session_id?, remembered_only?}` →
+  `{state:"resolved", location:{session, socket, workspace_id, tab_id, pane_id}}` |
+  `{state:"unconfirmed", candidates:[{pane, session, socket, workspace_id, workspace_label?,
+  tab_id, pane_id, title?}]}` | `{state:"not_in_herdr"}` — find the herdr pane a caller runs in
+  when its environment has no `HERDR_*` variables. Read-only: herdr only ever receives the
+  protocol gate, `pane.get`, `pane.list` and `workspace.list`. The order is:
+  1. With `pane` (`<session>/<pane id>`, or a bare pane id), boardd lists the panes of that session
+     (or of every session for a bare id). Exactly one hit is `resolved`, and when
+     `claude_session_id` is given boardd remembers that location for it, replacing any earlier
+     one. A bare id found in several sessions is `unconfirmed`; a pane no session lists is
+     `not_in_herdr`. Neither is remembered.
+  2. Without `pane`, a location remembered for `claude_session_id` is checked with one
+     `pane.get` on its socket and returned as `resolved` while the pane exists. A pane herdr
+     reports gone drops the memory. A session that cannot be reached keeps it, but it is not used
+     for this call. Either way the lookup continues as if nothing was remembered.
+  3. Without `pane` and with `remembered_only: true` (default `false`, omitted from the wire when
+     false), nothing more is looked up: the answer is `not_in_herdr`. Callers that never confirm a
+     pane themselves, such as `board linear report` and `board linear snapshot`, send it.
+  4. Otherwise boardd lists every running session from `herdr session list --json`, then runs
+     `pane.list` (whole session) on each, and `workspace.list` only on a session that has a pane
+     that could match (a Claude pane, or the pane named by `pane`). Panes whose `agent` is `claude`
+     and whose `cwd` or `foreground_cwd` equals `cwd` (both canonicalized) are returned as
+     `unconfirmed` candidates, however many there are; none is `not_in_herdr`. A folder match
+     never resolves, so a session outside herdr in the same folder cannot take over a pane.
+  `candidates[].pane` is the `<session>/<pane id>` value to send back as `pane`, and `socket` is
+  the session's socket as the registry lists it, because pane ids repeat across sessions. A
+  session that cannot be reached, fails the protocol gate, or does not answer within about 2 s is
+  skipped and logged, never an error. Candidate `title` and `workspace_label` have control and
+  format characters stripped. The memory lives in the daemon process only and is cleared by a restart. A
+  `claude_session_id` that is not 1 to 128 ASCII letters, digits, `_ - .` is error 1 before any
+  herdr call; a daemon without herdr, or a failed session listing, is error 4.
 
 ### linear
 

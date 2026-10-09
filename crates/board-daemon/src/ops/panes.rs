@@ -1,6 +1,7 @@
 //! Pane operations in the **caller's own** herdr session: `pane.set_title`,
 //! `pane.focus`, the agent-opened board (`board.pane.open`/`board.pane.close`)
-//! and `board.notify`.
+//! and `board.notify`, plus `caller.resolve`, the read-only search for the
+//! pane a caller runs in across every herdr session.
 //!
 //! The daemon owns every Herdr interaction (`AGENTS.md`), so a client that
 //! wants its own pane border relabelled asks for it here instead of shelling
@@ -12,9 +13,14 @@ use super::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use board_core::db::NewBoardPane;
-use board_herdr::{NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement};
+use board_core::engine::{match_caller, parse_pane_filter, CallerPane};
+use board_core::text::strip_control_and_format;
+use board_herdr::{
+    NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement, SocketDeadlines,
+};
 
 /// Rename `pane_id` in the session `origin_socket` belongs to.
 ///
@@ -82,6 +88,164 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
         focused: true,
         gone: false,
     }))
+}
+
+/// Find the herdr pane a caller runs in, read-only. A pane the caller names
+/// resolves and is remembered for its Claude session; without one, the
+/// remembered pane wins, and otherwise a folder lookup across every running
+/// session only offers candidates.
+pub(super) fn caller_resolve(d: &Arc<Daemon>, p: CallerResolveParams) -> Result<Value> {
+    let claude_session = p
+        .claude_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = claude_session {
+        check_claude_session_id(id)?;
+    }
+    let pane = p.pane.as_deref().map(str::trim).filter(|v| !v.is_empty());
+
+    if pane.is_none() {
+        if let Some(id) = claude_session {
+            if let Some(location) = live_remembered(d, id) {
+                return Ok(json!(CallerResolveResult::Resolved { location }));
+            }
+        }
+        if p.remembered_only {
+            return Ok(json!(CallerResolveResult::NotInHerdr));
+        }
+    }
+
+    let registry = d
+        .session_registry
+        .as_ref()
+        .ok_or_else(|| Error::HerdrUnavailable("herdr not connected".into()))?;
+    let entries = registry
+        .list()
+        .map_err(|e| Error::HerdrUnavailable(format!("listing herdr sessions: {e:#}")))?;
+    let filter = pane.map(parse_pane_filter);
+    let only_session = filter.as_ref().and_then(|f| f.session.as_ref());
+    let only_pane = filter.as_ref().map(|f| f.pane_id.as_str());
+    let panes: Vec<CallerPane> = entries
+        .iter()
+        .filter(|e| e.running && !e.socket_path.is_empty())
+        .filter(|e| only_session.is_none_or(|s| *s == e.name))
+        .flat_map(|e| session_caller_panes(e, only_pane))
+        .collect();
+
+    let result = match_caller(&panes, &p.cwd, pane);
+    if let (Some(id), CallerResolveResult::Resolved { location }) = (claude_session, &result) {
+        d.caller_locations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id.to_string(), location.clone());
+    }
+    Ok(json!(result))
+}
+
+/// One herdr session's share of a `caller.resolve`: a session that accepts
+/// and never answers costs about this long instead of the 30 s default read.
+const CALLER_DEADLINES: SocketDeadlines = SocketDeadlines {
+    connect: Duration::from_secs(2),
+    read: Duration::from_secs(2),
+    write: Duration::from_secs(2),
+    handshake: Duration::from_secs(2),
+    request: Duration::from_secs(2),
+    method_grace: Duration::from_secs(1),
+};
+
+fn connect_for_caller(socket: &str) -> board_herdr::Result<board_herdr::HerdrClient> {
+    crate::herdr_conn::connect_checked_within(Path::new(socket), CALLER_DEADLINES)
+}
+
+/// The location remembered for `id`, if its pane still exists. Only herdr
+/// reporting the pane gone drops the entry, so the caller is asked again; a
+/// session that cannot be reached keeps it but it is not used for this call.
+fn live_remembered(d: &Arc<Daemon>, id: &str) -> Option<CallerLocation> {
+    let location = d
+        .caller_locations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(id)
+        .cloned()?;
+    let alive = connect_for_caller(&location.socket)
+        .and_then(|mut client| client.pane_get(&location.pane_id));
+    match alive {
+        Ok(Some(_)) => return Some(location),
+        Ok(None) => {
+            tracing::info!(pane = %location.pane_id, "caller.resolve dropped a closed remembered pane")
+        }
+        Err(error) => {
+            tracing::warn!(
+                socket = %location.socket,
+                %error,
+                "caller.resolve could not reach a remembered pane; skipping it for this call"
+            );
+            return None;
+        }
+    }
+    let mut locations = d
+        .caller_locations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if locations.get(id) == Some(&location) {
+        locations.remove(id);
+    }
+    None
+}
+
+/// Every pane of one session, labelled with its workspace when one of them
+/// could become a hit. A session that cannot be reached or fails the gate is
+/// skipped: one dead session must not hide the caller's pane in another.
+fn session_caller_panes(
+    entry: &crate::session::SessionEntry,
+    only_pane: Option<&str>,
+) -> Vec<CallerPane> {
+    let may_hit = |pane: &board_herdr::PaneInfo| match only_pane {
+        Some(id) => pane.pane_id == id,
+        None => pane.agent.as_deref() == Some("claude"),
+    };
+    let listed = connect_for_caller(&entry.socket_path).and_then(|mut client| {
+        let panes = client.pane_list(None)?;
+        let workspaces = if panes.iter().any(may_hit) {
+            client.workspace_list()?
+        } else {
+            Vec::new()
+        };
+        Ok((panes, workspaces))
+    });
+    let (panes, workspaces) = match listed {
+        Ok(listed) => listed,
+        Err(error) => {
+            tracing::warn!(
+                session = %entry.name,
+                socket = %entry.socket_path,
+                %error,
+                "caller.resolve skipped a herdr session"
+            );
+            return Vec::new();
+        }
+    };
+    let labels: BTreeMap<String, String> = workspaces
+        .into_iter()
+        .map(|w| (w.workspace_id, strip_control_and_format(&w.label)))
+        .filter(|(_, label)| !label.is_empty())
+        .collect();
+    panes
+        .into_iter()
+        .map(|pane| CallerPane {
+            session: entry.name.clone(),
+            socket: entry.socket_path.clone(),
+            workspace_label: labels.get(&pane.workspace_id).cloned(),
+            workspace_id: pane.workspace_id,
+            tab_id: pane.tab_id,
+            pane_id: pane.pane_id,
+            agent: pane.agent,
+            cwd: pane.cwd,
+            foreground_cwd: pane.foreground_cwd,
+            title: pane.title.map(|title| strip_control_and_format(&title)),
+        })
+        .collect()
 }
 
 const BOARD_PLUGIN_ID: &str = "herdr-board";
@@ -179,18 +343,24 @@ fn session_identity(p: &BoardPaneOpenParams) -> Result<ShowEnv> {
         env.push(("BOARD_SESSION_CWD", cwd.clone()));
     }
     if let Some(id) = &p.claude_session_id {
-        let ok = (1..=MAX_CLAUDE_SESSION_ID).contains(&id.len())
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
-        if !ok {
-            return Err(Error::BadRequest(format!(
-                "claude session id {id:?} is not a session id"
-            )));
-        }
+        check_claude_session_id(id)?;
         env.push(("BOARD_SESSION_CLAUDE", id.clone()));
     }
     Ok(env)
+}
+
+fn check_claude_session_id(id: &str) -> Result<()> {
+    let ok = (1..=MAX_CLAUDE_SESSION_ID).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::BadRequest(format!(
+            "claude session id {id:?} is not a session id"
+        )))
+    }
 }
 
 fn origin_socket_key(origin_socket: &str) -> Result<(PathBuf, String)> {

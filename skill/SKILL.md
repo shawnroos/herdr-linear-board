@@ -311,7 +311,12 @@ board import work-store [--dry-run]
 - `board linear session [WORKSPACE_ID]` prints what the board knows about this agent session:
   `{space, space_bound, binding, column, marks, pending_requests}`. The space defaults to
   `$HERDR_WORKSPACE_ID`, the session to `$HERDR_SOCKET_PATH`, and the worktree to the current
-  directory. It never starts the daemon; when boardd is down it fails with the socket path.
+  directory. It never starts the daemon; when boardd is down and a space was given, it fails
+  with the socket path. With no space (no argument and incomplete `HERDR_*` env) it looks up this
+  session's pane instead and exits 0 even when boardd is down. When no pane is confirmed it
+  prints `{"state":"unconfirmed","candidates":[...]}` or `{"state":"not_in_herdr","reason":...}`
+  instead of the session document. The session document has no `state` field, so branch on
+  `state`, not on the exit code.
 - `board linear status-line` prints one line for Claude Code's status line, for example
   `ENG-148 · In progress · 12m · !? · ◉1`: the bound issue, its column, how long the worktree
   has been bound, the issue's mark glyphs, and the space's pending show-requests. Other outputs:
@@ -343,8 +348,19 @@ board import work-store [--dry-run]
 (`claude mcp add --scope user board -- board mcp`). Each tool forwards to boardd, starting it when
 it is not running. Use these tools for links, marks, notes, notifications, show-requests and
 boards; use Linear's MCP server for anything that changes Linear. Ownership comes
-from the server's environment: `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `CLAUDE_CODE_SESSION_ID`.
-A call with none of them owns nothing, and only the person can clear what it writes.
+from the herdr pane this session runs in, plus `CLAUDE_CODE_SESSION_ID`. The pane comes from
+`HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID` when all three are set. When they are
+missing, boardd looks for Claude panes in this session's folder. `open_board`, `close_board`,
+`notify`, and a tool that needs a `space` you did not pass, then fail with an "unconfirmed" error
+that lists them; with an explicit `space` the call proceeds without a pane, and `bind`/`unbind` proceed and
+add the candidates under `caller`. `board caller --pane X` prints `{"state":"not_in_herdr","pane":X}`
+when no session lists X. Ask the person whether this session runs in one of those panes
+(or in herdr at all). Only after they confirm one, call again with `pane` set to its
+`<session>/<pane id>` value; boardd remembers it for this Claude session, so later calls need no
+`pane`. If the person says this session is not in herdr, call again with an explicit `space`.
+`board caller --json` shows the candidates read-only, without calling a tool. A `pane` always
+overrides the environment. A call with no pane and no claims owns nothing,
+and only the person can clear what it writes.
 
 | Tool | Does |
 |---|---|
@@ -358,6 +374,9 @@ A call with none of them owns nothing, and only the person can clear what it wri
 | `ask_to_show {issue, reason?}` | Ask the person to look at an issue. Asking again refreshes your request. It expires if nobody acts on it. |
 | `withdraw_show {issue}` | Withdraw your own pending request. |
 | `open_board` / `close_board` | Open a board beside your pane or in a new tab without taking focus, and close it. With `session: true`, open or close this session's side pane instead: your bound issue, your lane, or the bind hint. |
+
+Every tool also takes an optional `pane` (`<session>/<pane id>`), and `space` defaults to the
+workspace of this session's pane.
 
 Agents point; the person moves the view. No tool focuses a pane, moves the selection, or accepts a
 request. The view moves to an issue only when the person accepts its request. An agent cannot set a
@@ -374,6 +393,7 @@ board daemon stop [--json]
 board daemon status [--json]
 board version [--json]
 board skill
+board caller [--pane SESSION/PANE] [--json]
 ```
 
 - `board tui` opens the kanban TUI, auto-starting boardd. `board tui --session` is the session
@@ -388,6 +408,14 @@ board skill
 - `board version --json` never starts boardd and reports `{cli_version, daemon_version}`. The daemon
   value is `null`/`unavailable` when boardd is offline; use daemon status for liveness and run counts.
 - `board skill` prints this exact checked-in `skill/SKILL.md` file, byte-for-byte, with no JSON wrapper.
+- `board caller --json` reports the herdr pane this session runs in, read-only:
+  `{"state":"resolved","location":{session, socket, workspace_id, tab_id, pane_id}}`,
+  `{"state":"unconfirmed","candidates":[{pane, session, socket, workspace_id, workspace_label,
+  tab_id, pane_id, title}]}` or `{"state":"not_in_herdr"}`, exit 0 for each. With
+  `HERDR_SOCKET_PATH`, `HERDR_PANE_ID` and `HERDR_WORKSPACE_ID` all set and no `--pane`, it prints
+  that location without contacting boardd. Otherwise it asks boardd (starting it) with the current
+  directory and `CLAUDE_CODE_SESSION_ID`. `--pane <session>/<pane id>` confirms a candidate the
+  person chose; boardd remembers it for the Claude session until it restarts.
 
 ### JSON and errors
 

@@ -15,6 +15,7 @@ fn card_tab_reconstruction_requires_a_durable_owned_pane_not_a_label() {
         agent_status: AgentStatus::Unknown,
         title: None,
         cwd: None,
+        foreground_cwd: None,
         focused: false,
         revision: 1,
     };
@@ -51,6 +52,7 @@ fn card_tab_reconstruction_prefers_newest_durable_pane_order_not_snapshot_order(
         agent_status: AgentStatus::Unknown,
         title: None,
         cwd: None,
+        foreground_cwd: None,
         focused: false,
         revision: 1,
     };
@@ -197,6 +199,7 @@ fn shared_pane_after_reuse_still_resolves_one_owned_tab() {
         agent_status: AgentStatus::Unknown,
         title: None,
         cwd: None,
+        foreground_cwd: None,
         focused: false,
         revision: 1,
     };

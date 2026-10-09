@@ -483,3 +483,44 @@ pub(crate) fn run_board_stop(socket: &Path) -> std::process::Output {
         .output()
         .expect("run board daemon --stop")
 }
+
+/// A boardd stand-in that accepts any number of connections and answers every
+/// request on each with `reply`: `Ok(result)` or `Err((code, message))`. Each
+/// request is sent to the returned channel in the order it arrived.
+pub(crate) fn scripted_boardd(
+    socket: &Path,
+    reply: impl Fn(&Request) -> Result<Value, (i32, String)> + Send + Sync + 'static,
+) -> std::sync::mpsc::Receiver<Request> {
+    let listener = UnixListener::bind(socket).expect("bind scripted boardd");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reply = Arc::new(reply);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let (tx, reply) = (tx.clone(), Arc::clone(&reply));
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut writer = stream;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let request: Request =
+                        serde_json::from_str(line.trim_end()).expect("board request");
+                    let response = match reply(&request) {
+                        Ok(result) => Response::ok(request.id.clone(), result),
+                        Err((code, message)) => Response::err(request.id.clone(), code, message),
+                    };
+                    let mut wire = serde_json::to_string(&response).expect("serialize reply");
+                    wire.push('\n');
+                    let _ = tx.send(request);
+                    if writer.write_all(wire.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    rx
+}

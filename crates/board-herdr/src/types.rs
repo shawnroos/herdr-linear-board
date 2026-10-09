@@ -116,6 +116,9 @@ pub struct PaneInfo {
     pub title: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Absent before herdr 0.9.3.
+    #[serde(default)]
+    pub foreground_cwd: Option<String>,
     pub focused: bool,
     pub revision: u64,
 }

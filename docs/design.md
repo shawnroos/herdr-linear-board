@@ -951,9 +951,47 @@ space whose store exists says so and names the command. Install and cut-over ste
 [install.md](install.md) → Linear mode and agent tools.
 
 **Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
-`workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
+`workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory alone. `BOARD_SCOPE_PATH` is
 ignored in Linear mode with one line on stderr. Outside herdr neither variable is set and the
 upstream board runs unchanged.
+
+**The caller's pane.** An agent's tools need to know which herdr pane they run in: `open_board`
+splits beside it, and marks, notes and Linear activity are recorded under its space. Claude Code
+can start a session from a pre-started "warm spare" whose tools, hooks and MCP servers have no
+`HERDR_*` variables, although the pane's shell has them. So `board mcp`, `board caller`,
+`board linear report`, `board linear session` and `board linear snapshot` resolve the caller in a
+fixed order:
+
+```text
+explicit pane (`<session>/<pane id>`)   wins over env; the caller named it on purpose
+  → env (HERDR_PANE_ID + HERDR_WORKSPACE_ID + HERDR_SOCKET_PATH, all three)   no lookup
+  → boardd caller.resolve
+      → the pane this Claude session confirmed earlier (daemon memory)
+      → folder lookup across every herdr session: Claude panes whose cwd or foreground_cwd
+        is the caller's folder  → always "unconfirmed" candidates, never a location
+```
+
+The board never guesses between candidates, and never uses even a single match until the caller
+confirms it: a wrong pane misattributes writes and opens the board in someone else's tab. An MCP
+tool that needs the pane refuses with the candidates and tells the agent to ask the person; the
+retry passes `pane`. Shell callers use `board caller --json [--pane X]`, which prints `resolved`,
+`unconfirmed` or `not_in_herdr`.
+
+A pane confirmed with `pane` is remembered by boardd in memory, keyed by the Claude session id, so
+later calls from any process of that session resolve without asking, after one `pane.get` shows
+the pane still exists. A pane herdr reports gone is forgotten; a session that does not answer
+keeps the memory but it is not used for that call. Nothing is written to SQLite; a daemon restart
+clears it. The hooks use `CLAUDE_PROJECT_DIR` (where the session started, which is
+the pane's cwd) before the payload's `cwd`, read the remembered choice, and never confirm a pane:
+`linear report` records activity without a space, and `linear session` prints the candidates or a
+no-space notice and exits 0.
+
+Some surfaces stay env-only. `board done` and `board comment` keep `HERDR_PANE_ID` alone, because
+the daemon treats a pane match as proof of run identity and an inferred pane would widen that
+trust; daemon-spawned agent panes always carry env. The TUI and `board tui --session` run in panes
+herdr starts with full env. `board linear status-line` has a 200 ms budget that a daemon round trip
+plus one herdr call per session cannot meet. Field notes are in [herdr.md](herdr.md) → Finding the
+caller's pane without herdr env.
 
 **Mode decision.** `board tui` decides the mode before any store write. With a space id the CLI
 opens the daemon client and starts the TUI in Linear mode; the upstream path, which persists a
@@ -1020,7 +1058,8 @@ that code as not retryable.
 
 `board linear snapshot [workspace-id] [--json]` is the same read from the command line and prints
 the document as JSON either way. With no positional it reads the space from
-`HERDR_WORKSPACE_ID`, before it connects to the daemon, so a missing id never starts one.
+`HERDR_WORKSPACE_ID`; without that it asks an already running daemon for the pane this Claude
+session confirmed, and never starts one, so a missing id still exits 64.
 `board linear issue <ID>` is the issue read.
 
 **Lists.** `linear.list {kind, id?}` answers three lists: `spaces` (every herdr space of the

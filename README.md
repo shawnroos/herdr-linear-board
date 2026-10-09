@@ -278,6 +278,7 @@ selected/current board.
 | `board linear` | `snapshot [WORKSPACE_ID]`, `issue <ID>`, `space list`, `project list`, `view list <PROJECT_ID>`, `session [WORKSPACE_ID]`, `status-line`, `report` |
 | `board import` | `work-store [--dry-run]` |
 | `board mcp` | the stdio MCP server for agents (see the skill) |
+| `board caller [--pane SESSION/PANE]` | show the herdr pane this session runs in: `resolved`, `unconfirmed` (with candidates to confirm) or `not_in_herdr` |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -317,7 +318,7 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–45);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–46);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development

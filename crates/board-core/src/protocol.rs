@@ -1054,6 +1054,52 @@ pub struct PaneFocusResult {
     pub gone: bool,
 }
 
+/// `caller.resolve` params: where a calling agent sits when its env lacks
+/// herdr's variables. `pane` is `<session>/<pane id>` or a bare pane id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerResolveParams {
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remembered_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerLocation {
+    pub session: String,
+    pub socket: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+}
+
+/// A pane a folder lookup offers. `pane` is the `<session>/<pane id>` value
+/// the caller passes back to confirm it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerCandidate {
+    pub pane: String,
+    pub session: String,
+    pub socket: String,
+    pub workspace_id: String,
+    pub workspace_label: Option<String>,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub title: Option<String>,
+}
+
+/// `caller.resolve` result. A folder match is always `Unconfirmed`, however
+/// many panes match; only a pane the caller named resolves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CallerResolveResult {
+    Resolved { location: CallerLocation },
+    Unconfirmed { candidates: Vec<CallerCandidate> },
+    NotInHerdr,
+}
+
 /// What an agent-opened board shows: a space, an issue, a card, or a mix.
 /// The daemon shape-checks every field and requires at least one. `session`
 /// asks for the session side pane of the calling agent instead.

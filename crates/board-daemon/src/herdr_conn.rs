@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use board_herdr::HerdrClient;
+use board_herdr::{HerdrClient, SocketDeadlines};
 
 /// Connect to `socket` and require the pinned Herdr protocol before any other
 /// request can reach it.
@@ -17,7 +17,15 @@ use board_herdr::HerdrClient;
 /// `ProbeFailure` in the supervisor, `board_herdr::Result` in the watchers)
 /// while the gate itself stays identical everywhere.
 pub(crate) fn connect_checked(socket: &Path) -> board_herdr::Result<HerdrClient> {
-    let mut client = HerdrClient::connect(socket)?;
+    connect_checked_within(socket, SocketDeadlines::default())
+}
+
+/// [`connect_checked`] with the client's socket deadlines set by the caller.
+pub(crate) fn connect_checked_within(
+    socket: &Path,
+    deadlines: SocketDeadlines,
+) -> board_herdr::Result<HerdrClient> {
+    let mut client = HerdrClient::connect_with_deadlines(socket, deadlines)?;
     client.require_supported_protocol()?;
     Ok(client)
 }

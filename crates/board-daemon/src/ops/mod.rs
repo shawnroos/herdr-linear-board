@@ -127,6 +127,7 @@ routes!(d, params, {
     "board.pane.open" => panes::board_pane_open(d, from(params)?),
     "board.pane.close" => panes::board_pane_close(d, from(params)?),
     "board.notify" => panes::board_notify(from(params)?),
+    "caller.resolve" => panes::caller_resolve(d, from(params)?),
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
     "linear.list" => linear::linear_list(d, from(params)?),
     "linear.issue" => linear::linear_issue(d, from(params)?),

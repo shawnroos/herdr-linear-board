@@ -40,7 +40,8 @@ pub(crate) enum LinearCmd {
     /// Print the Linear-mode board's read of one herdr space (its binding,
     /// grouping and Linear issues), with live pane status attached.
     Snapshot {
-        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
+        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`, then to the
+        /// pane this Claude session confirmed.
         workspace_id: Option<String>,
     },
     /// One Linear issue in full: description, sub-issues, parent and relations,
@@ -68,9 +69,11 @@ pub(crate) enum LinearCmd {
     /// the hook payload on stdin, prints nothing, and always exits 0.
     Report,
     /// This agent session's board context: its bound issue, column, marks
-    /// and the space's pending show-requests. Never starts the daemon.
+    /// and the space's pending show-requests. Never starts the daemon. With
+    /// no space it prints a notice and exits 0.
     Session {
-        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`.
+        /// The herdr space id; defaults to `$HERDR_WORKSPACE_ID`, then to the
+        /// pane this Claude session confirmed.
         workspace_id: Option<String>,
     },
     /// One line of board status for Claude Code's `statusLine` setting.
