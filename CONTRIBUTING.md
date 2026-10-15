@@ -11,8 +11,8 @@ socket protocol 22** on `PATH` for the end-to-end path (unit and integration tes
 herdr nor an agent harness).
 
 ```bash
-git clone https://github.com/nelsonPires5/herdr-board
-cd herdr-board
+git clone https://github.com/shawnroos/herdr-linear-board
+cd herdr-linear-board
 cargo build            # or ./scripts/build.sh for the release binary herdr's [[build]] step runs
 cargo run -p board-cli -- tui   # run the board locally
 ```
