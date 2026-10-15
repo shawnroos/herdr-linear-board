@@ -98,7 +98,8 @@ with the key from your macOS Keychain, and keeps bindings, marks and notes in it
 It never writes Linear: agents create and update tickets through Linear's own MCP server, and the
 board links that work to your sessions. Agents use `board mcp` to bind their worktree, mark cards,
 notify you, ask you to look at an issue, and open a board beside their own pane without taking
-focus; `a` / `x` answer them. Coming from the work plugin? Run `board import work-store` once to
+focus; `a` / `x` answer them. When Claude Code starts a session without herdr's variables, the
+agent may ask you once which pane it runs in; `board caller --json` shows what it found. Coming from the work plugin? Run `board import work-store` once to
 copy its bindings and grouping into the board. `board linear snapshot <workspace-id> --json`
 prints the board's read from the command line, and `board linear status-line` puts an agent's
 bound issue in Claude Code's status line. Setup: [`docs/install.md`](docs/install.md) → Linear mode
@@ -107,7 +108,7 @@ and agent tools. Design: [`docs/design.md`](docs/design.md) section 13.
 ## Install
 
 ```bash
-herdr plugin install nelsonPires5/herdr-board --ref v0.18.0
+herdr plugin install shawnroos/herdr-linear-board --ref v0.18.1
 ```
 
 Open the board:
