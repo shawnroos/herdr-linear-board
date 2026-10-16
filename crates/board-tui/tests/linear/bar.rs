@@ -822,3 +822,30 @@ fn a_mark_read_that_drops_the_selected_card_keeps_a_paging_button_focused() {
     );
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
 }
+
+#[test]
+fn a_mark_read_that_moves_the_selection_to_another_tab_leaves_the_paging_button() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let [first, _] = ["WEB-101", "WEB-201"]
+        .map(|id| shared.mark_kind(id, MarkKind::Attention, "look", "agent-a"));
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Char('>'));
+    assert!(
+        matches!(focus(&d), Focus::Pager(..)),
+        "on a paging button: {:?}",
+        focus(&d)
+    );
+    clear_marks(&shared, &[first]);
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    let state = d.app.linear.as_ref().unwrap();
+    assert_eq!(state.tabs()[state.sel_tab].key, "ms-backend");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-201"));
+    assert!(
+        matches!(focus(&d), Focus::Card(_)),
+        "the backend page hides no column to page to: {:?}",
+        focus(&d)
+    );
+}

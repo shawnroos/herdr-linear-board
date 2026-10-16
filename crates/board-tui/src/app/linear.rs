@@ -1228,7 +1228,11 @@ fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>)
         });
         // Taken before the swap: a mark chip filters by the old marks.
         let cursor = state.cursor();
-        let after = state.shown_after();
+        let after = if state.filter_chip.is_some() {
+            state.shown_after()
+        } else {
+            Vec::new()
+        };
         state.local = Some(local);
         state.refind_after_marks(&cursor, &after);
         state.refind_bar(width);
@@ -1364,7 +1368,11 @@ fn write_arrived(
     match (write, result) {
         (LinearWrite::ClearMarks { ids, .. }, Ok(())) => {
             let cursor = state.cursor();
-            let after = state.shown_after();
+            let after = if state.filter_chip.is_some() {
+                state.shown_after()
+            } else {
+                Vec::new()
+            };
             state.forget_marks(&ids);
             state.refind_after_marks(&cursor, &after);
             vec![]

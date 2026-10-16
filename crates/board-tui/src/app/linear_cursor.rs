@@ -492,9 +492,10 @@ impl LinearState {
     /// an opened card does, rather than its lane line or the filter: the
     /// first of `after` (taken by [`Self::shown_after`] before the change)
     /// still shown, else the card at its old index. A paging button keeps
-    /// the focus and holds the new selection.
+    /// the focus and holds the new selection while it stays in the tab.
     pub(super) fn refind_after_marks(&mut self, cursor: &CardCursor, after: &[String]) {
         self.refind(cursor);
+        let tab = self.sel_tab;
         let Some(id) = cursor.identifier.as_deref() else {
             return;
         };
@@ -513,8 +514,10 @@ impl LinearState {
             };
             self.select_slot(tab, group, card);
         }
-        if let Focus::Pager(side, _) = cursor.focus {
-            self.focus = Focus::Pager(side, Box::new(self.focus.clone()));
+        // Another tab's page may hide nothing on `side`, which leaves the
+        // button undrawn; a plain card lets that page follow the selection.
+        if let (Focus::Pager(side, _), true) = (&cursor.focus, self.sel_tab == tab) {
+            self.focus = Focus::Pager(*side, Box::new(self.focus.clone()));
         }
     }
 
