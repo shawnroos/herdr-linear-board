@@ -162,8 +162,9 @@ impl GhClient {
     }
 
     /// Up to four calls: the PR, its required checks, and the newest
-    /// deployment's statuses for an open PR's preview. Past the first call,
-    /// only a missing or logged-out `gh` fails the read.
+    /// deployment's statuses for an open PR's preview, skipped when the
+    /// checks call timed out. Past the first call, only a missing or
+    /// logged-out `gh` fails the read.
     pub fn fetch(&self, pr: &PrRef) -> Result<LinearPrDetail, GhError> {
         let number = pr.number.to_string();
         let repo = pr.repo_arg();
@@ -177,7 +178,7 @@ impl GhClient {
             arg("--json"),
             arg(parse::VIEW_FIELDS),
         ])?;
-        let required = match self.run(&[
+        let checks = self.run(&[
             arg("pr"),
             arg("checks"),
             number,
@@ -186,7 +187,11 @@ impl GhClient {
             arg("--required"),
             arg("--json"),
             arg(parse::CHECKS_FIELDS),
-        ]) {
+        ]);
+        // Each preview call waits the full timeout too; a gh that just hung
+        // would stall this read for two more of them.
+        let timed_out = matches!(checks, Err(GhError::Timeout(_)));
+        let required = match checks {
             Ok(out) if out.code == Some(EXIT_AUTH) => return Err(self.logged_out(&out)),
             Ok(out) => parse::required_checks(&out.stdout),
             Err(error @ GhError::Unavailable(_)) => return Err(error),
@@ -198,7 +203,7 @@ impl GhClient {
         if detail.url.is_empty() {
             detail.url = pr.url();
         }
-        if detail.state.as_deref() == Some("OPEN") {
+        if !timed_out && detail.state.as_deref() == Some("OPEN") {
             if let Some(branch) = detail.head_ref.clone() {
                 detail.preview = self.preview(pr, &branch);
             }

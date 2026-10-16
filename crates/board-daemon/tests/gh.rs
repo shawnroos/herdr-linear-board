@@ -438,10 +438,11 @@ esac"#,
         parse::pr_detail(&open_view(), None).blocker,
         "read as if no required checks were known"
     );
-    assert_eq!(
-        gh.calls().len(),
-        3,
-        "view, checks, then the deployments read"
+    let calls = gh.calls();
+    assert_eq!(calls.len(), 2, "view and checks only: {calls:?}");
+    assert!(
+        !calls.iter().any(|c| c.starts_with("api ")),
+        "no preview reads after the checks call times out: {calls:?}"
     );
 }
 

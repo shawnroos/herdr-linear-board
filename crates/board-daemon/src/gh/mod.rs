@@ -203,7 +203,12 @@ impl GhState {
         queued
     }
 
+    // While gh is unavailable a pass announces nothing, so an open board is
+    // never seen again; pruning then would drop it for good.
     fn prune(&mut self, now: i64) {
+        if self.unavailable.is_some() {
+            return;
+        }
         self.boards
             .retain(|_, board| now - board.observed_at < BOARD_GONE_AFTER_SECS);
         let on_board: BTreeSet<PrRef> = self

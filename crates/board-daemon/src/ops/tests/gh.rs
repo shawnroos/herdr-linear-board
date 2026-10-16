@@ -435,3 +435,37 @@ fn a_missing_gh_is_tried_once_not_again_on_every_snapshot_it_announces() {
     assert_eq!(board.snapshot().gh.unwrap().status, "unavailable");
     assert!(!log.exists());
 }
+
+#[test]
+fn a_board_left_open_while_gh_is_missing_is_read_and_announced_when_gh_returns() {
+    let rows = vec![issue("WEB-1", Some(PR_A))];
+    let mut board = Board::new(linear(rows.clone(), rows)).with_gh(false);
+    let good = GhConfig {
+        bin: board.gh.path().join("gh").display().to_string(),
+        host: None,
+        env: vec![],
+        timeout: Duration::from_secs(10),
+    };
+    let _subscriber = board.d.subscriber();
+    board.d.gh.configure(GhConfig {
+        bin: "/nonexistent/hb-gh".into(),
+        host: None,
+        env: vec![],
+        timeout: Duration::from_secs(5),
+    });
+    let opened = super::now_secs(&board.d);
+    board.snapshot();
+    assert_eq!(board.wait_for_event(), announced());
+
+    super::super::linear::pr::tick(&board.d, opened + 700);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        board.events().is_empty(),
+        "a second unavailable read announces nothing"
+    );
+
+    board.d.gh.configure(good);
+    super::super::linear::pr::tick(&board.d, opened + crate::gh::BOARD_GONE_AFTER_SECS + 100);
+    assert_eq!(board.wait_for_event(), announced());
+    assert_eq!(board.views_of("4212"), 1);
+}
