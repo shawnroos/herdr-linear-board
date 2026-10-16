@@ -22,7 +22,7 @@ accepts Herdr 0.9.x with protocol 22 only; re-verify the installed CLI and sessi
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO"
 git status --short
-case "$(herdr --version)" in "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;; *) false ;; esac
+herdr --version | grep -Eq '^herdr 0\.9\.(0|[1-9][0-9]*)(-preview\..*)?$'
 herdr status
 herdr api schema --json | jq -e 'select(.protocol == 22) | {protocol,schema_version}'
 herdr plugin list --plugin herdr-board --json | jq '.result.plugins[0] | {version,plugin_root,source}'

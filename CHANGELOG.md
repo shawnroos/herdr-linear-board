@@ -6,28 +6,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-### Added
-
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board and session pane pick up your herdr theme and its custom colours.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board reads carry each issue's description, milestone and newest pull request, and `board linear issue` lists attachments.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The daemon reads each on-board pull request's checks, blocker, diff and preview with gh, and says why when gh is missing.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board shows the space board alone in a tab and the focused split's issue beside other splits.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Tabs and splits in a Linear-bound space are named after their issue, agent or repo, and names you set by hand are kept.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: `board linear pr <url>` prints a pull request's checks, reviews and merge state for agents and scripts.
-
 ### Changed
 
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board drops column borders for powerline titles, aligned lane lines and cards that show notes and the pull request.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board lanes fold with Return, / filters cards, Esc clears the selection, and ctrl+q quits (plain q does nothing).
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board columns fit any width, wide columns hold two cards a row, arrow buttons page hidden columns, and cards show PR checks.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board's bottom bar shows controls, a selection tip and alerts; `?` opens it, and show-requests are answered there.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear cards drop the rows they have nothing for, and z switches to a compact density that fits more cards.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Return on a Linear group alert such as `! 3 needs you` filters the board to those cards, in a full-width filter card.
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear issues open as a window over the faded board, expand with e, pin beside the board with o, and show attachment and PR cards.
-
-### Fixed
-
-- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) fix: An opencode or agy model lookup that hangs can no longer stall the board when the CLI left a helper process running.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board is redesigned: lanes, filter, issue window, PR checks on cards, herdr theme, and tabs named after their issue.
 
 ## [0.18.1] - 2026-10-15
 
