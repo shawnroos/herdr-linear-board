@@ -165,8 +165,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # CI runs the oldest supported Herdr. 0.9.3, the newest, runs in the sandbox:
-      # scripts/sandbox.sh --herdr-version 0.9.3 gates (docs/sandbox.md).
       - name: Cache Herdr 0.9.0
         uses: actions/cache@v4
         with:
