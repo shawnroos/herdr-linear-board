@@ -2,10 +2,11 @@
 //! pipes, and a deadline. Never logs argv or env.
 
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use board_core::cli_child::{kill_group_and_reap, spawn_in_own_group};
 use board_core::protocol::LinearPrDetail;
 
 use super::parse;
@@ -93,36 +94,43 @@ impl GhClient {
     /// One `gh` run. A non-zero exit is an `Output`, not an error: `gh pr
     /// checks` exits 8 for pending checks and still prints its JSON.
     pub fn run(&self, args: &[String]) -> Result<Output, GhError> {
-        let mut child = Command::new(&self.config.bin)
-            .args(args)
-            .env_clear()
-            .envs(self.config.env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                GhError::Unavailable(match e.kind() {
-                    std::io::ErrorKind::NotFound => {
-                        format!("`{}` is not installed or not on PATH", self.config.bin)
-                    }
-                    _ => format!("`{}` could not start: {e}", self.config.bin),
-                })
-            })?;
+        let mut child = spawn_in_own_group(
+            Command::new(&self.config.bin)
+                .args(args)
+                .env_clear()
+                .envs(self.config.env.iter().map(|(k, v)| (k, v)))
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|e| {
+            GhError::Unavailable(match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    format!("`{}` is not installed or not on PATH", self.config.bin)
+                }
+                _ => format!("`{}` could not start: {e}", self.config.bin),
+            })
+        })?;
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
         let deadline = Instant::now() + self.config.timeout;
+        let timed_out = |child: &mut Child| {
+            kill_group_and_reap(child);
+            GhError::Timeout(self.config.timeout)
+        };
+        // Pipes before the exit status: the child stays unreaped until both
+        // pipes close, so its group id cannot be reused when the group is killed.
+        while !(stdout.is_finished() && stderr.is_finished()) {
+            if Instant::now() >= deadline {
+                return Err(timed_out(&mut child));
+            }
+            std::thread::sleep(POLL);
+        }
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
-                // Not joined: a grandchild holding the pipe must not extend
-                // the deadline; the drain threads end when it closes.
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(GhError::Timeout(self.config.timeout));
-                }
+                _ => return Err(timed_out(&mut child)),
             }
         };
         let (stdout, out_over) = stdout.join().unwrap_or_default();
@@ -154,8 +162,8 @@ impl GhClient {
     }
 
     /// Up to four calls: the PR, its required checks, and the newest
-    /// deployment's statuses for an open PR's preview. Only the first call's
-    /// failure fails the read.
+    /// deployment's statuses for an open PR's preview. Past the first call,
+    /// only a missing or logged-out `gh` fails the read.
     pub fn fetch(&self, pr: &PrRef) -> Result<LinearPrDetail, GhError> {
         let number = pr.number.to_string();
         let repo = pr.repo_arg();
@@ -169,7 +177,7 @@ impl GhClient {
             arg("--json"),
             arg(parse::VIEW_FIELDS),
         ])?;
-        let checks = self.run(&[
+        let required = match self.run(&[
             arg("pr"),
             arg("checks"),
             number,
@@ -178,11 +186,12 @@ impl GhClient {
             arg("--required"),
             arg("--json"),
             arg(parse::CHECKS_FIELDS),
-        ])?;
-        if checks.code == Some(EXIT_AUTH) {
-            return Err(self.logged_out(&checks));
-        }
-        let required = parse::required_checks(&checks.stdout);
+        ]) {
+            Ok(out) if out.code == Some(EXIT_AUTH) => return Err(self.logged_out(&out)),
+            Ok(out) => parse::required_checks(&out.stdout),
+            Err(error @ GhError::Unavailable(_)) => return Err(error),
+            Err(_) => None,
+        };
         let mut detail = parse::pr_detail(&view, required.as_deref());
         detail.repo = pr.repo();
         detail.number = pr.number;

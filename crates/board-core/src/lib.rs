@@ -16,7 +16,7 @@
 
 pub mod agy_catalog;
 pub mod capability;
-mod cli_child;
+pub mod cli_child;
 pub mod client;
 pub mod codex_catalog;
 pub mod config;

@@ -416,3 +416,97 @@ fn while_gh_is_unavailable_the_periodic_pass_waits_ten_minutes() {
     assert!(!state.queue_due(1_599));
     assert!(state.queue_due(1_600));
 }
+
+#[test]
+fn a_checks_call_that_times_out_keeps_the_pr_view() {
+    let gh = FakeGh::new(
+        r#"case "$1 $2" in
+  "pr checks") exec /bin/sleep 30 ;;
+  "pr view") /bin/cat "$FIX/pr-view-open.json" ;;
+  "api --method") printf '[]' ;;
+esac"#,
+    );
+    let detail = gh
+        .client(vec![], Duration::from_millis(500))
+        .fetch(&pr())
+        .unwrap();
+
+    assert_eq!(detail.state.as_deref(), Some("OPEN"));
+    assert_eq!(detail.number, 4212);
+    assert_eq!(
+        detail.blocker,
+        parse::pr_detail(&open_view(), None).blocker,
+        "read as if no required checks were known"
+    );
+    assert_eq!(
+        gh.calls().len(),
+        3,
+        "view, checks, then the deployments read"
+    );
+}
+
+#[test]
+fn a_helper_that_keeps_the_pipe_open_after_gh_exits_is_a_timeout() {
+    let gh = FakeGh::new("/bin/sleep 30 &\nprintf '[]'");
+    let started = Instant::now();
+    let error = gh
+        .client(vec![], Duration::from_millis(300))
+        .run(&["pr".to_string()])
+        .err();
+    assert_eq!(error, Some(GhError::Timeout(Duration::from_millis(300))));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "returned after {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_board_not_seen_again_stops_being_read_and_its_prs_are_dropped() {
+    use board_daemon::gh::GhState;
+
+    let gone = board_daemon::linear::SpaceKey {
+        session: "alpha".into(),
+        space: "wGone".into(),
+    };
+    let other = PrRef::parse("https://github.com/acme/web/pull/9", None).unwrap();
+    let mut state = GhState::default();
+    state.observe(space(), [pr()].into(), 1_000);
+    state.observe(gone.clone(), [other.clone()].into(), 1_000);
+    for p in state.take_queue() {
+        state.record(&p, &Ok(parse::pr_detail(&open_view(), None)), 1_000);
+    }
+
+    // The live board is seen again by the snapshot each pass announces, late
+    // by a tick plus the pass itself.
+    assert!(state.queue_due(1_630));
+    assert_eq!(
+        state.take_queue().len(),
+        2,
+        "a board seen 630s ago still counts"
+    );
+    for p in [pr(), other.clone()] {
+        state.record(&p, &Ok(parse::pr_detail(&open_view(), None)), 1_632);
+    }
+    state.observe(space(), [pr()].into(), 1_633);
+
+    assert!(state.queue_due(2_262));
+    assert_eq!(
+        state.take_queue(),
+        vec![pr()],
+        "the board not seen again is skipped"
+    );
+    assert!(
+        state.current_document(&other).is_none(),
+        "its PR entry is pruned"
+    );
+    assert!(state.current_document(&pr()).is_some());
+    assert!(state
+        .spaces_showing(std::slice::from_ref(&other))
+        .is_empty());
+    assert_eq!(
+        state.spaces_showing(&[pr()]),
+        ["wS".to_string()].into(),
+        "the re-observed board keeps refreshing"
+    );
+}

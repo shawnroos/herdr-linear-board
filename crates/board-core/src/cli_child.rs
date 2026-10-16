@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 /// Poll interval while reaping a child whose stdout already reached EOF.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-pub(crate) fn spawn_in_own_group(cmd: &mut Command) -> io::Result<Child> {
+pub fn spawn_in_own_group(cmd: &mut Command) -> io::Result<Child> {
     cmd.process_group(0).spawn()
 }
 
@@ -19,7 +19,7 @@ pub(crate) fn spawn_in_own_group(cmd: &mut Command) -> io::Result<Child> {
 /// A grandchild that inherited stdout keeps the pipe open after the direct
 /// child dies, so a reader thread joined afterwards would block until that
 /// grandchild exits on its own. Killing the group closes every writer.
-pub(crate) fn kill_group_and_reap(child: &mut Child) {
+pub fn kill_group_and_reap(child: &mut Child) {
     // Must run before `wait`: the unreaped child keeps its PID (the group id)
     // reserved, so the signal cannot reach a reused group.
     if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
