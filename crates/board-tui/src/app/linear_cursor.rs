@@ -467,6 +467,28 @@ impl LinearState {
         self.refind_in_tab(cursor);
     }
 
+    /// [`Self::refind`] after marks changed. A selected card that only lost
+    /// the chip's mark gives the selection to the next shown card, as closing
+    /// an opened card does, rather than its lane line or the filter.
+    pub(super) fn refind_after_marks(&mut self, cursor: &CardCursor) {
+        self.refind(cursor);
+        let Some(id) = cursor.identifier.as_deref() else {
+            return;
+        };
+        let lost_chip = self
+            .filter_chip
+            .is_some_and(|kind| !self.marks_for(id).any(|m| m.kind == kind));
+        if !matches!(cursor.focus.board(), Focus::Card(_))
+            || !lost_chip
+            || self.selected_identifier() == Some(id)
+        {
+            return;
+        }
+        if let Some((tab, group, card)) = self.shown_from(cursor.at) {
+            self.select_slot(tab, group, card);
+        }
+    }
+
     fn refind_in_tab(&mut self, cursor: &CardCursor) {
         self.sel_group = self
             .groups()

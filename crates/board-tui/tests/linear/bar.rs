@@ -639,19 +639,30 @@ fn a_card_opened_from_a_chip_filtered_board_returns_to_the_next_match_and_keeps_
     assert_eq!(chip(&d), Some(MarkKind::Attention));
 }
 
-/// WEB-101, WEB-102 and WEB-103 need you, all in Todo; returns WEB-101's mark.
-fn three_in_todo_need_you() -> (SharedFake, i64) {
+/// WEB-101, WEB-102 and WEB-103 need you, all in Todo; returns their marks
+/// in that order.
+fn three_in_todo_need_you() -> (SharedFake, [i64; 3]) {
     let shared = SharedFake::quiet(tabs_lanes());
-    let first = shared.mark_kind("WEB-101", MarkKind::Attention, "look", "agent-a");
-    for id in ["WEB-102", "WEB-103"] {
-        shared.mark_kind(id, MarkKind::Attention, "look", "agent-a");
-    }
-    (shared, first)
+    let marks = ["WEB-101", "WEB-102", "WEB-103"]
+        .map(|id| shared.mark_kind(id, MarkKind::Attention, "look", "agent-a"));
+    (shared, marks)
+}
+
+fn confirm_clear(d: &mut Driver, ids: Vec<i64>) {
+    d.handle(Msg::LinearArrived(Box::new(
+        board_tui::app::LinearArrival::Wrote {
+            write: board_tui::app::LinearWrite::ClearMarks {
+                ids,
+                on_open: false,
+            },
+            result: Ok(()),
+        },
+    )));
 }
 
 #[test]
 fn a_mark_read_that_drops_an_earlier_card_from_the_chip_keeps_the_selected_card() {
-    let (shared, first) = three_in_todo_need_you();
+    let (shared, [first, ..]) = three_in_todo_need_you();
     let (mut d, _) = board(&shared);
     run_alert(&mut d, BarItem::NeedsYou);
     press(&mut d, KeyCode::Down);
@@ -669,20 +680,58 @@ fn a_mark_read_that_drops_an_earlier_card_from_the_chip_keeps_the_selected_card(
 
 #[test]
 fn a_confirmed_clear_that_drops_an_earlier_card_from_the_chip_keeps_the_selected_card() {
-    let (shared, first) = three_in_todo_need_you();
+    let (shared, [first, ..]) = three_in_todo_need_you();
     let (mut d, _) = board(&shared);
     run_alert(&mut d, BarItem::NeedsYou);
     press(&mut d, KeyCode::Down);
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
-    d.handle(Msg::LinearArrived(Box::new(
-        board_tui::app::LinearArrival::Wrote {
-            write: board_tui::app::LinearWrite::ClearMarks {
-                ids: vec![first],
-                on_open: false,
-            },
-            result: Ok(()),
-        },
-    )));
+    confirm_clear(&mut d, vec![first]);
     assert_eq!(shown(&d), ["WEB-102", "WEB-103"]);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+}
+
+#[test]
+fn a_mark_read_that_drops_the_selected_card_from_the_chip_selects_the_next_match() {
+    let (shared, [_, second, _]) = three_in_todo_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    shared
+        .inner
+        .lock()
+        .unwrap()
+        .linear_mark_clear(second)
+        .unwrap();
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(shown(&d), ["WEB-101", "WEB-103"]);
+    assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
+
+#[test]
+fn a_confirmed_clear_that_drops_the_selected_card_from_the_chip_selects_the_next_match() {
+    let (shared, [_, second, _]) = three_in_todo_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    confirm_clear(&mut d, vec![second]);
+    assert_eq!(shown(&d), ["WEB-101", "WEB-103"]);
+    assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
+
+#[test]
+fn a_confirmed_clear_of_the_last_selected_match_selects_the_match_before_it() {
+    let (shared, [.., third]) = three_in_todo_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+    confirm_clear(&mut d, vec![third]);
+    assert_eq!(shown(&d), ["WEB-101", "WEB-102"]);
+    assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
 }

@@ -1229,7 +1229,7 @@ fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>)
         // Taken before the swap: a mark chip filters by the old marks.
         let cursor = state.cursor();
         state.local = Some(local);
-        state.refind(&cursor);
+        state.refind_after_marks(&cursor);
         state.refind_bar(width);
     }
     let mut effects = vec![];
@@ -1364,7 +1364,7 @@ fn write_arrived(
         (LinearWrite::ClearMarks { ids, .. }, Ok(())) => {
             let cursor = state.cursor();
             state.forget_marks(&ids);
-            state.refind(&cursor);
+            state.refind_after_marks(&cursor);
             vec![]
         }
         // The marks stay and the next open retries.
