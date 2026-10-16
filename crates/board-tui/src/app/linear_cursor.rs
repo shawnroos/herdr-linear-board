@@ -467,10 +467,33 @@ impl LinearState {
         self.refind_in_tab(cursor);
     }
 
+    /// The identifiers shown after the selected card in board order, every
+    /// tab. Empty with no card selected.
+    pub(super) fn shown_after(&self) -> Vec<String> {
+        let Focus::Card(card) = *self.focus.board() else {
+            return vec![];
+        };
+        let at = (self.sel_tab, self.sel_group, card);
+        let mut after = vec![];
+        for (t, tab) in self.tabs().iter().enumerate() {
+            for (g, group) in tab.groups.iter().enumerate() {
+                for (c, (_, id)) in self.visible_in(&tab.key, group).into_iter().enumerate() {
+                    if (t, g, c) > at {
+                        after.push(id.to_string());
+                    }
+                }
+            }
+        }
+        after
+    }
+
     /// [`Self::refind`] after marks changed. A selected card that only lost
     /// the chip's mark gives the selection to the next shown card, as closing
-    /// an opened card does, rather than its lane line or the filter.
-    pub(super) fn refind_after_marks(&mut self, cursor: &CardCursor) {
+    /// an opened card does, rather than its lane line or the filter: the
+    /// first of `after` (taken by [`Self::shown_after`] before the change)
+    /// still shown, else the card at its old index. A paging button keeps
+    /// the focus and holds the new selection.
+    pub(super) fn refind_after_marks(&mut self, cursor: &CardCursor, after: &[String]) {
         self.refind(cursor);
         let Some(id) = cursor.identifier.as_deref() else {
             return;
@@ -484,8 +507,14 @@ impl LinearState {
         {
             return;
         }
-        if let Some((tab, group, card)) = self.shown_from(cursor.at) {
+        if !after.iter().any(|id| self.select_identifier(id)) {
+            let Some((tab, group, card)) = self.shown_from(cursor.at) else {
+                return;
+            };
             self.select_slot(tab, group, card);
+        }
+        if let Focus::Pager(side, _) = cursor.focus {
+            self.focus = Focus::Pager(side, Box::new(self.focus.clone()));
         }
     }
 

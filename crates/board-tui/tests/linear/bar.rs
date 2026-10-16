@@ -735,3 +735,90 @@ fn a_confirmed_clear_of_the_last_selected_match_selects_the_match_before_it() {
     assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
 }
+
+fn clear_marks(shared: &SharedFake, ids: &[i64]) {
+    let mut inner = shared.inner.lock().unwrap();
+    for &id in ids {
+        inner.linear_mark_clear(id).unwrap();
+    }
+}
+
+/// WEB-101, WEB-102 and WEB-103 in Todo and WEB-105 in the next column need
+/// you; returns their marks in that order.
+fn todo_and_next_column_need_you() -> (SharedFake, [i64; 4]) {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let marks = ["WEB-101", "WEB-102", "WEB-103", "WEB-105"]
+        .map(|id| shared.mark_kind(id, MarkKind::Attention, "look", "agent-a"));
+    (shared, marks)
+}
+
+#[test]
+fn a_mark_read_that_drops_the_selected_card_and_one_before_it_selects_the_card_after_it() {
+    let (shared, [first, second, ..]) = todo_and_next_column_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    clear_marks(&shared, &[first, second]);
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(shown(&d), ["WEB-103", "WEB-105"]);
+    assert_eq!(
+        selected_id(&d).as_deref(),
+        Some("WEB-103"),
+        "not the card at the old index in board order"
+    );
+}
+
+#[test]
+fn a_confirmed_clear_of_the_selected_card_and_one_before_it_selects_the_card_after_it() {
+    let (shared, [first, second, ..]) = todo_and_next_column_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    confirm_clear(&mut d, vec![first, second]);
+    assert_eq!(shown(&d), ["WEB-103", "WEB-105"]);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
+
+#[test]
+fn a_mark_read_that_drops_the_selected_card_as_an_earlier_card_gains_one_selects_forward() {
+    let shared = SharedFake::quiet(tabs_lanes());
+    let [second, _] = ["WEB-102", "WEB-103"]
+        .map(|id| shared.mark_kind(id, MarkKind::Attention, "look", "agent-a"));
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    shared.mark_kind("WEB-101", MarkKind::Attention, "look", "agent-a");
+    clear_marks(&shared, &[second]);
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(shown(&d), ["WEB-101", "WEB-103"]);
+    assert_eq!(
+        selected_id(&d).as_deref(),
+        Some("WEB-103"),
+        "the card after WEB-102, not the one now at its index"
+    );
+}
+
+#[test]
+fn a_mark_read_that_drops_the_selected_card_keeps_a_paging_button_focused() {
+    let (shared, [_, second, _]) = three_in_todo_need_you();
+    let (mut d, _) = board(&shared);
+    run_alert(&mut d, BarItem::NeedsYou);
+    press(&mut d, KeyCode::Down);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-102"));
+    render_at(&mut d, 96, 40);
+    press(&mut d, KeyCode::Char('>'));
+    let Focus::Pager(side, _) = focus(&d) else {
+        panic!("on a paging button: {:?}", focus(&d));
+    };
+    clear_marks(&shared, &[second]);
+    d.on_local_state_changed(local(&[(Some("wA"), false)]));
+    assert_eq!(shown(&d), ["WEB-101", "WEB-103"]);
+    assert!(
+        matches!(focus(&d), Focus::Pager(s, _) if s == side),
+        "paging never moves off the button: {:?}",
+        focus(&d)
+    );
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-103"));
+}
