@@ -122,8 +122,9 @@ routes!(d, params, {
     "harness.list" => discovery::harness_list(d),
     "space.list" => discovery::space_list(d, from(params)?),
     "session.list" => discovery::session_list(d),
-    "pane.set_title" => panes::pane_set_title(from(params)?),
+    "pane.set_title" => panes::pane_set_title(d, from(params)?),
     "pane.focus" => panes::pane_focus(from(params)?),
+    "pane.context" => panes::pane_context(d, from(params)?),
     "board.pane.open" => panes::board_pane_open(d, from(params)?),
     "board.pane.close" => panes::board_pane_close(d, from(params)?),
     "board.notify" => panes::board_notify(from(params)?),
@@ -131,6 +132,7 @@ routes!(d, params, {
     "linear.snapshot" => linear::linear_snapshot(d, from(params)?),
     "linear.list" => linear::linear_list(d, from(params)?),
     "linear.issue" => linear::linear_issue(d, from(params)?),
+    "linear.pr" => linear::linear_pr(d, from(params)?),
     "linear.state.get" => linear_state::state_get(d, from(params)?),
     "linear.bind" => linear_state::bind(d, from(params)?),
     "linear.space.bind" => linear_state::space_bind(d, from(params)?),
@@ -152,6 +154,11 @@ routes!(d, params, {
     "linear.activity.list" => linear_state::activity_list(d, from_or_default(params)?),
     "linear.import" => linear_import(d, from_or_default(params)?),
 });
+
+/// The periodic `gh` re-read; the daemon's ticker calls it.
+pub(crate) fn gh_tick(d: &Arc<Daemon>) {
+    linear::pr::tick(d, now_secs(d));
+}
 
 fn linear_import(d: &Arc<Daemon>, p: LinearImportParams) -> Result<Value> {
     linear_import_at(d, &crate::import::store_dir_from_env()?, p.dry_run)

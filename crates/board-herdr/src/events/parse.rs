@@ -19,6 +19,14 @@ pub enum HerdrEvent {
         pane_id: String,
         workspace_id: Option<String>,
     },
+    /// `pane_focused`, `tab_focused` or `layout_updated`. `pane_focused`
+    /// carries no tab; `layout_updated` nests both ids in `layout`.
+    LayoutChanged {
+        workspace_id: Option<String>,
+        tab_id: Option<String>,
+    },
+    /// `tab_created` or `pane_created`; the id is nested in `tab` or `pane`.
+    Created { workspace_id: Option<String> },
     /// Any other event line (raw envelope preserved).
     Other(Value),
 }
@@ -33,6 +41,14 @@ struct StatusFields {
     agent_status: Option<AgentStatus>,
     #[serde(default)]
     agent: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlaceFields {
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    tab_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +101,21 @@ pub fn parse_event_line(line: &str) -> Option<HerdrEvent> {
             let pane_id = f.pane_id?;
             Some(HerdrEvent::PaneExited {
                 pane_id,
+                workspace_id: f.workspace_id,
+            })
+        }
+        "pane_focused" | "tab_focused" | "layout_updated" => {
+            let place = data.get("layout").unwrap_or(data);
+            let f: PlaceFields = serde_json::from_value(place.clone()).ok()?;
+            Some(HerdrEvent::LayoutChanged {
+                workspace_id: f.workspace_id,
+                tab_id: f.tab_id,
+            })
+        }
+        "tab_created" | "pane_created" => {
+            let place = data.get("tab").or_else(|| data.get("pane")).unwrap_or(data);
+            let f: PlaceFields = serde_json::from_value(place.clone()).ok()?;
+            Some(HerdrEvent::Created {
                 workspace_id: f.workspace_id,
             })
         }

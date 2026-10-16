@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::super::herdr::{
-    handle_event_from_socket, HerdrSocketSupervisor, HerdrWatchConnector, WatchConnector,
+    handle_event_from_socket, HerdrSocketSupervisor, HerdrWatchConnector, Want, WatchConnector,
     WatchEventStream, WatchSnapshot, WatchTiming,
 };
 use super::active_daemon;
@@ -234,10 +234,13 @@ impl WatchConnector for FakeSocketConnector {
     fn subscribe(
         &self,
         socket: &Path,
-        _panes: &[String],
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>> {
         let mut state = self.0.lock().unwrap();
-        state.log.push(format!("subscribe:{}", socket.display()));
+        let tail = if want.levels { " +levels" } else { "" };
+        state
+            .log
+            .push(format!("subscribe:{}{tail}", socket.display()));
         *state.connects.entry(socket.to_path_buf()).or_default() += 1;
         let succeeds = state
             .connect
@@ -637,7 +640,7 @@ fn watch_snapshot_accepts_the_supported_protocol() {
 #[test]
 fn watch_subscription_rejects_an_incompatible_socket_before_subscribing() {
     let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL - 1);
-    let result = HerdrWatchConnector.subscribe(&herdr.socket, &[]);
+    let result = HerdrWatchConnector.subscribe(&herdr.socket, &Want::default());
 
     assert!(result.is_err(), "an incompatible socket must not subscribe");
     assert_eq!(herdr.methods(), vec!["ping"]);
@@ -647,8 +650,119 @@ fn watch_subscription_rejects_an_incompatible_socket_before_subscribing() {
 fn watch_subscription_accepts_the_supported_socket_after_the_gate() {
     let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL);
     let _events = HerdrWatchConnector
-        .subscribe(&herdr.socket, &[])
+        .subscribe(&herdr.socket, &Want::default())
         .expect("the supported Herdr contract must pass before subscribing");
 
     assert_eq!(herdr.methods(), vec!["ping", "events.subscribe"]);
+}
+
+#[test]
+fn a_level_watch_adds_the_focus_and_layout_subscriptions() {
+    let herdr = fake_herdr_socket(board_herdr::SUPPORTED_HERDR_PROTOCOL);
+    let _events = HerdrWatchConnector
+        .subscribe(
+            &herdr.socket,
+            &Want {
+                panes: vec![],
+                levels: true,
+            },
+        )
+        .expect("subscribe");
+    let sent = herdr.requests_for("events.subscribe");
+    let kinds: Vec<String> = sent[0]["params"]["subscriptions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["type"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "pane.exited",
+            "pane.closed",
+            "pane.focused",
+            "tab.focused",
+            "layout.updated",
+            "tab.created",
+            "pane.created"
+        ]
+    );
+}
+
+#[test]
+fn a_level_socket_forwards_focus_and_layout_events_only_while_a_client_listens() {
+    let socket = PathBuf::from("/tmp/herdr-level.sock");
+    let state = Arc::new(Mutex::new(FakeSocketState::default()));
+    state
+        .lock()
+        .unwrap()
+        .events
+        .entry(socket.clone())
+        .or_default()
+        .push_back(Ok(Some(HerdrEvent::LayoutChanged {
+            workspace_id: Some("w1".into()),
+            tab_id: Some("w1:t1".into()),
+        })));
+    let d = testkit::daemon().build_daemon();
+    let mut rx = d.events_tx.subscribe();
+    let listener = d.subscriber();
+    d.watch_levels(socket.clone());
+    let mut supervisor = fake_supervisor(state.clone());
+
+    supervisor.step(&d, Instant::now());
+
+    let log = state.lock().unwrap().log.clone();
+    assert!(
+        log.contains(&"subscribe:/tmp/herdr-level.sock +levels".to_string()),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter().any(|l| l.starts_with("snapshot:")),
+        "a socket with no run panes was reconciled: {log:?}"
+    );
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        board_core::protocol::Event::PaneLayoutChanged {
+            workspace_id: Some("w1".into()),
+            tab_id: Some("w1:t1".into()),
+        }
+    );
+
+    drop(listener);
+    supervisor.step(&d, Instant::now());
+    assert!(supervisor.sockets.is_empty());
+    assert!(d.watch.lock().unwrap().level_sockets.is_empty());
+}
+
+#[test]
+fn a_named_socket_stays_watched_with_no_client_and_its_events_wake_naming() {
+    let socket = PathBuf::from("/tmp/herdr-named.sock");
+    let state = Arc::new(Mutex::new(FakeSocketState::default()));
+    state
+        .lock()
+        .unwrap()
+        .events
+        .entry(socket.clone())
+        .or_default()
+        .push_back(Ok(Some(HerdrEvent::Created {
+            workspace_id: Some("w1".into()),
+        })));
+    let d = testkit::daemon().build_daemon();
+    d.watch.lock().unwrap().name_sockets.insert(socket.clone());
+    let mut supervisor = fake_supervisor(state.clone());
+    assert!(!d.naming.pending());
+
+    supervisor.step(&d, Instant::now());
+
+    let log = state.lock().unwrap().log.clone();
+    assert!(
+        log.contains(&"subscribe:/tmp/herdr-named.sock +levels".to_string()),
+        "{log:?}"
+    );
+    assert!(
+        d.naming.pending(),
+        "a created tab or pane must wake the naming pass"
+    );
+    supervisor.step(&d, Instant::now());
+    assert!(supervisor.sockets.contains_key(&socket));
 }

@@ -13,16 +13,14 @@ use board_core::db::{GroupingConfig, SpaceBinding, WorktreeBinding};
 use board_core::engine::grouping::{self, GroupingIssue, ViewPreferences, WorkflowState};
 use board_herdr::SessionSnapshot;
 
+use crate::gh::parse::text;
+use crate::gh::PrRef;
 use crate::linear::{fetch, names_project, CacheRead, FetchPlan, SpaceKey, SpaceRead};
 
 use super::*;
 
 fn session_of(socket: Option<&str>) -> String {
     board_core::db::herdr_session(socket)
-}
-
-fn text(value: &Value) -> Option<String> {
-    value.as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 fn herdr_snapshot(origin: Option<&str>) -> Option<SessionSnapshot> {
@@ -198,10 +196,18 @@ pub(in crate::ops) fn snapshot(d: &Arc<Daemon>, p: LinearSnapshotParams) -> Resu
         d.linear.cache.invalidate(&key);
     }
     let read = read_space(d, &key, &plan);
-    fill_from_linear(&mut doc, &read, local.config.as_ref(), &plan);
+    let gh_host = d.gh.host();
+    fill_from_linear(
+        &mut doc,
+        &read,
+        local.config.as_ref(),
+        &plan,
+        gh_host.as_deref(),
+    );
     attach_bindings(&mut doc, &local.worktrees, herdr.as_ref(), &key.space);
     let ids = doc.pane_ids();
     doc.pane_status = pane_status(herdr, &ids);
+    super::pr::enrich(d, key, &mut doc, gh_host.as_deref());
     Ok(doc)
 }
 
@@ -210,6 +216,7 @@ fn fill_from_linear(
     read: &CacheRead<SpaceRead>,
     config: Option<&GroupingConfig>,
     plan: &FetchPlan,
+    gh_host: Option<&str>,
 ) {
     let Some((data, age)) = &read.good else {
         doc.linear.status = "unavailable".into();
@@ -299,8 +306,10 @@ fn fill_from_linear(
             continue;
         };
         if listed.contains(identifier.as_str()) {
-            doc.issues
-                .insert(identifier.clone(), linear_issue(node, identifier, stale));
+            doc.issues.insert(
+                identifier.clone(),
+                linear_issue(node, identifier, stale, gh_host),
+            );
         }
     }
     grouping::fill_snapshot(doc, tabs);
@@ -325,7 +334,12 @@ fn names(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn linear_issue(node: &Value, identifier: String, stale: bool) -> LinearIssue {
+fn linear_issue(
+    node: &Value,
+    identifier: String,
+    stale: bool,
+    gh_host: Option<&str>,
+) -> LinearIssue {
     LinearIssue {
         id: text(&node["id"]),
         identifier,
@@ -340,7 +354,77 @@ fn linear_issue(node: &Value, identifier: String, stale: bool) -> LinearIssue {
         labels: names(&node["labels"]["nodes"]),
         stale,
         bindings: vec![],
+        description: text(&node["description"])
+            .map(|d| excerpt(&d))
+            .filter(|d| !d.is_empty()),
+        milestone: named(&node["projectMilestone"]),
+        pr: newest_pr(&node["attachments"], gh_host),
     }
+}
+
+// About three card rows at the widest card; the TUI wraps and ends it in `…`.
+const DESCRIPTION_EXCERPT_CHARS: usize = 240;
+
+fn excerpt(description: &str) -> String {
+    let mut out = String::new();
+    let mut chars = 0;
+    for word in description.split_whitespace() {
+        if chars > 0 {
+            if chars == DESCRIPTION_EXCERPT_CHARS {
+                break;
+            }
+            out.push(' ');
+            chars += 1;
+        }
+        for c in word.chars() {
+            if chars == DESCRIPTION_EXCERPT_CHARS {
+                return out;
+            }
+            out.push(c);
+            chars += 1;
+        }
+    }
+    out
+}
+
+const UNSUPPORTED_HOST: &str = "unsupported host";
+
+fn newest_pr(attachments: &Value, gh_host: Option<&str>) -> Option<LinearCardPr> {
+    type Candidate<'a> = (&'a str, &'a Value, &'a str, PrRef);
+    // `>=` keeps the last of equally new attachments, as `Iterator::max_by` does.
+    fn keep<'a>(best: &mut Option<Candidate<'a>>, next: Candidate<'a>) {
+        if best.as_ref().is_none_or(|b| next.0 >= b.0) {
+            *best = Some(next);
+        }
+    }
+    let mut readable: Option<Candidate<'_>> = None;
+    let mut unreadable: Option<Candidate<'_>> = None;
+    for a in nodes(attachments) {
+        let Some(url) = a["url"].as_str() else {
+            continue;
+        };
+        let created = a["createdAt"].as_str().unwrap_or("");
+        if let Some(pr) = PrRef::parse(url, gh_host) {
+            keep(&mut readable, (created, a, url, pr));
+        } else if let Some(pr) = PrRef::shape(url) {
+            keep(&mut unreadable, (created, a, url, pr));
+        }
+    }
+    // A PR gh can read wins over a newer one on a host it may not be pointed at.
+    let (gh_error, (_, a, url, pr)) = match (readable, unreadable) {
+        (Some(best), _) => (None, best),
+        (None, Some(best)) => (Some(UNSUPPORTED_HOST.to_string()), best),
+        (None, None) => return None,
+    };
+    Some(LinearCardPr {
+        repo: pr.repo(),
+        number: pr.number,
+        url: url.to_string(),
+        status: text(&a["metadata"]["status"]),
+        draft: a["metadata"]["draft"].as_bool(),
+        gh_error,
+        ..LinearCardPr::default()
+    })
 }
 
 /// Worktree bindings of listed issues, with their herdr tab and panes; tabs
@@ -478,7 +562,7 @@ pub(in crate::ops) fn cached_column(
         good: Some((data, std::time::Duration::ZERO)),
         error: None,
     };
-    fill_from_linear(&mut doc, &read, config.as_ref(), &plan);
+    fill_from_linear(&mut doc, &read, config.as_ref(), &plan, None);
     Ok(doc
         .tabs
         .iter()
@@ -745,6 +829,7 @@ fn issue_detail(node: &Value) -> (LinearIssueDetail, Vec<String>) {
         ("relations", "inverseRelations"),
         ("comments", "comments"),
         ("history", "history"),
+        ("attachments", "attachments"),
     ] {
         if node[connection]["pageInfo"]["hasNextPage"].as_bool() == Some(true)
             && !truncated.iter().any(|t| t == name)
@@ -828,6 +913,76 @@ fn issue_detail(node: &Value) -> (LinearIssueDetail, Vec<String>) {
             })
             .collect(),
         history,
+        attachments: nodes(&node["attachments"])
+            .iter()
+            .map(|a| LinearAttachment {
+                id: text(&a["id"]),
+                source_type: text(&a["sourceType"]),
+                title: a["title"].as_str().unwrap_or("").to_string(),
+                subtitle: text(&a["subtitle"]),
+                url: a["url"].as_str().unwrap_or("").to_string(),
+                created_at: text(&a["createdAt"]),
+                metadata: a["metadata"].clone(),
+            })
+            .collect(),
     };
     (detail, truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newest_pr_keeps_the_last_of_equally_new_attachments() {
+        let at = "2026-10-01T00:00:00Z";
+        let attachments = serde_json::json!({"nodes": [
+            {"url": "https://github.com/o/r/pull/1", "createdAt": at},
+            {"url": "https://github.com/o/r/pull/2", "createdAt": at},
+            {"url": "https://git.example/o/r/pull/3", "createdAt": "2027-01-01T00:00:00Z"},
+            {"url": "https://github.com/o/r/pull/4", "createdAt": "2026-09-01T00:00:00Z"},
+        ]});
+        let pr = newest_pr(&attachments, None).unwrap();
+        assert_eq!((pr.number, pr.gh_error), (2, None));
+        let unreadable = serde_json::json!({"nodes": [
+            {"url": "https://git.example/o/r/pull/5", "createdAt": at},
+            {"url": "https://git.example/o/r/pull/6", "createdAt": at},
+        ]});
+        let pr = newest_pr(&unreadable, None).unwrap();
+        assert_eq!(pr.number, 6);
+        assert_eq!(pr.gh_error.as_deref(), Some(UNSUPPORTED_HOST));
+    }
+
+    fn joined_then_cut(description: &str) -> String {
+        description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(DESCRIPTION_EXCERPT_CHARS)
+            .collect()
+    }
+
+    #[test]
+    fn excerpt_cuts_where_the_joined_description_would() {
+        let mut inputs = vec![
+            String::new(),
+            "   ".into(),
+            "one".into(),
+            "  lead\tand\n\ntrail  ".into(),
+        ];
+        for word in ["a", "ab", "abcdefg", "é", "日本語", "x\u{301}"] {
+            for gap in [" ", "  \n\t"] {
+                for n in [1, 59, 60, 79, 80, 119, 120, 239, 240, 241, 400] {
+                    inputs.push(vec![word; n].join(gap));
+                }
+            }
+        }
+        inputs.push(format!("{} tail", "z".repeat(239)));
+        inputs.push(format!("{} tail", "z".repeat(240)));
+        inputs.push(format!("{} tail", "z".repeat(241)));
+        for input in &inputs {
+            assert_eq!(excerpt(input), joined_then_cut(input), "{input:?}");
+        }
+    }
 }

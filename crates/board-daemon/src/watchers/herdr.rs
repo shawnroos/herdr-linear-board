@@ -6,8 +6,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use board_core::engine::AgentSignal;
-use board_core::protocol::{CardStatus, RunOutcome};
-use board_herdr::{watch_subscriptions, AgentStatus, HerdrError, HerdrEvent, HerdrEvents};
+use board_core::protocol::{CardStatus, Event, RunOutcome};
+use board_herdr::{
+    layout_subscriptions, naming_subscriptions, watch_subscriptions, AgentStatus, HerdrError,
+    HerdrEvent, HerdrEvents,
+};
 
 use super::{apply_signal, run_open};
 use crate::dispatch::finalize_run;
@@ -44,7 +47,7 @@ pub(super) trait WatchConnector: Send + Sync {
     fn subscribe(
         &self,
         socket: &std::path::Path,
-        panes: &[String],
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>>;
     fn snapshot(&self, socket: &std::path::Path) -> board_herdr::Result<WatchSnapshot>;
 }
@@ -55,14 +58,19 @@ impl WatchConnector for HerdrWatchConnector {
     fn subscribe(
         &self,
         socket: &std::path::Path,
-        panes: &[String],
+        want: &Want,
     ) -> board_herdr::Result<Box<dyn WatchEventStream>> {
         // The event stream has its own persistent connection and handshake,
         // so gate the socket on a request connection first. This must happen
         // before `events.subscribe`: an incompatible but pingable Herdr must
         // never receive a subscription or become a watched generation.
         let _client = crate::herdr_conn::connect_checked(socket)?;
-        HerdrEvents::connect(socket, &watch_subscriptions(panes))
+        let mut subscriptions = watch_subscriptions(&want.panes);
+        if want.levels {
+            subscriptions.extend(layout_subscriptions());
+            subscriptions.extend(naming_subscriptions());
+        }
+        HerdrEvents::connect(socket, &subscriptions)
             .map(|events| Box::new(events) as Box<dyn WatchEventStream>)
     }
 
@@ -99,7 +107,7 @@ impl Default for WatchTiming {
 /// State for one socket. Generation, retry, and snapshot schedules are local:
 /// changing or losing one session never resets a healthy session's stream.
 pub(super) struct SocketWatch {
-    pub(super) panes: Vec<String>,
+    pub(super) want: Want,
     pub(super) generation: u64,
     pub(super) events: Option<Box<dyn WatchEventStream>>,
     retry_at: Instant,
@@ -108,9 +116,9 @@ pub(super) struct SocketWatch {
 }
 
 impl SocketWatch {
-    fn new(panes: Vec<String>, generation: u64, now: Instant, timing: WatchTiming) -> Self {
+    fn new(want: Want, generation: u64, now: Instant, timing: WatchTiming) -> Self {
         Self {
-            panes,
+            want,
             generation,
             events: None,
             retry_at: now,
@@ -141,37 +149,37 @@ impl HerdrSocketSupervisor {
         }
     }
 
-    fn sync_watches(&mut self, wanted: HashMap<PathBuf, Vec<String>>, now: Instant) {
+    fn sync_watches(&mut self, wanted: HashMap<PathBuf, Want>, now: Instant) {
         self.sockets.retain(|socket, _| wanted.contains_key(socket));
-        for (socket, panes) in wanted {
+        for (socket, want) in wanted {
             match self.sockets.get_mut(&socket) {
-                Some(state) if state.panes != panes => {
+                Some(state) if state.want != want => {
                     let generation = state.generation.saturating_add(1);
-                    *state = SocketWatch::new(panes, generation, now, self.timing);
+                    *state = SocketWatch::new(want, generation, now, self.timing);
                 }
                 Some(_) => {}
                 None => {
                     self.sockets
-                        .insert(socket, SocketWatch::new(panes, 1, now, self.timing));
+                        .insert(socket, SocketWatch::new(want, 1, now, self.timing));
                 }
             }
         }
     }
 
     pub(super) fn step(&mut self, d: &Arc<Daemon>, now: Instant) {
-        let wanted = d.watch.lock().unwrap().panes_by_socket.clone();
+        let wanted = wanted_watches(d);
         self.sync_watches(wanted, now);
         for (socket, state) in &mut self.sockets {
             if d.is_shutdown() {
                 return;
             }
             if state.events.is_none() && now >= state.retry_at {
-                match self.connector.subscribe(socket, &state.panes) {
+                match self.connector.subscribe(socket, &state.want) {
                     Ok(events) => {
                         state.events = Some(events);
                         state.retry_delay = self.timing.retry_initial;
                         // The subscription ack has completed before snapshot I/O.
-                        reconcile_socket(d, socket, &state.panes, self.connector.as_ref());
+                        reconcile_socket(d, socket, &state.want.panes, self.connector.as_ref());
                         state.reconcile_at = now + self.timing.reconcile;
                     }
                     Err(error) => {
@@ -184,7 +192,7 @@ impl HerdrSocketSupervisor {
                 }
             }
             if state.events.is_some() && now >= state.reconcile_at {
-                reconcile_socket(d, socket, &state.panes, self.connector.as_ref());
+                reconcile_socket(d, socket, &state.want.panes, self.connector.as_ref());
                 state.reconcile_at = now + self.timing.reconcile;
             }
             let polled = state
@@ -204,6 +212,40 @@ impl HerdrSocketSupervisor {
             }
         }
     }
+}
+
+/// The run panes to watch per socket, plus whether a board reads its level
+/// from that socket or it holds a Linear-bound space whose tabs are named.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Want {
+    pub(super) panes: Vec<String>,
+    pub(super) levels: bool,
+}
+
+/// Level sockets are dropped once no client is subscribed: nobody is left to
+/// receive their events, and a board that comes back re-registers on its
+/// first `pane.context` read.
+fn wanted_watches(d: &Arc<Daemon>) -> HashMap<PathBuf, Want> {
+    let subscribed = d.subscribed();
+    let mut watch = crate::sync::locked(&d.watch);
+    if !subscribed {
+        watch.level_sockets.clear();
+    }
+    let mut wanted: HashMap<PathBuf, Want> = watch
+        .panes_by_socket
+        .iter()
+        .map(|(socket, panes)| {
+            let want = Want {
+                panes: panes.clone(),
+                levels: false,
+            };
+            (socket.clone(), want)
+        })
+        .collect();
+    for socket in watch.level_sockets.iter().chain(&watch.name_sockets) {
+        wanted.entry(socket.clone()).or_default().levels = true;
+    }
+    wanted
 }
 
 /// Always-on, per-socket Herdr supervisor. A successful generation always does
@@ -227,6 +269,9 @@ fn reconcile_socket(
     watched: &[String],
     connector: &dyn WatchConnector,
 ) {
+    if watched.is_empty() {
+        return;
+    }
     // Any transport/decode/deadline failure is Unknown, never Gone.
     let Ok(snapshot) = connector.snapshot(socket) else {
         return;
@@ -300,6 +345,9 @@ pub(super) fn handle_event_from_socket(
     ev: HerdrEvent,
 ) {
     use board_herdr::AgentStatus;
+    if !matches!(ev, HerdrEvent::Other(_)) {
+        d.naming.kick();
+    }
     match ev {
         HerdrEvent::AgentStatusChanged {
             pane_id, status, ..
@@ -371,7 +419,14 @@ pub(super) fn handle_event_from_socket(
                 }
             }
         }
-        HerdrEvent::Other(_) => {}
+        HerdrEvent::LayoutChanged {
+            workspace_id,
+            tab_id,
+        } => d.emit(Event::PaneLayoutChanged {
+            workspace_id,
+            tab_id,
+        }),
+        HerdrEvent::Created { .. } | HerdrEvent::Other(_) => {}
     }
 }
 

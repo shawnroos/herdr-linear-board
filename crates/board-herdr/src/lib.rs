@@ -14,7 +14,8 @@
 //!
 //! Method and field names are verified against `herdr api schema --json`
 //! (Herdr 0.9.0, protocol 22), captured in `docs/herdr-0.9.0-schema.json`
-//! (legacy fixture at `tests/fixtures/schema.json` is protocol 20).
+//! and re-checked against 0.9.3 (`docs/herdr.md`); the legacy fixture at
+//! `tests/fixtures/schema.json` is protocol 20.
 
 mod client;
 mod envelope;
@@ -38,7 +39,8 @@ pub use client::HerdrClient;
 pub use envelope::{ErrorBody, Request, Response};
 pub use error::{HerdrError, Result};
 pub use events::{
-    parse_event_line, watch_subscriptions, Backoff, HerdrEvent, HerdrEvents, Subscription,
+    layout_subscriptions, naming_subscriptions, parse_event_line, watch_subscriptions, Backoff,
+    HerdrEvent, HerdrEvents, Subscription,
 };
 pub use params::{
     AgentPromptParams, AgentPromptWaitOptions, AgentStartParams, AgentWaitParams, PaneRenameParams,

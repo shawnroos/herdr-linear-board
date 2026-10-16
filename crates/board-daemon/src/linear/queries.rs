@@ -9,6 +9,12 @@ const ISSUE_FIELDS: &str = "id identifier title url branchName updatedAt priorit
     team { id key name } assignee { id name } \
     labels(first: 10) { nodes { id name parent { id name } } }";
 
+// Only the snapshot reads these: `issue()` composes `ISSUE_FIELDS` with
+// `ISSUE_DETAIL_FIELDS`, and GraphQL refuses `attachments` twice with
+// different arguments. The filter keeps non-PR attachments off the board read.
+const CARD_FIELDS: &str = "description \
+    attachments(first:10,filter:{url:{contains:\"/pull/\"}}) { nodes { url sourceType createdAt metadata } }";
+
 // One call per issue page: each connection is read once at 50 and its
 // `hasNextPage` reported, never drained (the plugin's `fetch_issue_detail`).
 const ISSUE_DETAIL_FIELDS: &str = "description dueDate estimate \
@@ -17,6 +23,7 @@ const ISSUE_DETAIL_FIELDS: &str = "description dueDate estimate \
     relations(first: 50) { nodes { id type relatedIssue { id identifier title state { id name type } } } pageInfo { hasNextPage } } \
     inverseRelations(first: 50) { nodes { id type issue { id identifier title state { id name type } } } pageInfo { hasNextPage } } \
     comments(first: 50) { nodes { id body createdAt user { id name } parent { id } } pageInfo { hasNextPage } } \
+    attachments(first: 50) { nodes { id sourceType title subtitle url createdAt metadata } pageInfo { hasNextPage } } \
     history(first: 50) { nodes { id createdAt actor { id name } fromState { name } toState { name } fromAssignee { name } toAssignee { name } fromPriority toPriority addedLabels { name } removedLabels { name } } pageInfo { hasNextPage } }";
 
 const STATES: &str = "states(first: 100) { nodes { id name type } }";
@@ -28,7 +35,7 @@ const VIEW_FIELDS: &str = "id name modelName archivedAt filterData \
 fn issues_query() -> String {
     format!(
         "query($n:Int,$after:String,$filter:IssueFilter){{issues(first:$n,after:$after,filter:$filter)\
-         {{nodes{{{ISSUE_FIELDS}}} pageInfo{{hasNextPage endCursor}}}}}}"
+         {{nodes{{{ISSUE_FIELDS} {CARD_FIELDS}}} pageInfo{{hasNextPage endCursor}}}}}}"
     )
 }
 

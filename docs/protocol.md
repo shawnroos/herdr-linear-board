@@ -20,8 +20,9 @@ protocol version.
   (e.g. delete column with running card), `4` herdr unavailable, `5` internal. `6` (work plugin
   unavailable) and `7` (the plugin ships no script for this op) are retired: this daemon reads
   Linear itself and raises neither, but both keep their meaning so a client still reads them right
-  from an older daemon that ran the work plugin's scripts. The CLI passes `1..=7`
-  through as its exit status. The CLI preserves
+  from an older daemon that ran the work plugin's scripts. `8` is gh unavailable: `gh` is not
+  installed or not logged in, so `linear.pr` cannot read GitHub (see `linear.pr`). The CLI passes
+  `1..=7` through as its exit status; `8` exits `70` like any other code past `7`. The CLI preserves
   this envelope for `--json` errors on stderr and emits no JSON on stdout. A request handler task
   that **panics** (or is cancelled) still answers, with `5`: dropping the request would leave the
   client waiting forever, and killing the connection would take every other in-flight request on it
@@ -101,7 +102,7 @@ with lightweight recording/fake clients. Production clients perform no SQLite I/
 and mutates the database.
 
 The typed catalog/action surface includes `harness.capabilities`, `harness.list`,
-`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`,
+`space.list`, `session.list`, `run.cancel`, `run.retry`, `pane.set_title`, `pane.focus`, `pane.context`,
 `board.pane.open`, `board.pane.close`, `board.notify`, `caller.resolve`,
 `linear.snapshot`, `linear.list`, `linear.issue`, and the Linear local-state methods
 (`linear.state.get`, `linear.bind`, `linear.space.bind`, `linear.unbind`, `linear.grouping.*`, `linear.mark.*`,
@@ -246,7 +247,7 @@ A card selects a **herdr session** (`session`, `null` = the daemon's default ses
       omitted flag leaves the kind unchanged.
   - creating directly into an `auto` column dispatches immediately (same as move)
   - In the legacy v1→v2 migration, `cwd`/`worktree` kinds and `worktree_base` were removed;
-    current schema v16 treats worktree isolation as the agent's job via prompt instructions, not a
+    current schema v17 treats worktree isolation as the agent's job via prompt instructions, not a
     board concept. Existing databases migrate those cards to `workspace` (best effort,
     `space_ref` kept).
 - `card.update {id, …subset}` → `Card`; nullable update fields use the tri-state encoding below. Harness/model/effort/permission/session/space fields are refused while the card has an open run (`queued|running|blocked|awaiting`). Title/description remain editable; `done` is not open.
@@ -494,8 +495,10 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   in one pane's border, in the **caller's own** herdr session. `origin_socket` names that session
   exactly as it does for `run.focus` (only the caller knows which Herdr it runs inside); the path is
   canonicalized and then opened through the same gated connect as every other operation, so the
-  Herdr 0.9.x / protocol 22 check runs before the rename. Maps to herdr `pane.rename`, and
-  touches no board state — the daemon exists here only because it owns every Herdr call. The
+  Herdr 0.9.x / protocol 22 check runs before the rename. Maps to herdr `pane.rename`. The
+  one board state it touches is the generated-label store: from then on the pane's label belongs to
+  its client, and the daemon's tab and split naming never renames that pane (`docs/herdr.md`, "Tab
+  and split names"). The
   daemon strips control and format characters (escapes, newlines, bidi overrides, zero-width marks)
   from `title` before the rename, because any socket client can send one; brackets are kept.
   Error 1 for an empty `pane_id`, error 4 for an unavailable socket, a socket that fails the
@@ -513,6 +516,18 @@ and promoted atomically onto run+card. See [Dispatch semantics](#dispatch-semant
   never sent. The Linear-mode board uses it for the panes a snapshot names, which may be stale, so
   `gone` is a result and not an error. Error 1 for an empty `pane_id`, error 4 for an unavailable
   socket, a socket that fails the protocol gate, or a herdr refusal of `pane.get`/`pane.focus`.
+- `pane.context {origin_socket, pane_id, space, plugin_pane?}` →
+  `{workspace_id, tab_id, alone, overlay, focused_pane_id?, panes: [{pane_id, cwd?, issue?}]}` — where the
+  caller's own pane sits in its tab, for the Linear board's level. One herdr `pane.layout` and one
+  `pane.list`, after the protocol gate. `alone` is true when the pane is the tab's only pane, or the
+  tab is zoomed on it. `overlay` is true when `plugin_pane` (the caller is the herdr-board `board`
+  entrypoint) and the daemon has no `board.pane.open` record for the pane: herdr reports no
+  placement, and every tab or split board is one the daemon opened. `panes` lists the tab's other
+  panes in layout order; `cwd` is herdr's `foreground_cwd`, else `cwd`, and `issue` is what
+  `linear.session.get` resolves for that cwd with the raw `origin_socket`. The read also adds the
+  session to the daemon's focus watch until no client is subscribed (see `pane_layout_changed`).
+  Error 1 for an empty `pane_id`, error 4 for an unavailable socket or a herdr refusal. A daemon
+  without the method answers `unknown method`, and the board then stays at the space level.
 - `board.pane.open {context: {space?, issue?, card?, session?}, placement, origin_socket, origin_pane,
   session_cwd?, claude_session_id?}` →
   `{pane_id, tab_id, workspace_id, placement, reused}` — open a board beside an agent's own pane,
@@ -635,6 +650,42 @@ daemon start).
     board's `R` key sends it. A daemon that predates `force` ignores it.
   - Additive: `linear.message` (string, omitted when there is nothing to say), `linear.status`
     values `not_imported` and `unavailable`.
+  - Card fields on each `issues[]` entry, all additive and `null` when Linear has nothing:
+    `description` (an excerpt of at most 240 characters, whitespace collapsed), `milestone`
+    (`{id, name}`), and `pr` (`{repo, number, url, status, draft}`), the issue's newest pull
+    request attachment by creation time. The read asks Linear for up to 10 attachments whose URL
+    contains `/pull/`; only a `https://github.com/<owner>/<repo>/pull/<number>` URL becomes `pr`,
+    with `repo` and `number` taken from the URL and `status` and `draft` from the attachment's
+    metadata as Linear sends them. A PR on the host named by boardd's `GH_HOST` is accepted too.
+    When no attachment is such a PR, the newest `https://<host>/<owner>/<repo>/pull/<number>` on
+    any other host becomes `pr` with `gh_error: "unsupported host"`; `gh` never reads it.
+  - **`gh` fields** on each `pr`, all additive and absent until boardd's `gh` has read the PR:
+    `state` (`OPEN`, `CLOSED`, `MERGED`), `ci` (`{state, passed, pending, failed, skipped}`, the
+    latest run of each check name, `state` one of `pass`, `pending`, `fail`, `none`), `additions`,
+    `deletions`, `preview` (the newest deployment status's `environment_url` for the PR's branch),
+    `blocker` (for a blocked open PR: the first required check that is not passing, as
+    `<name> (required) is pending|failing`, else `review required`, `changes requested` or
+    `merge blocked`; `has merge conflicts` for a conflicting one) and `gh_error` (why `gh` could
+    not read this PR the last time; the other fields keep the last good read). `draft` takes
+    gh's value once read. The document adds `gh: {status, message}`: `ok`, `unavailable` (with
+    why) or `unknown` (no read has finished).
+  - **`gh` enrichment.** boardd runs `gh` itself, never the client: `GH_BIN` (default `gh`),
+    with a cleared environment holding only `HOME`, `PATH`, `GH_TOKEN`, `GITHUB_TOKEN`,
+    `GH_HOST`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME` and `DBUS_SESSION_BUS_ADDRESS`, a 20 s deadline
+    per call and a 4 MiB output cap. It builds argv only from the URL's validated host, owner,
+    repo (`[A-Za-z0-9_.-]`, not `.`, `..` or a leading `-`) and number, never the URL itself.
+    Per PR: `gh pr view <n> -R <host>/<owner>/<repo> --json …`, `gh pr checks <n> -R … --required
+    --json name,state,bucket`, and for an open PR `gh api --method GET --hostname <host>
+    repos/<owner>/<repo>/deployments -f ref=<branch>` then that deployment's statuses. Results
+    are cached per PR and shared by every board. A snapshot that shows a PR its space did not
+    show before queues it for one debounced (500 ms) pass that reads at most 4 PRs at once; while
+    at least one connection is subscribed to events, a check every 30 s also queues each
+    on-board PR whose last read is 2 minutes old with checks pending, or 10 minutes old. With no
+    subscriber nothing is read again. After a pass finds `gh` unavailable, neither trigger
+    queues anything for 10 minutes. A pass that read a PR, or that changed `gh.status`, ends
+    with one `local_state_changed {space, snapshot: true}` per space that shows a PR it tried,
+    so a plain `linear.snapshot` carries the new fields. A snapshot never
+    waits on `gh`.
   - Clients wait at most `LINEAR_SNAPSHOT_CLIENT_TIMEOUT` (150 s). Error 1 for an empty
     `workspace_id`.
 - `linear.list {kind, id?, origin_socket?}` → `{status, message, rows}`. `status` is one of `ok`,
@@ -659,12 +710,28 @@ daemon start).
   `projects`, a missing id on `views`, or an id of the wrong shape.
 - `linear.issue {issue, origin_socket?}` → the issue document — one Linear issue read whole for
   the board's issue page: description, sub-issues, parent and relations, comments and history,
-  plus project, milestone, cycle, estimate and due date. The read is ONE GraphQL request: each
+  plus project, milestone, cycle, estimate and due date, and `attachments`: every attachment of
+  any source as `{id, source_type, title, subtitle, url, created_at, metadata}`, with `metadata`
+  passed through as Linear sends it (it can be `null`). The read is ONE GraphQL request: each
   paged connection is asked for one page, and what did not fit is named in `truncated`, with
   `status` `partial`, so a busy issue opens as fast as an empty one. History events that change
   nothing the page shows are dropped. Every Linear failure, no such issue included, is a document
   with `status: "unavailable"`, `message` and `issue: null`, not an error code. Clients wait at
   most `LINEAR_ISSUE_CLIENT_TIMEOUT` (60 s). Error 1 for an id of the wrong shape.
+- `linear.pr {url, force?}` → `{schema, status, message, fetched_at, pr}`: one pull request's
+  full `gh` detail for the issue page. `pr` is `{repo, number, url, title, state, draft,
+  merged_at, merge_state, mergeable, review_decision, additions, deletions, changed_files,
+  head_ref, head_sha, ci, checks, blocker, reviews, preview}`, with `checks: [{name, bucket,
+  state, required, url}]` (latest run per name; `bucket` `pass`, `pending`, `fail` or `skipping`)
+  and `reviews: [{author, state, submitted_at}]` (each reviewer's latest). `url` must be a
+  `https://github.com/<owner>/<repo>/pull/<number>` URL (or on boardd's `GH_HOST`), checked as
+  `linear.snapshot` checks card PRs; anything else is error 1 and starts no `gh`. A read of the
+  shared cache less than 60 s old answers without `gh` unless `force` is set; otherwise the read
+  runs the `gh` calls above and updates the cache, announcing the spaces that show the PR. A
+  `gh` failure for this PR is `status: "unavailable"` with `message` (and the last good `pr`,
+  if any); `gh` not installed or not logged in is error 8. Clients wait at most
+  `LINEAR_PR_CLIENT_TIMEOUT` (90 s). A daemon that predates the method answers error 1
+  `unknown method`, and a client then shows Linear's PR data only.
 - `linear.bind_handoff` — retired. The daemon answers it as an unknown method (error 1); bind a
   space with `linear.space.bind`.
 
@@ -916,13 +983,20 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
   session, so a reader of the same workspace id in another session re-reads its own state for
   nothing. A `linear.activity.record` for a space a reader has read is announced at once and again
   by its debounced refetch (see `linear.snapshot`): one more event when the refetch lands or
-  fails, however many reports it folded, with `snapshot: true`. That flag means the daemon's cached read is already fresh, so a reader answers
+  fails, however many reports it folded, with `snapshot: true`. A `gh` enrichment pass or a
+  `linear.pr` read also ends with one `snapshot: true` event per space showing a PR it read. That flag means the daemon's cached read is already fresh, so a reader answers
   it with one plain `linear.snapshot`, never a forced one; without the flag a reader re-reads
   `linear.state.get`. The flag is omitted when false, and an older client ignores it. It is a
   new event rather than a `board_changed` reason because a client skips an event line it cannot
   parse, while an unknown reason would make it drop the whole `board_changed` line. Unlike
   `board_changed`, the server does not coalesce these: a burst of other writes is a burst of
   events, and a subscriber whose outbox fills is disconnected.
+
+- `{"event":"pane_layout_changed","workspace_id"?:"<space>","tab_id"?:"<tab>"}` — herdr reported
+  `pane_focused`, `tab_focused` or `layout_updated` in a session a board read `pane.context` from.
+  `pane_focused` carries no tab, so `tab_id` may be absent. A board in that workspace re-reads
+  `pane.context`; the event names no session, so a board with the same workspace id in another
+  session re-reads for nothing. An older client ignores it.
 
 ## Dispatch semantics (column engine — lives in board-core, pure; daemon executes effects)
 
@@ -938,7 +1012,7 @@ Coarse by design — the TUI refetches only its selected `board.get {board_id}` 
     - harness session: resume `card.session_id` unless `column.fresh_session` or none. Pi mint/resume use exact `--session-id`; Pi retry forks old → a newly minted target id. Claude retains mint/`--resume`/`--fork-session`. Codex Mint takes **no session flag** (it mints its own thread id and the enqueued run persists `session_id=NULL` — the board never invents a uuid); codex resume/fork are `resume <id>` / `fork <id>` subcommands appended last to the startup argv. OpenCode Mint also takes **no session flag** (the TUI mints its own `ses_…` id and the enqueued run persists `session_id=NULL`); opencode resume/fork are trailing session flags `-s <id>` / `-s <id> --fork`. Existing cards keep their stored harness/session.
    - **preflight before workspace mutation:** `ping` the selected socket and require Herdr 0.9.x / protocol 22. Only then resolve `workspace` by id/case-insensitive label, or resolve `new_workspace` by label and, if absent, call `workspace.create {label,cwd,focus:false}`. Read the workspace cwd from its pane snapshot; snapshot failure or missing live cwd fails dispatch, never falling back to process cwd or a stale snapshot. When this dispatch itself created the workspace, its exact initial tab/root pane ids travel as a one-shot bootstrap hint: the first card-tab allocation verifies them (tab exists in that workspace, root is the tab's sole pane, root carries no agent), renames the tab to `card-<id>` and the root to `card-<id>-anchor`, and splits the run child from that root — so a daemon-created workspace has no unused initial tab. Any verification mismatch falls back to a fresh `tab.create` and never touches that root; reused/existing/user workspaces never carry a hint.
    - **preflight again at the spawner boundary:** this is the spawner's first protocol call, before placement, managed launch, or the configured runner.
-   - build the run-child env `{BOARD_CARD_ID,BOARD_RUN_ID,BOARD_SOCKET,BOARD_BIN}` plus configured-harness prompt env. Current schema v16 runs place each card in a stable short `card-<id>` tab whose root is a shell anchor labeled `card-<id>-anchor`. The anchor receives only stable card identity; every run child is created by `pane.split` from it with the complete run cwd/env. Promotion persists the exact anchor id with the run **except** for managed launches, whose anchor is closed after a successful launch (see below), leaving the tab with exactly the harness pane and a NULL persisted anchor. The daemon reuses only exact tab/anchor identities reconstructed from the newest matching durable panes in the same session/workspace; labels are display metadata, never ownership. A renamed anchor remains selected by identity; a closed anchor is recreated only by splitting a currently live durable board child, otherwise a fresh tab is created. Same-conversation reuse eligibility is checked **before** anchor selection, so an anchorless managed tab still reuses its exact prior harness pane on the next hop. The initial split targets ratio `0.40` and clamps it on narrow terminals so the anchor remains reusable; later splits use layout geometry. Both fresh and recovered placement fail closed unless the live layout can provide a 24x6 anchor and a 12x8 child. Concurrent first allocations for one `(session,workspace,card)` key are serialized; if multiple historical panes are live, newest run id wins. Legacy rows retain the historical `kanban` lookup. Thus cwd/env/placement exist **before** launch; pane-first `agent.start` receives none of them and never receives the anchor pane id.
+   - build the run-child env `{BOARD_CARD_ID,BOARD_RUN_ID,BOARD_SOCKET,BOARD_BIN}` plus configured-harness prompt env. Current schema v17 runs place each card in a stable short `card-<id>` tab whose root is a shell anchor labeled `card-<id>-anchor`. The anchor receives only stable card identity; every run child is created by `pane.split` from it with the complete run cwd/env. Promotion persists the exact anchor id with the run **except** for managed launches, whose anchor is closed after a successful launch (see below), leaving the tab with exactly the harness pane and a NULL persisted anchor. The daemon reuses only exact tab/anchor identities reconstructed from the newest matching durable panes in the same session/workspace; labels are display metadata, never ownership. A renamed anchor remains selected by identity; a closed anchor is recreated only by splitting a currently live durable board child, otherwise a fresh tab is created. Same-conversation reuse eligibility is checked **before** anchor selection, so an anchorless managed tab still reuses its exact prior harness pane on the next hop. The initial split targets ratio `0.40` and clamps it on narrow terminals so the anchor remains reusable; later splits use layout geometry. Both fresh and recovered placement fail closed unless the live layout can provide a 24x6 anchor and a 12x8 child. Concurrent first allocations for one `(session,workspace,card)` key are serialized; if multiple historical panes are live, newest run id wins. Legacy rows retain the historical `kanban` lookup. Thus cwd/env/placement exist **before** launch; pane-first `agent.start` receives none of them and never receives the anchor pane id.
    - managed Pi/Claude: create a mode-`0600` file containing the snapshotted system prompt; call `agent.start {name,kind,pane_id,args,timeout_ms:30000}` on the newly split child with prompt-free startup args and the harness-specific file flag. A typed `agent_pane_busy` response is treated as a bounded transient on that same child: retry the exact same request on the same pane at most five times, with 100ms backoff doubling per retry (100/200/400/800/1600ms — long enough for a slow login shell to reach its prompt); do not split or allocate another pane. Persistent busy is terminal and follows child-only cleanup, leaving the anchor. This is distinct from `pane_not_found`, which is a placement race: close the child when present, rediscover from `tab.list`, and retry complete placement once. Poll `agent.get {target:pane_id}` for at most 30s until `interactive_ready && !launch_pending`; then (this is a two-stage readiness contract) for pi/claude poll `agent.get` until `agent_session` carries a non-empty value — at most 5 probes spread over 10s; a timeout degrades with a warning and proceeds, never blocking launch (self-minting harnesses skip this stage: their session id is minted by the first prompt). Call `agent.prompt {target:pane_id,text:prompt_snapshot}`, retrying the exact same request only on a typed `agent_pane_busy` refusal (at most five times, 100ms backoff doubling, pane re-checked interactive between attempts — every other error propagates immediately so a prompt that may have landed is never re-sent), then start a bounded delivery confirmation poll on a detached diagnostics connection (5 probes over 10s; leaves-idle or session-appears/changes confirms; on timeout log a distinct dropped-prompt-suspect warning, never re-send). The poll never delays spawn return, run promotion, or an early `board done`. Remove the prompt file before returning, including error paths.
     - managed self-minting harnesses (codex, opencode, and antigravity): the same `agent.start` readiness contract **without any prompt file** — none of the three has a system-prompt-file equivalent, so startup argv carries neither system nor task text and there is no `--` delimiter. After readiness the daemon runs a **bounded post-launch capture** on the same gated connection: it polls `agent.get` (at most 5 probes, 10s wall-clock cap) for `AgentInfo.agent_session`, and accepts only an `id`-kind reference owned by the expected agent with a non-empty `value` — for codex the source is deliberately unconstrained, while opencode and antigravity pin the exact source the current Herdr integration reports. The capture is ordered per harness: for **codex** it runs before the prompt (the integration reports its thread id as soon as the CLI is interactive); for **opencode and antigravity** it runs **after** the prompt — real OpenCode mints its `ses_…` id and reports `agent_session` only once the first `agent.prompt` lands, so a pre-prompt capture would lose the id, while a prompt-less opencode rescue reduces to capture-after-readiness (antigravity is ordered like opencode — see the launch spec below). A missing, wrong-agent, wrong-source, `path`-kind, or blank report degrades to `None` with a warning and the launch **continues**: basic execution works, but the run keeps its enqueue-time `NULL` id, so same-conversation reuse hops and `run.focus` rescue fail closed (no recorded id). A captured id is persisted atomically **with** the run promotion (run + card in one transaction), so a cancel-during-spawn that ends the run discards the capture together with the handle; a capture racing promotion writes through the same single-row UoW and fails closed if the run is no longer open. Then `agent.prompt` delivers the prompt (before the capture for codex, after it for opencode and antigravity): a Mint receives one delimited block (`## herdr-board system instructions` + `## herdr-board card task`), a resume/fork fresh pane receives the task alone, same-pane reuse the task alone, and a rescue sends nothing. **After a successful managed launch** (fresh or reuse), the daemon closes the tab anchor with `pane.close` — closing a split parent is live-verified safe, and the harness pane keeps its process/env — so the tab converges to exactly one harness pane; the promoted run persists a NULL anchor. If that close fails, the anchor is kept (and persisted) rather than failing the already-successful launch. A failed launch never closes the anchor: it remains for the next allocation, per the child-only cleanup rule.
    - managed pane name is `card-<id>-<column-slug>` (e.g. `card-14-execute`); `agent_name_taken` retries once on the same pane with `card-<id>-<column-slug>-r<run>`.

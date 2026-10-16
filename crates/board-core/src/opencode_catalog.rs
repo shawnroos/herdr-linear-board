@@ -33,14 +33,12 @@
 //! exhaust memory or block the daemon forever. Everything here is pure
 //! subprocess reading; nothing mutates state.
 
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::capability::ModelInfo;
+use crate::cli_child::run_bounded;
 use crate::protocol::Effort;
 
 /// Hard cap on catalog entries parsed from one CLI run.
@@ -282,98 +280,17 @@ pub fn load_from_cli(opencode_bin: &str) -> Option<Vec<ModelInfo>> {
 
 /// The bounded core of [`load_from_cli`] with a caller-chosen wall-clock
 /// budget (the tests use a short controlled timeout; production uses
-/// [`CLI_TIMEOUT`]).
-///
-/// The run is bounded in both dimensions a pathological CLI could exhaust:
-/// - **wall clock**: the child is killed (and reaped) when the deadline
-///   passes, so a hung `opencode` cannot block the daemon forever;
-/// - **stdout**: a reader thread drains stdout into a buffer capped at
-///   [`MAX_OUTPUT_BYTES`] (stdin/stderr are null, so no other pipe can fill
-///   and deadlock the child), so an unparsable firehose cannot exhaust memory.
-///
-/// Returns `None` on spawn failure, timeout, oversized output, a failed read,
-/// or a lost reader thread — the caller keeps the static fallback either way.
+/// [`CLI_TIMEOUT`]). Stdout is capped at [`MAX_OUTPUT_BYTES`]; see
+/// `cli_child::run_bounded` for every way the run gives up — the caller keeps the
+/// static fallback either way.
 pub fn load_from_cli_bounded(opencode_bin: &str, timeout: Duration) -> Option<Vec<ModelInfo>> {
-    let argv = models_argv(opencode_bin);
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::sync_channel(1);
-    let reader = std::thread::spawn(move || {
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut chunk = [0_u8; 8 * 1024];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if buffer.len() + n > MAX_OUTPUT_BYTES {
-                        let _ = tx.send(None);
-                        return;
-                    }
-                    buffer.extend_from_slice(&chunk[..n]);
-                }
-                Err(_) => {
-                    let _ = tx.send(None);
-                    return;
-                }
-            }
-        }
-        let _ = tx.send(Some(buffer));
-    });
-    let deadline = Instant::now() + timeout;
-    let stdout = match rx.recv_timeout(timeout) {
-        Ok(Some(buffer)) => buffer,
-        // Timeout, oversized output, or read failure: kill the child so its
-        // pipe closes, reap it, and join the reader. The channel is dropped
-        // first so a reader blocked on a final send cannot hang the join.
-        Ok(None) | Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            drop(rx);
-            let _ = reader.join();
-            return None;
-        }
-    };
-    // The reader saw EOF, but the process itself may still be exiting (a
-    // grandchild could hold the pipe). Reap it within the same deadline;
-    // a child that will not exit after EOF is killed like a timeout.
-    let status = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break None;
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => std::thread::sleep(remaining.min(POLL_INTERVAL)),
-            Err(_) => break None,
-        }
-    };
-    let status = match status {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-    };
-    let _ = reader.join();
-    if !status.success() {
-        return None;
-    }
+    let stdout = run_bounded(&models_argv(opencode_bin), timeout, MAX_OUTPUT_BYTES)?;
     let models = parse_verbose_output(&String::from_utf8_lossy(&stdout));
     if models.is_empty() {
         return None;
     }
     Some(models)
 }
-
-/// Poll interval while reaping a child whose stdout already reached EOF.
-const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// The static fallback opencode catalog: guarantees the `models` field is
 /// defined even when no live CLI is reachable. Truthful, not aspirational:

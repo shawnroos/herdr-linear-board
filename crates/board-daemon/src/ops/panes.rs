@@ -17,15 +17,16 @@ use std::time::Duration;
 
 use board_core::db::NewBoardPane;
 use board_core::engine::{match_caller, parse_pane_filter, CallerPane};
+use board_core::paths::{BOARD_ENTRYPOINT, BOARD_PLUGIN_ID};
 use board_core::text::strip_control_and_format;
 use board_herdr::{
     NotificationSound, PaneRenameParams, PluginPaneOpenParams, PluginPanePlacement, SocketDeadlines,
 };
 
-/// Rename `pane_id` in the session `origin_socket` belongs to.
+/// Rename `pane_id` in the session `origin_socket` belongs to. The pane's
+/// label then belongs to its client: the naming pass never renames it again.
 ///
-/// Takes no [`Daemon`](crate::state::Daemon): this touches no board state, only
-/// the caller's own Herdr session. That session is named by `origin_socket`
+/// The rename touches only the caller's own Herdr session. That session is named by `origin_socket`
 /// exactly as it is for `run.focus`, because only the caller knows which Herdr
 /// it is running inside; the socket is canonicalized and then opened through
 /// [`crate::herdr_conn`], so the pinned Herdr 0.9.0 / protocol 22 gate applies
@@ -41,21 +42,18 @@ use board_herdr::{
 /// Control and format characters are stripped here rather than trusted to the
 /// TUI, because any socket client can call this. Brackets survive: the kanban
 /// title is `Board [scope · FILTER]`.
-pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
-    if p.pane_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "pane.set_title requires a non-empty pane_id".into(),
-        ));
-    }
-    let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
-    let mut client = crate::herdr_conn::connect_checked(&socket)
-        .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+pub(super) fn pane_set_title(d: &Arc<Daemon>, p: PaneSetTitleParams) -> Result<Value> {
+    require_nonempty(&p.pane_id, "pane.set_title", "pane_id")?;
+    let (socket, _) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket)?;
+    let _labels = d.naming.labels();
     client
         .pane_rename(&PaneRenameParams {
             pane_id: p.pane_id.clone(),
             label: board_core::text::strip_control_and_format(&p.title),
         })
         .map_err(|e| Error::HerdrUnavailable(format!("pane.rename {}: {e}", p.pane_id)))?;
+    crate::naming::titled_by_client(d, &socket, &p.pane_id);
     Ok(json!(PaneSetTitleResult { renamed: true }))
 }
 
@@ -64,14 +62,9 @@ pub(super) fn pane_set_title(p: PaneSetTitleParams) -> Result<Value> {
 /// the session does not list (another session's pane included) is `gone`, and
 /// `pane.focus` is never sent for it.
 pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
-    if p.pane_id.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "pane.focus requires a non-empty pane_id".into(),
-        ));
-    }
-    let socket = crate::herdr_conn::normalize_socket(Path::new(&p.origin_socket), "origin")?;
-    let mut client = crate::herdr_conn::connect_checked(&socket)
-        .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))?;
+    require_nonempty(&p.pane_id, "pane.focus", "pane_id")?;
+    let (socket, _) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket)?;
     let live = client
         .pane_get(&p.pane_id)
         .map_err(|e| Error::HerdrUnavailable(format!("pane.get {}: {e}", p.pane_id)))?;
@@ -87,6 +80,71 @@ pub(super) fn pane_focus(p: PaneFocusParams) -> Result<Value> {
     Ok(json!(PaneFocusResult {
         focused: true,
         gone: false,
+    }))
+}
+
+/// The caller's own pane in its tab: alone or split, overlay or tile, and the
+/// issue each other pane's working directory is bound to, resolved exactly as
+/// `linear.session.get` resolves it. Reading it also starts watching the
+/// session for focus and layout events.
+pub(super) fn pane_context(d: &Arc<Daemon>, p: PaneContextParams) -> Result<Value> {
+    require_nonempty(&p.pane_id, "pane.context", "pane_id")?;
+    let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
+    let mut client = connect_origin(&socket_path)?;
+    d.watch_levels(socket_path);
+    let layout = client
+        .pane_layout(Some(&p.pane_id))
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.layout {}: {e}", p.pane_id)))?;
+    let own = p.pane_id.as_str();
+    let alone = layout.panes.iter().all(|pane| pane.pane_id == own)
+        || (layout.zoomed && layout.focused_pane_id == own);
+    // Herdr reports no placement. Every tab or split board is one the daemon
+    // opened and recorded, so a plugin board without a row is an overlay.
+    let overlay = p.plugin_pane
+        && !d
+            .store
+            .lock()
+            .list_board_panes(&socket)?
+            .iter()
+            .any(|row| row.pane_id == own);
+    let listed = client
+        .pane_list(Some(&layout.workspace_id))
+        .map_err(|e| Error::HerdrUnavailable(format!("pane.list: {e}")))?;
+    let cwd_of = |pane_id: &str| {
+        listed
+            .iter()
+            .find(|pane| pane.pane_id == pane_id && pane.tab_id == layout.tab_id)
+            .and_then(|pane| pane.working_dir().map(str::to_string))
+    };
+    let now = now_secs(d);
+    let store = d.store.lock();
+    let mut panes = Vec::new();
+    for pane in layout.panes.iter().filter(|pane| pane.pane_id != own) {
+        let cwd = cwd_of(&pane.pane_id);
+        // Raw socket: the session read keys the space binding on this string.
+        let read = store.linear_session_get(
+            &LinearSessionGetParams {
+                space: p.space.clone(),
+                herdr_socket: Some(p.origin_socket.clone()),
+                herdr_pane_id: Some(pane.pane_id.clone()),
+                claude_session_id: None,
+                cwd: cwd.clone(),
+            },
+            now,
+        )?;
+        panes.push(PaneContextPane {
+            pane_id: pane.pane_id.clone(),
+            cwd,
+            issue: read.binding.map(|b| b.issue).filter(|i| !i.is_empty()),
+        });
+    }
+    Ok(json!(PaneContext {
+        workspace_id: layout.workspace_id.clone(),
+        tab_id: layout.tab_id.clone(),
+        alone,
+        overlay,
+        focused_pane_id: Some(layout.focused_pane_id.clone()).filter(|id| !id.is_empty()),
+        panes,
     }))
 }
 
@@ -248,8 +306,6 @@ fn session_caller_panes(
         .collect()
 }
 
-const BOARD_PLUGIN_ID: &str = "herdr-board";
-const BOARD_ENTRYPOINT: &str = "board";
 const SESSION_ENTRYPOINT: &str = "session";
 const MAX_CWD: usize = 4096;
 const MAX_CLAUDE_SESSION_ID: usize = 128;
@@ -369,6 +425,15 @@ fn origin_socket_key(origin_socket: &str) -> Result<(PathBuf, String)> {
     Ok((socket, key))
 }
 
+fn require_nonempty(value: &str, method: &str, field: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(Error::BadRequest(format!(
+            "{method} requires a non-empty {field}"
+        )));
+    }
+    Ok(())
+}
+
 fn connect_origin(socket: &Path) -> Result<board_herdr::HerdrClient> {
     crate::herdr_conn::connect_checked(socket)
         .map_err(|e| Error::HerdrUnavailable(format!("connecting to Herdr: {e}")))
@@ -391,11 +456,7 @@ pub(super) fn board_pane_open(d: &Arc<Daemon>, p: BoardPaneOpenParams) -> Result
     if session {
         show_env.extend(session_identity(&p)?);
     }
-    if p.origin_pane.trim().is_empty() {
-        return Err(Error::BadRequest(
-            "board.pane.open requires a non-empty origin_pane".into(),
-        ));
-    }
+    require_nonempty(&p.origin_pane, "board.pane.open", "origin_pane")?;
     let (socket_path, socket) = origin_socket_key(&p.origin_socket)?;
     let _serial = BOARD_PANES.lock().unwrap_or_else(PoisonError::into_inner);
     let mut client = connect_origin(&socket_path)?;

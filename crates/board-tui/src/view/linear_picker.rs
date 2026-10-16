@@ -1,6 +1,6 @@
 use board_core::protocol::{LinearListKind, LinearListStatus};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
@@ -30,7 +30,8 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
     let PickerPurpose::LinearList(kind) = picker.purpose else {
         return;
     };
-    let dim = Style::default().fg(Color::DarkGray);
+    let theme = &state.theme;
+    let dim = theme.dim();
     let noun = list_noun(kind);
     let visible = picker.visible_rows();
     let clean = |s: &str| collapse_line(&sanitise(s));
@@ -40,7 +41,7 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
         // The id first, as on every row, so a narrow box cuts the label.
         notes.push((
             format!("binds space {} · {}", clean(&space.id), clean(&space.label)),
-            Style::default().fg(Color::LightCyan),
+            theme.accent(),
         ));
     }
     if let (LinearListKind::Views, Some(project)) = (kind, &picker.list_id) {
@@ -50,7 +51,7 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
                 clean(&state.workspace_id),
                 clean(project)
             ),
-            Style::default().fg(Color::LightCyan),
+            theme.accent(),
         ));
     }
     let in_flight = state.list_in_flight(kind, picker.list_id.as_deref());
@@ -61,8 +62,8 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
         Some(text) if !text.is_empty() => format!("{label}: {}", clean(text)),
         _ => label.to_string(),
     };
-    let warn = Style::default().fg(Color::LightYellow);
-    let error = Style::default().fg(Color::LightRed);
+    let warn = theme.warning();
+    let error = theme.error();
     match &picker.outcome {
         Some(ListOutcome::Failed(text)) => {
             notes.push((format!("read failed: {}", clean(text)), error));
@@ -128,7 +129,7 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
         box_area,
         false,
         (&title, &title),
-        Style::default().fg(Color::LightBlue),
+        theme.accent(),
         "X",
         &mut hit_map,
     );
@@ -153,7 +154,7 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
             Span::styled("filter: ", dim),
             Span::styled(
                 linear_fit(&clean(&picker.filter), width.saturating_sub(8)),
-                Style::default().fg(Color::White),
+                theme.text(),
             ),
         ])
     };
@@ -181,11 +182,11 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
         let pad = " ".repeat(tag_w.saturating_sub(tag.width()) + 2);
         let name_w = width.saturating_sub(1 + tag_w + 2);
         let name_style = if selected {
-            Style::default()
-                .fg(Color::White)
+            theme
+                .text()
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            Style::default().fg(Color::White)
+            theme.text()
         };
         let rect = Rect::new(inner.x, y, inner.width, 1);
         put(
@@ -193,11 +194,9 @@ pub(super) fn draw_linear_picker(app: &App, state: &LinearState, f: &mut Frame, 
             Line::from(vec![
                 Span::styled(
                     if selected { "›" } else { " " },
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    theme.accent().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(tag, Style::default().fg(Color::LightCyan)),
+                Span::styled(tag, theme.accent()),
                 Span::raw(pad),
                 Span::styled(linear_fit(&name, name_w), name_style),
             ]),

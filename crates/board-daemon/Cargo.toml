@@ -17,6 +17,7 @@ tracing-subscriber = { workspace = true }
 libc = { workspace = true }
 thiserror = { workspace = true }
 ureq = { workspace = true }
+unicode-width = { workspace = true }
 # Runtime dependency, not a test-only one: the Herdr spawner writes the
 # configured-harness startup script and the managed system-prompt file through
 # `tempfile::Builder` (see `spawner/herdr/{configured,managed}.rs`).

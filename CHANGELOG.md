@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board is redesigned: lanes, filter, issue window, PR checks on cards, herdr theme, and tabs named after their issue.
+
 ## [0.18.1] - 2026-10-15
 
 ### Fixed

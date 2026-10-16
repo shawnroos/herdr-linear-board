@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 46-caller-without-herdr-env.sh — a Claude session that lost herdr's variables (Claude Code's
+# 48-caller-without-herdr-env.sh — a Claude session that lost herdr's variables (Claude Code's
 # warm-spare claim) still finds its pane: `board mcp` with no HERDR_* env refuses open_board and
 # names the one Claude pane in its folder, opens the board beside it once the caller passes that
 # `<session>/<pane id>`, and a separate `board caller` with the same Claude session id reads the
@@ -234,4 +234,4 @@ ok "e2e-46-b --pane $E2E_SESSION/$SECOND_PANE resolves to $SECOND_PANE"
 exec {MCP_IN}>&-
 wait "$MCP_PID" 2>/dev/null || true
 
-echo; echo "46-caller-without-herdr-env: PASS"
+echo; echo "48-caller-without-herdr-env: PASS"

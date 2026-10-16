@@ -367,6 +367,14 @@ pub enum Event {
         )]
         snapshot: bool,
     },
+    /// Herdr reported a focus or layout change in a session the daemon reads
+    /// pane context for. A board in that workspace re-reads `pane.context`.
+    PaneLayoutChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_id: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,6 +1062,47 @@ pub struct PaneFocusResult {
     pub gone: bool,
 }
 
+/// `pane.context` params: the caller's own pane in its own herdr session.
+/// `plugin_pane` says the caller runs as the herdr-board plugin's `board`
+/// entrypoint, which herdr opens as an overlay unless the daemon placed it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContextParams {
+    pub origin_socket: String,
+    pub pane_id: String,
+    pub space: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub plugin_pane: bool,
+}
+
+/// One other pane in the caller's tab. `issue` is what `linear.session.get`
+/// resolves for the pane's working directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContextPane {
+    pub pane_id: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+/// `pane.context` result. `alone` means the caller's pane fills its tab;
+/// `panes` lists the tab's other panes in layout order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneContext {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub workspace_id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub tab_id: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub alone: bool,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub overlay: bool,
+    #[serde(default)]
+    pub focused_pane_id: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub panes: Vec<PaneContextPane>,
+}
+
 /// `caller.resolve` params: where a calling agent sits when its env lacks
 /// herdr's variables. `pane` is `<session>/<pane id>` or a bare pane id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1276,6 +1325,28 @@ pub struct LinearIssueDetail {
     pub comments: Vec<LinearComment>,
     #[serde(default)]
     pub history: Vec<LinearHistoryEvent>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub attachments: Vec<LinearAttachment>,
+}
+
+/// One Linear attachment, of any source. `metadata` is passed through as
+/// Linear sends it; its shape depends on `source_type`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinearAttachment {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub source_type: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
 }
 
 /// An id-and-name pair: a project or a milestone.
@@ -1922,6 +1993,10 @@ pub struct LinearSnapshot {
     pub linear: LinearSource,
     #[serde(default)]
     pub herdr: LinearHerdr,
+    /// The daemon's `gh` reads behind the cards' PR fields; absent from a
+    /// daemon that predates them.
+    #[serde(default)]
+    pub gh: Option<LinearGhSource>,
     /// `tabs[0].groups`, kept for clients that predate `tabs`.
     #[serde(default)]
     pub groups: Vec<LinearGroup>,
@@ -2026,6 +2101,22 @@ pub struct LinearHerdr {
     pub version: Option<String>,
 }
 
+/// [`LinearGhSource::status`] values. The field stays a string so a peer
+/// with a newer vocabulary still parses.
+pub const GH_OK: &str = "ok";
+pub const GH_UNAVAILABLE: &str = "unavailable";
+pub const GH_UNKNOWN: &str = "unknown";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearGhSource {
+    /// `ok`, `unavailable` (gh missing or not logged in) or `unknown` (no
+    /// read has finished yet).
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub status: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinearGroup {
     #[serde(default)]
@@ -2087,6 +2178,176 @@ pub struct LinearIssue {
     pub stale: bool,
     #[serde(default)]
     pub bindings: Vec<LinearBinding>,
+    /// An excerpt, whitespace collapsed, for the card.
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub milestone: Option<LinearNamed>,
+    /// The issue's newest GitHub pull request attachment.
+    #[serde(default)]
+    pub pr: Option<LinearCardPr>,
+}
+
+/// The pull request a card shows, from Linear's attachment. A struct so the
+/// daemon can add `gh` fields later without breaking older readers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearCardPr {
+    /// `owner/repo`, from the URL.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub repo: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    /// Linear's `metadata.status`, as sent.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub draft: Option<bool>,
+    /// The fields below come from the daemon's `gh` cache and stay absent
+    /// until `gh` has read the PR. `OPEN`, `CLOSED` or `MERGED`.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub ci: Option<LinearPrCi>,
+    #[serde(default)]
+    pub additions: Option<u64>,
+    #[serde(default)]
+    pub deletions: Option<u64>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    /// What keeps a blocked PR from merging, e.g.
+    /// `E2E Verification Required (required) is pending`.
+    #[serde(default)]
+    pub blocker: Option<String>,
+    /// Why `gh` could not read this PR the last time it tried.
+    #[serde(default)]
+    pub gh_error: Option<String>,
+}
+
+/// [`LinearPrCi::state`] and [`LinearPrCheck::bucket`] values (`skipping` is
+/// a check bucket only). Strings on the wire, so a newer peer still parses.
+pub const CI_PASS: &str = "pass";
+pub const CI_PENDING: &str = "pending";
+pub const CI_FAIL: &str = "fail";
+pub const CI_SKIPPING: &str = "skipping";
+pub const CI_NONE: &str = "none";
+
+/// A PR's checks, counted after keeping only the latest run of each name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrCi {
+    /// `pass`, `pending`, `fail` or `none`.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub state: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub passed: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub pending: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub failed: u64,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub skipped: u64,
+}
+
+/// `linear.pr` params: one pull request by its GitHub URL.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrParams {
+    pub url: String,
+    /// Read `gh` even when the cached entry is fresh.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
+/// How long a client waits for a `linear.pr` answer: up to four `gh` calls.
+pub const LINEAR_PR_CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The `linear.pr` document. A `gh` failure for this PR is `status:
+/// "unavailable"` with a `message`; `gh` missing is protocol error 8.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrDocument {
+    #[serde(default)]
+    pub schema: i64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub status: String,
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Unix seconds of the `gh` read the document holds.
+    #[serde(default)]
+    pub fetched_at: Option<i64>,
+    #[serde(default)]
+    pub pr: Option<LinearPrDetail>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrDetail {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub repo: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub number: u64,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub url: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub draft: Option<bool>,
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    /// gh's `mergeStateStatus`: `CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, ...
+    #[serde(default)]
+    pub merge_state: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<String>,
+    #[serde(default)]
+    pub review_decision: Option<String>,
+    #[serde(default)]
+    pub additions: Option<u64>,
+    #[serde(default)]
+    pub deletions: Option<u64>,
+    #[serde(default)]
+    pub changed_files: Option<u64>,
+    #[serde(default)]
+    pub head_ref: Option<String>,
+    #[serde(default)]
+    pub head_sha: Option<String>,
+    #[serde(default)]
+    pub ci: Option<LinearPrCi>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub checks: Vec<LinearPrCheck>,
+    #[serde(default)]
+    pub blocker: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub reviews: Vec<LinearPrReview>,
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrCheck {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub name: String,
+    /// `pass`, `pending`, `fail` or `skipping`.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub bucket: String,
+    /// As GitHub sent it: a check run's conclusion or status, or a status
+    /// context's state.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub required: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearPrReview {
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub submitted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

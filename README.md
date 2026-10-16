@@ -2,7 +2,7 @@
 
 ![Rust](https://img.shields.io/badge/rust-edition%202021-orange.svg)
 ![herdr 0.9.x](https://img.shields.io/badge/herdr-0.9.x-8a2be2)
-![board protocol v1 · schema v16](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v16-blue.svg)
+![board protocol v1 · schema v17](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v17-blue.svg)
 ![platforms: linux, macOS](https://img.shields.io/badge/platforms-linux%2C%20macOS-informational)
 
 **Turn a kanban card into a real AI coding agent running in a visible Herdr pane.** Cards hold
@@ -154,7 +154,7 @@ prefix is `ctrl+a`, it is `Ctrl+A Shift+K`). Do not reuse `prefix+k` — it is H
 - Requires **Herdr 0.9.x (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
   Linux and macOS are supported. The daemon rejects any other Herdr version or protocol before
   workspace discovery and pane launch.
-- Board protocol **v1**, SQLite schema **v16** (`schema.sql`; upgrades via `board-core::db`).
+- Board protocol **v1**, SQLite schema **v17** (`schema.sql`; upgrades via `board-core::db`).
 - The installer copies the `board` CLI to `~/.local/bin` — make sure that directory is on your
   `PATH` (`HERDR_BOARD_CLI_INSTALL_DIR` overrides it before installing).
 - Without the harness integration the board still dispatches and accepts `board done`, but runs in
@@ -319,7 +319,7 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–46);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–48);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development

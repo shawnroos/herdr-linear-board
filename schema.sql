@@ -1,6 +1,6 @@
 -- herdr-board SQLite schema (WAL mode; boardd is the only writer).
--- This file is the CURRENT (schema v16) shape: a fresh DB is created directly
--- from it and stamped `PRAGMA user_version = 16`. Existing databases are upgraded
+-- This file is the CURRENT (schema v17) shape: a fresh DB is created directly
+-- from it and stamped `PRAGMA user_version = 17`. Existing databases are upgraded
 -- by migrations in board-core/src/db/migrations.rs (kept in sync with this file).
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -308,6 +308,18 @@ CREATE TABLE linear_board_panes (
   origin_pane_id TEXT,
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (herdr_socket, pane_id)
+);
+
+-- A label the daemon wrote on a tab or pane of a Linear-bound space. A label
+-- that is neither blank, herdr's default, nor the one stored here was set by
+-- hand and is never replaced.
+CREATE TABLE linear_generated_labels (
+  herdr_socket TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('tab','pane')),
+  target_id    TEXT NOT NULL,
+  label        TEXT NOT NULL,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (herdr_socket, kind, target_id)
 );
 
 CREATE INDEX idx_linear_marks_space ON linear_marks(space, issue_identifier);

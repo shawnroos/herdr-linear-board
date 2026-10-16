@@ -143,6 +143,7 @@ version = "0.18.1"
 dependencies = [
  "anyhow",
  "directories",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",
@@ -168,6 +169,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "ureq",
  "uuid",
 ]

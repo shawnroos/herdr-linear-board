@@ -108,7 +108,7 @@ pub fn session_lane(state: &LinearState, issue: &str) -> Option<SessionLane> {
 
 pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
     match msg {
-        Msg::Refresh | Msg::Mouse(_) => vec![],
+        Msg::Refresh | Msg::Mouse(_) | Msg::PaneLayoutChanged(_) => vec![],
         Msg::LinearRefresh => read_everything(app),
         Msg::Key(k) => session_key(app, k),
         Msg::LocalStateChanged(signals) => {
@@ -134,11 +134,11 @@ pub(super) fn update_session(app: &mut App, msg: Msg) -> Vec<Effect> {
                 issue,
                 generation,
                 result,
-            } => {
-                super::linear::issue_arrived(app, &issue, generation, *result);
-                vec![]
-            }
-            LinearArrival::List { .. } | LinearArrival::Wrote { .. } => {
+            } => super::linear::issue_arrived(app, &issue, generation, *result),
+            LinearArrival::Pr { url, result } => super::linear_issue::pr_arrived(app, url, *result),
+            LinearArrival::List { .. }
+            | LinearArrival::Wrote { .. }
+            | LinearArrival::PaneContext(_) => {
                 vec![]
             }
         },
@@ -180,7 +180,9 @@ fn failure_text(failure: LinearFailure) -> String {
     match failure {
         LinearFailure::MethodNotFound => "the daemon predates the session read".to_string(),
         LinearFailure::TimedOut(limit) => super::linear::read_timeout_text(limit),
-        LinearFailure::OpUnsupported(text) | LinearFailure::Failed(text) => sanitise(&text),
+        LinearFailure::OpUnsupported(text)
+        | LinearFailure::Failed(text)
+        | LinearFailure::GhUnavailable(text) => sanitise(&text),
     }
 }
 
@@ -209,10 +211,7 @@ fn session_arrived(
 
 /// Mark text and issue ids are agent text, cleaned as the board cleans them.
 fn clean(read: LinearSessionGetResult) -> LinearSessionGetResult {
-    serde_json::to_value(&read)
-        .map(board_core::text::sanitise_json)
-        .and_then(serde_json::from_value)
-        .unwrap_or_default()
+    board_core::text::scrubbed(&read).unwrap_or_default()
 }
 
 fn snapshot_arrived(

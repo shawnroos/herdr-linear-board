@@ -16,6 +16,7 @@
 //! | [`driver`] | effect execution: client calls, `$EDITOR`, redraw flags |
 //! | [`app`] | the pure state machine (`Screen`/`App`/`update`) |
 //! | [`view`], [`widgets`] | the pure renderer |
+//! | [`theme`] | herdr's palettes and the role styles views draw with |
 //! | [`forms`], [`editor`] | form model and `$EDITOR` launching |
 //! | [`origin`] | the Herdr/plugin boundary |
 //!
@@ -32,9 +33,10 @@ pub mod origin;
 pub mod runtime;
 #[cfg(feature = "fake-client")]
 pub mod testkit;
+pub mod theme;
 pub mod view;
 pub mod widgets;
 
 pub use driver::{Driver, LinearStart, PlatformActions, RealPlatform};
 pub use origin::{Landing, OriginContext, SessionIdentity, ShowContext};
-pub use runtime::{run, run_linear, run_session, run_with_board};
+pub use runtime::{run, run_linear, run_linear_beside, run_with_board};

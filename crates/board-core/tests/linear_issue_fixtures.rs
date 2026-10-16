@@ -37,7 +37,7 @@ fn the_full_fixture_carries_every_section_the_page_draws() {
     assert_eq!(issue.comments.len(), 2);
     assert!(!issue.history.is_empty());
 
-    // R9 -- every linked row can open its own page from the row alone.
+    // Every linked row can open its own page from the row alone.
     let linked = [issue.parent.clone().unwrap()]
         .into_iter()
         .chain(issue.children.clone())
@@ -61,7 +61,7 @@ fn the_full_fixture_carries_every_section_the_page_draws() {
     assert!(issue.comments.iter().any(|c| c.parent_id.is_some()));
 }
 
-/// R4 -- an issue with nothing set parses, with every absent property null and
+/// An issue with nothing set parses, with every absent property null and
 /// every empty connection an empty list rather than a missing key.
 #[test]
 fn the_empty_fixture_parses_with_nulls_not_errors() {

@@ -123,6 +123,13 @@ pub struct PaneInfo {
     pub revision: u64,
 }
 
+impl PaneInfo {
+    /// The foreground process's directory wins over the pane's own.
+    pub fn working_dir(&self) -> Option<&str> {
+        self.foreground_cwd.as_deref().or(self.cwd.as_deref())
+    }
+}
+
 /// A plugin pane, as `plugin.pane.open` returns it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PluginPaneInfo {

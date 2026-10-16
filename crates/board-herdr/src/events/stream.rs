@@ -64,12 +64,17 @@ impl Subscription {
 
     /// Watch for panes whose process exits (global; no pane_id).
     pub fn pane_exited() -> Subscription {
-        Subscription(json!({ "type": "pane.exited" }))
+        Subscription::global("pane.exited")
     }
 
     /// Watch for panes being closed/removed (global; no pane_id).
     pub fn pane_closed() -> Subscription {
-        Subscription(json!({ "type": "pane.closed" }))
+        Subscription::global("pane.closed")
+    }
+
+    /// A session-wide event kind: no `pane_id`.
+    pub fn global(kind: &str) -> Subscription {
+        Subscription(json!({ "type": kind }))
     }
 
     /// Escape hatch: any subscription object.
@@ -88,6 +93,22 @@ pub fn watch_subscriptions(pane_ids: &[String]) -> Vec<Subscription> {
     let mut subs = vec![Subscription::pane_exited(), Subscription::pane_closed()];
     subs.extend(pane_ids.iter().map(|p| Subscription::agent_status(p)));
     subs
+}
+
+/// What a board's level follows: focus moves and layout changes, all global.
+pub fn layout_subscriptions() -> Vec<Subscription> {
+    ["pane.focused", "tab.focused", "layout.updated"]
+        .into_iter()
+        .map(Subscription::global)
+        .collect()
+}
+
+/// What the daemon's tab and split naming follows, all global.
+pub fn naming_subscriptions() -> Vec<Subscription> {
+    ["tab.created", "pane.created"]
+        .into_iter()
+        .map(Subscription::global)
+        .collect()
 }
 
 /// A persistent event-stream connection. Iterating yields decoded events until

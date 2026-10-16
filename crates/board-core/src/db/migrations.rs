@@ -8,7 +8,7 @@ use crate::{Error, Result};
 const SCHEMA_SQL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schema.sql"));
 
 /// The latest schema version embedded in [`SCHEMA_SQL`].
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// v1 → v2 migration. SQLite cannot alter a CHECK constraint or drop a column
 /// in place, so `cards` is rebuilt. Legacy `space_kind` values `cwd`/`worktree`
@@ -504,6 +504,18 @@ ALTER TABLE linear_show_requests_amended RENAME TO linear_show_requests;
 CREATE INDEX idx_linear_show_requests_pending ON linear_show_requests(space, id) WHERE acknowledged_at IS NULL;
 ";
 
+/// v16 → v17 migration: the labels the daemon wrote on tabs and panes.
+const V17_MIGRATION_SQL: &str = "\
+CREATE TABLE IF NOT EXISTS linear_generated_labels (
+  herdr_socket TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('tab','pane')),
+  target_id    TEXT NOT NULL,
+  label        TEXT NOT NULL,
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (herdr_socket, kind, target_id)
+);
+";
+
 impl Db {
     /// Apply migrations gated on `PRAGMA user_version`. Idempotent.
     ///
@@ -760,12 +772,18 @@ impl Db {
                 tx.execute_batch(V16_MIGRATION_SQL)?;
                 tx.commit()?;
             }
+            if version < 17 {
+                // The v16 amendments complete first, so a failed rebuild
+                // leaves the database stamped 16 rather than 17 over an
+                // unamended v16 shape.
+                self.amend_v16_local_state()?;
+                self.conn.execute_batch(V17_MIGRATION_SQL)?;
+            }
             self.conn
                 .pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         // Outside the `version < SCHEMA_VERSION` chain: a database already
-        // stamped 16 skips that chain, yet may still hold the pre-amendment
-        // v16 tables. A future stamp is left alone.
+        // stamped current skips that chain. A future stamp is left alone.
         if version <= SCHEMA_VERSION {
             self.amend_v16_local_state()?;
         }

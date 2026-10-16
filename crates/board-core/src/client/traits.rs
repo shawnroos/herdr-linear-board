@@ -20,10 +20,11 @@ use crate::protocol::{
     LinearGroupingSetParams, LinearIdParams, LinearImportParams, LinearImportResult,
     LinearIssueDocument, LinearIssueParams, LinearListParams, LinearListResult,
     LinearMarkClearParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
-    LinearRemoved, LinearReplace, LinearSessionGetParams, LinearSessionGetResult,
-    LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot, LinearSnapshotParams,
-    LinearSpaceBindParams, LinearState, LinearStateGetParams, LinearUnbindParams, Mark, Note,
-    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    LinearPrDocument, LinearPrParams, LinearRemoved, LinearReplace, LinearSessionGetParams,
+    LinearSessionGetResult, LinearShowRequestParams, LinearShowWithdrawParams, LinearSnapshot,
+    LinearSnapshotParams, LinearSpaceBindParams, LinearState, LinearStateGetParams,
+    LinearUnbindParams, Mark, Note, PaneContext, PaneContextParams, PaneFocusParams,
+    PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
     ProjectCreateParams, ProjectDetail, ProjectGetParams, ProjectListParams, ProjectListResult,
     ProjectOpenParams, ProjectOpenResult, ProjectSelectParams, ProjectSelectedResult,
     RunActionResult, RunCardParams, RunDoneParams, RunFocusParams, RunFocusResult, RunOutcome,
@@ -524,6 +525,12 @@ pub trait BoardClient {
         )?)
     }
 
+    fn pane_context(&mut self, p: &PaneContextParams) -> anyhow::Result<PaneContext> {
+        Ok(serde_json::from_value(
+            self.call("pane.context", serde_json::to_value(p)?)?,
+        )?)
+    }
+
     fn caller_resolve(&mut self, p: &CallerResolveParams) -> anyhow::Result<CallerResolveResult> {
         Ok(serde_json::from_value(
             self.call("caller.resolve", serde_json::to_value(p)?)?,
@@ -565,6 +572,12 @@ pub trait BoardClient {
     fn linear_issue(&mut self, p: &LinearIssueParams) -> anyhow::Result<LinearIssueDocument> {
         Ok(serde_json::from_value(
             self.call("linear.issue", serde_json::to_value(p)?)?,
+        )?)
+    }
+
+    fn linear_pr(&mut self, p: &LinearPrParams) -> anyhow::Result<LinearPrDocument> {
+        Ok(serde_json::from_value(
+            self.call("linear.pr", serde_json::to_value(p)?)?,
         )?)
     }
 

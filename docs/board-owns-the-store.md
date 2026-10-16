@@ -127,7 +127,7 @@ calls into board socket requests.
 | Link | bind this session to an issue; unbind | write |
 | Mark | flag a card "needs you", "has a question" or "done"; clear your own marks (`unmark`); attach a short note to a card | write |
 | Notify | send a herdr notification ("ENG-123 is ready for review") | write |
-| Ask to show | ask the person to look at an issue: the board pins one line, "◉ <who asked> · ENG-123 <title>  a show · x dismiss"; withdraw your own request (`withdraw_show`) | write |
+| Ask to show | ask the person to look at an issue: the board pins one line, "◉ <who asked> · ENG-123 <title>"; withdraw your own request (`withdraw_show`) | write |
 | Open a board | open the TUI in a new tab or a split beside the agent's own pane, already showing the issue, space or card the agent is working on | write |
 
 Agents point; they do not grab the person's view. No tool focuses a pane, moves the cursor, or

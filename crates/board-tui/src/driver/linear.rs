@@ -9,8 +9,9 @@ use board_core::client::{BoardClient, RpcClientError, UnixClient};
 use board_core::db::{LocalStateError, LocalStateRejection};
 use board_core::protocol::{
     ActivityClaims, LinearBindParams, LinearIssueParams, LinearListKind, LinearListParams,
-    LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams, PaneFocusParams,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    LinearPrParams, LinearSnapshotParams, LinearSpaceBindParams, LinearStateGetParams,
+    PaneContextParams, PaneFocusParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_PR_CLIENT_TIMEOUT,
+    LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use std::time::Duration;
 
@@ -54,6 +55,8 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearIssue { .. }
             | Effect::FocusPane(_)
             | Effect::OpenIssueUrl(_)
+            | Effect::OpenLink(_)
+            | Effect::LinearPr { .. }
             | Effect::CopyWorktreePath { .. }
             | Effect::SetLinearPaneTitle(_)
             | Effect::LinearSpaceBind { .. }
@@ -61,8 +64,17 @@ pub(super) fn linear_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearShowAccept { .. }
             | Effect::LinearShowDismiss { .. }
             | Effect::LinearBind { .. }
+            | Effect::LinearSessionGet
+            | Effect::PaneContext
             | Effect::Quit
     )
+}
+
+/// At the split level the board reads and writes nothing but its own pane
+/// title: no mark clear, bind or show answer leaves it.
+pub(super) fn split_allows(eff: &crate::app::Effect) -> bool {
+    use crate::app::Effect;
+    session_allows(eff) || matches!(eff, Effect::PaneContext | Effect::SetLinearPaneTitle(_))
 }
 
 /// The only effects the session pane executes: reads, and closing itself.
@@ -75,6 +87,7 @@ pub(super) fn session_allows(eff: &crate::app::Effect) -> bool {
             | Effect::LinearSnapshot { force: false }
             | Effect::LinearStateGet
             | Effect::LinearIssue { .. }
+            | Effect::LinearPr { .. }
             | Effect::Quit
     )
 }
@@ -87,12 +100,15 @@ pub(super) fn session_denies(eff: &crate::app::Effect) -> bool {
         Effect::LinearSessionGet
         | Effect::LinearStateGet
         | Effect::LinearIssue { .. }
+        | Effect::LinearPr { .. }
         | Effect::Quit => false,
         Effect::LinearSnapshot { force } => *force,
         Effect::Refetch
+        | Effect::PaneContext
         | Effect::LinearList { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
+        | Effect::OpenLink(_)
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::LinearSpaceBind { .. }
@@ -151,6 +167,8 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::LinearIssue { .. }
         | Effect::FocusPane(_)
         | Effect::OpenIssueUrl(_)
+        | Effect::OpenLink(_)
+        | Effect::LinearPr { .. }
         | Effect::CopyWorktreePath { .. }
         | Effect::SetLinearPaneTitle(_)
         | Effect::LinearSpaceBind { .. }
@@ -158,9 +176,10 @@ pub(super) fn linear_denies(eff: &crate::app::Effect) -> bool {
         | Effect::LinearShowAccept { .. }
         | Effect::LinearShowDismiss { .. }
         | Effect::LinearBind { .. }
+        | Effect::LinearSessionGet
+        | Effect::PaneContext
         | Effect::Quit => false,
-        Effect::LinearSessionGet
-        | Effect::LoadProjects
+        Effect::LoadProjects
         | Effect::LoadProjectPicker
         | Effect::LoadBoardPicker { .. }
         | Effect::SelectProject { .. }
@@ -274,6 +293,7 @@ pub(crate) fn classify<T>(
             // Code 7 is "the plugin ships no script for this op", which is
             // fixed by updating the plugin rather than by retrying.
             Some((7, message)) => LinearFailure::OpUnsupported(message),
+            Some((8, message)) => LinearFailure::GhUnavailable(message),
             Some((_, message)) => LinearFailure::Failed(message),
             None => LinearFailure::Failed(format!("{error:#}")),
         }
@@ -344,13 +364,44 @@ impl Driver {
     }
 
     pub(super) fn fetch_session(&mut self) {
-        let Some(params) = self.app.session.as_ref().map(|s| s.identity.params()) else {
+        let identity = match self.app.session.as_ref() {
+            Some(session) => Some(&session.identity),
+            None => self
+                .app
+                .linear
+                .as_ref()
+                .and_then(|s| s.level.as_ref())
+                .and_then(|l| l.start.as_ref()),
+        };
+        let Some(params) = identity.map(crate::SessionIdentity::params) else {
             return;
         };
         self.run_linear_read(
             LINEAR_STATE_CLIENT_TIMEOUT,
             move |client| client.linear_session_get(&params),
             |result| LinearArrival::Session(Box::new(result)),
+        );
+    }
+
+    pub(super) fn fetch_pane_context(&mut self) {
+        let Some(state) = self.app.linear.as_ref() else {
+            return;
+        };
+        let (Some(level), Some(origin_socket)) =
+            (state.level.as_ref(), self.origin.origin_socket.clone())
+        else {
+            return;
+        };
+        let params = PaneContextParams {
+            origin_socket,
+            pane_id: level.own_pane.clone(),
+            space: state.workspace_id.clone(),
+            plugin_pane: level.plugin_pane,
+        };
+        self.run_linear_read(
+            LINEAR_STATE_CLIENT_TIMEOUT,
+            move |client| client.pane_context(&params),
+            |result| LinearArrival::PaneContext(Box::new(result)),
         );
     }
 
@@ -369,6 +420,23 @@ impl Driver {
             move |result| LinearArrival::Issue {
                 issue,
                 generation,
+                result: Box::new(result),
+            },
+        );
+    }
+
+    /// Not held by the test hook: a PR read follows an issue read, and holding
+    /// both would make every issue test deliver PR reads it does not test.
+    pub(super) fn fetch_linear_pr(&mut self, url: String) {
+        let params = LinearPrParams {
+            url: url.clone(),
+            force: false,
+        };
+        self.run_linear_read(
+            LINEAR_PR_CLIENT_TIMEOUT,
+            move |client| client.linear_pr(&params),
+            move |result| LinearArrival::Pr {
+                url,
                 result: Box::new(result),
             },
         );
@@ -524,6 +592,13 @@ impl Driver {
         self.handle(Msg::LocalStateChanged(signals));
     }
 
+    pub fn on_pane_layout_changed(
+        &mut self,
+        workspaces: std::collections::BTreeSet<Option<String>>,
+    ) {
+        self.handle(Msg::PaneLayoutChanged(workspaces));
+    }
+
     /// The runtime's coalesced subscription signals for one loop iteration.
     /// Upstream mode: a reconnect installs a fresh request client and forces
     /// one refetch; a change refetches. Linear mode: a board change is
@@ -639,6 +714,20 @@ impl Driver {
         }
     }
 
+    /// An attachment or pull request link: the same http(s) rule as the
+    /// issue URL, since anyone in the Linear workspace writes these.
+    pub(super) fn open_link(&mut self, url: String) {
+        if !is_http_url(&url) {
+            self.app
+                .set_toast("link is not http(s); not opening it", true);
+            return;
+        }
+        match self.platform.open_url(&url) {
+            Ok(()) => self.app.set_toast("opening the link", false),
+            Err(error) => self.app.set_toast(format!("open failed: {error:#}"), true),
+        }
+    }
+
     pub(super) fn copy_worktree_path(&mut self, path: String, missing: bool) {
         match self.platform.copy_text(&path) {
             Ok(()) if missing => self.app.set_toast("copied; directory is gone", false),
@@ -739,6 +828,7 @@ mod tests {
             Effect::LinearSnapshot { force: false },
             Effect::LinearStateGet,
             Effect::LinearSessionGet,
+            Effect::PaneContext,
             Effect::LinearList {
                 kind: LinearListKind::Spaces,
                 id: None,
@@ -765,6 +855,8 @@ mod tests {
             },
             Effect::FocusPane(s()),
             Effect::OpenIssueUrl(s()),
+            Effect::OpenLink(s()),
+            Effect::LinearPr { url: s() },
             Effect::CopyWorktreePath {
                 path: s(),
                 missing: false,
@@ -789,11 +881,45 @@ mod tests {
             );
         }
         let allowed = effects.iter().filter(|e| linear_allows(e)).count();
-        // 15 since the board acts on marks and show-requests: mark clear,
-        // show accept, show dismiss and bind joined `linear.state.get`'s 11.
-        // The number is pinned so widening what this mode can do is a
-        // deliberate edit rather than a side effect of adding an effect.
-        assert_eq!(allowed, 15, "the allow set grew or shrank");
+        // 19: the level's pane-context read and the start beside an agent's
+        // session read joined the 17 of the issue view. The number is pinned
+        // so widening what this mode can do is a deliberate edit rather than
+        // a side effect of adding an effect.
+        assert_eq!(allowed, 19, "the allow set grew or shrank");
+    }
+
+    #[test]
+    fn the_split_level_allows_the_session_reads_its_level_read_and_its_own_title() {
+        let mut effects = one_of_each();
+        effects.push(Effect::LinearSnapshot { force: true });
+        let allowed: Vec<String> = effects
+            .iter()
+            .filter(|e| split_allows(e))
+            .map(|e| format!("{:?}", std::mem::discriminant(e)))
+            .collect();
+        assert_eq!(allowed.len(), 8, "the split allow set grew or shrank");
+        for write in [
+            Effect::LinearMarkClear {
+                ids: vec![1],
+                on_open: true,
+            },
+            Effect::LinearShowAccept {
+                id: 1,
+                issue: "WEB-1".into(),
+            },
+            Effect::LinearShowDismiss { id: 1 },
+            Effect::LinearBind {
+                mark: None,
+                issue: "WEB-1".into(),
+                cwd: "/w".into(),
+            },
+        ] {
+            assert!(
+                !split_allows(&write),
+                "{:?}",
+                std::mem::discriminant(&write)
+            );
+        }
     }
 
     #[test]
@@ -813,9 +939,10 @@ mod tests {
             .filter(|e| session_allows(e))
             .map(|e| format!("{:?}", std::mem::discriminant(e)))
             .collect();
-        // Session read, snapshot, local state, issue document and quit. A
-        // forced snapshot is refused: the pane never skips the daemon's cache.
-        assert_eq!(allowed.len(), 5, "the session allow set grew or shrank");
+        // Session read, snapshot, local state, issue document, PR read and
+        // quit. A forced snapshot is refused: the pane never skips the
+        // daemon's cache.
+        assert_eq!(allowed.len(), 6, "the session allow set grew or shrank");
         assert!(session_denies(&Effect::LinearSnapshot { force: true }));
     }
 

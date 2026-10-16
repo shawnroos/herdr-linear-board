@@ -29,13 +29,15 @@ command, flag, or JSON shape from memory — verify against `api schema` /
 
 The supported matrix is: **Herdr 0.9.x** (any `0.9.<patch>` release, or a
 `0.9.<patch>-preview.*` build of one), **socket protocol 22**, board protocol v1, and
-SQLite schema v16. `board-herdr` rejects any other Herdr version (0.8.x, 0.10.0, 1.x,
+SQLite schema v17. `board-herdr` rejects any other Herdr version (0.8.x, 0.10.0, 1.x,
 `0.90.0`, a malformed version) or any other protocol before the daemon performs
 workspace discovery, pane placement, an agent launch, a configured runner action, or a
 notification mutation. This is a policy gate, not a protocol-negotiation fallback:
 protocol 22 is the hard requirement, and the series rule only stops a release that
 happens to report protocol 22 from passing outside the series that was checked.
-The checked-in schema dump, the sandbox, and CI stay pinned to Herdr 0.9.0.
+The checked-in schema dump, CI and the default sandbox image stay pinned to Herdr 0.9.0;
+`./scripts/sandbox.sh --herdr-version 0.9.3 …` builds and runs a separate 0.9.3 sandbox (see
+"Herdr 0.9.3 compatibility" below).
 
 The rule lives in `is_supported_release` (`crates/board-herdr/src/client.rs`) and is
 repeated in the shell gates: `e2e/lib.sh` (`E2E_HERDR_SERIES_RE`) and the four
@@ -371,6 +373,48 @@ below).
 connecting to the `origin_socket` the client sends, so the board needs no session setting of
 its own.
 
+## Tab and split names
+
+The daemon names every tab and pane in a Linear-bound space from its scope
+(`crates/board-daemon/src/naming.rs`, `docs/board-design.md` §8):
+
+| Scope | Name |
+|---|---|
+| Tab with a pane in a worktree bound to an issue | `WEB-101 · <title>` (`WEB-101` until the space's Linear read has the title) |
+| Pane in a bound worktree | `WEB-101 · <agent>`, or `WEB-101` with no agent |
+| Anything else | `<repo or folder> · <agent>`, or the folder alone |
+
+A tab takes the first of its panes, in `pane.list` order, that is bound, else its first pane. The
+repo is the main checkout's folder for a linked worktree. Names are capped at 40 cells with `…`
+and stripped of control and format characters.
+
+herdr does not record who set a label, so the daemon stores each label it writes in
+`linear_generated_labels`, keyed by the canonical session socket, `tab`/`pane` and id. It
+renames only a label that is blank (a pane's `null`), herdr's default (a tab's `number` as a
+string, see "Herdr 0.9.3 compatibility") or equal to the stored label. Any other label is hand-set:
+it is never touched, and the stored label is dropped. `pane.rename` fires no event, so each pass
+reads the current labels with `tab.list` and `pane.list`.
+
+**One owner for a board's own label.** A board keeps its own pane title (`Linear: …`), which
+`scripts/open-board.sh` matches to find it. The daemon never names a pane in `linear_board_panes`,
+and `pane.set_title` drops the pane's stored label, so a board that titles itself owns its label
+from then on. A tab holding only board panes is left alone. A `board tui --session` board sends no
+title and is named from its scope like any other split. The pass and `pane.set_title` hold one
+lock, so a board's title never lands between a pass's read and its rename. A pass can still name a
+fresh board pane once before that board's first title.
+
+**When a pass runs.** One pass covers every session the daemon knows (its default socket, the
+running sessions `herdr session list` reports, and boards' level sockets) and, in each, only the
+workspaces with a space binding in that session. It runs after any `local_state_changed` (a
+binding change, or a Linear read that brings a title), on herdr `tab_created`, `pane_created`,
+`layout_updated`, `pane_exited` and agent-status events, and every 10 s. Sessions holding a bound
+space are watched for those events even with no board open. A `pane.agent_status_changed`
+subscription needs a concrete pane id, so an agent starting in a pane the daemon does not run is
+picked up by the 10 s pass. Labels of tabs and panes that no longer exist are pruned.
+
+A rename can race a run's own `card-<id>` tab rename in a bound space; the daemon's `card-<id>` and
+`card-<id>-anchor` labels otherwise read as hand-set and are left alone.
+
 ## Linear bind handoff (retired)
 
 Earlier releases bound a space by starting the work plugin's `/work:bind` skill: the daemon
@@ -446,6 +490,112 @@ Linear's GraphQL `CustomView` exposes its board grouping through `viewPreference
 `columnOrderBoard`) and its filter through `filterData` (checked against Linear's published SDK
 schema, 2026-09-29).
 
+## Herdr 0.9.3 compatibility (observed 2026-10-02)
+
+**Schema.** `herdr api schema --json` from the 0.9.3 sandbox image, diffed against
+`docs/herdr-0.9.0-schema.json`: protocol stays 22, and no `required` list changed. 0.9.3 adds the
+optional fields `PaneInfo.restore_error`, `AgentInfo.completion_seq`,
+`ServerCapabilities.ssh_agent_registration` and `resume_argv` on the two `pane.report_agent*`
+params, and the methods `pane.clear`, `pane.link.resolve` and `server.ssh_agent.register`. It
+removes `pane.graphics.set`, `pane.graphics.clear` and `pane.graphics.info`. `board-herdr` calls
+none of the removed methods and decodes without `deny_unknown_fields`, so every shape it uses is
+unchanged.
+
+**Live probe.** Observed on Herdr 0.9.3 / protocol 22 in the sandbox
+(`scripts/sandbox.sh --herdr-version 0.9.3`), against ephemeral `hb-e2e-*` sessions booted by
+`e2e/lib.sh` (`e2e_init`, then `e2e_ws_standard`). Calls are raw socket requests through
+`e2e/hrpc.py <method> '<params>'`; events come from one `events.subscribe` connection. Two runs:
+one headless (no client attached), one with a client attached as
+`herdr --session <name>` on a 100×30 pty (`TIOCSWINSZ` rows 30, cols 100).
+
+- **Default tab label.** `tab.create {"workspace_id":"w1","focus":false}` with no `label` returned
+  `label: "2"`; the first tab of a new workspace is `"1"`. The default label is the tab's `number`
+  as a string.
+- **Rename events.** `tab.rename {"tab_id":"w1:t2","label":"probe-renamed"}` emitted
+  `tab_renamed {tab_id, workspace_id, label}`. `pane.rename {"pane_id":"w1:p2","label":"probe-pane"}`
+  emitted **no** `pane_updated` event (subscribed, 1.5 s wait, in both runs); the new label shows
+  only in `pane.get` / `pane.list`. A `cd` in a pane emitted no `pane_updated` either.
+- **`pane_focused`.** `pane.focus {"pane_id":"w1:p2"}` emitted `tab_focused {tab_id, workspace_id}`
+  then `pane_focused {pane_id, workspace_id}`; `pane_focused` carries no `tab_id` and no layout.
+  A focus change emitted no `layout_updated`.
+- **`layout_updated`.** Its `data.layout` is the full `pane.layout` snapshot
+  (`workspace_id, tab_id, zoomed, area, focused_pane_id, panes[{pane_id, focused, rect}],
+  splits[{id, direction, ratio, rect}]`). It fired on `pane.split`, on `tab.create` (for the new
+  tab, whose `focused_pane_id` is tab-local), and on opening and closing an overlay pane.
+- **Overlay panes are in `pane.layout`.** `plugin.pane.open
+  {"plugin_id":"u1-probe2","entrypoint":"ov","focus":true}` for a manifest entrypoint with
+  `placement = "overlay"` opened `w1:p3` in the focused tab: it split the active pane in the tree
+  (new split `split_1_0`), the layout reported `zoomed: true` with `focused_pane_id: "w1:p3"`,
+  `pane.list` listed it with the same `tab_id`, and `tab.list` counted it in `pane_count`. Closing it
+  restored `zoomed: false` and the previous rects. Passing `target_pane_id` for an overlay fails with
+  `invalid_params` "overlay and popup plugin panes target the active pane".
+- **Cwd is readable.** `pane.get` returns `cwd` and `foreground_cwd`; after `cd /tmp/u1-probe-cwd`
+  in the pane both changed to that path. A split inherits the source pane's cwd.
+- **Layout rects vs terminal size.** Headless, `area` is a fixed 120×40 and pane PTYs do not follow
+  their rects (a 60-wide rect still reported `stty size` 40 119). With the 100×30 client attached,
+  `area` was 74×29 (herdr's sidebar and status row take the rest). A lone pane with rect 74×29 had a
+  29×73 PTY (one column less). After a right split, each 37×29 rect had a 27×34 PTY (two rows and
+  three columns less: the split borders). The zoomed overlay's PTY was 29×37 while its rect said
+  18×29, so a rect is not the size of a zoomed overlay. Read the pane's own terminal size (the
+  TUI's `crossterm::terminal::size`) for widths; use the layout only to tell alone from split.
+- **Telling a full pane from a split** (for the board's level): from `pane.layout {"pane_id":<own>}`,
+  the pane fills its tab when it is the only entry in `panes`, or when `zoomed` is true and
+  `focused_pane_id` is the pane. Re-read the layout on `layout_updated` and on `pane_focused`/`tab_focused`.
+- **Telling an overlay from a tile** (observed 2026-10-06 on Herdr 0.9.0 in the sandbox, with a
+  throwaway plugin whose entrypoint dumps its environment). No field says how a plugin pane was
+  placed: `PaneInfo` has no placement, and `HERDR_PLUGIN_CONTEXT_JSON.invocation_source` was `"api"`
+  for an overlay opened by `herdr plugin pane open --placement overlay`, a split opened by
+  `plugin.pane.open`, and a manifest-default open alike. `HERDR_PLUGIN_ENTRYPOINT_ID` names the
+  entrypoint. The layout cannot tell either: with an overlay open, `pane.focus` on the pane beneath
+  left `zoomed: true` with `focused_pane_id` moved to that pane. The daemon therefore calls a board an
+  overlay when the TUI says it is the herdr-board `board` entrypoint (`plugin_pane`) and the daemon
+  holds no `board.pane.open` record for its pane, since every tab or split board is one the daemon
+  opened. A board someone opens by hand with `--placement split` reads as an overlay and shows the
+  space level.
+- **Level events.** `pane.context` subscribes the caller's session to `pane.focused`, `tab.focused`
+  and `layout.updated`, each `{"type": <kind>}` with no pane id, on the watcher's event connection
+  while any board client is subscribed. The daemon forwards each as `pane_layout_changed`.
+
+**Managed Codex readiness comes from the screen.** Herdr drops `pane.report_agent` state from
+the reserved `herdr:codex` source and keeps only its session reference (both 0.9.0 and 0.9.3), so
+a managed Codex pane reaches `interactive_ready` only through screen detection. Herdr 0.9.0 marked
+any non-spinner OSC title idle. Herdr 0.9.2 removed that rule (#4507): a Codex screen that matches
+no rule is `unknown`, and a launch-pending Codex becomes interactive only when the last 12 rows
+show the empty-composer placeholder `› Ask Codex to do anything` without `model: loading` or
+`Resuming session`. The fake `codex` prints that placeholder, so mint and fork pass on 0.9.3. A
+real Codex that does not show that exact string in those rows ends in "spawn failed" on 0.9.3.
+
+**Known gap: managed Codex reuse on 0.9.3.** The 0.9.3 Codex manifest has no idle rule, so an
+idle Codex reads `agent_status: "unknown"` (`codex_state_ambiguous`). Same-pane reuse accepts
+only Idle/Working/Blocked/Done (`spawner/placement/alloc.rs` reuse eligibility, and
+`await_reuse_ready` in `spawner/herdr/managed.rs`), so a same-conversation hop silently opens a
+fresh pane and resumes the thread there. The run still ends ok, but `e2e/31-managed-codex.sh`
+fails on 0.9.3 at "the resume hop must reuse the mint pane". A real Codex is affected the same
+way. Accepting `unknown` as quiescent is not a safe fix by itself: herdr made it ambiguous because
+a working Codex can also read `unknown` (#4507). The Herdr watcher also ignores `unknown`, so
+idle-based watching never sees a quiescent Codex on 0.9.3.
+
+## The board uses herdr's theme
+
+herdr exposes no theme API to panes. The Linear board and the session pane read `[theme] name` and
+`[theme.custom]` from the herdr config in the same once-at-start read as the `?` sheet's keys
+(`board-tui` `herdr_keys.rs`), and look the name up in `board-tui` `theme.rs`. That module holds
+herdr's 18 built-in palettes, token names and name aliases, transcribed from herdr v0.9.3
+`src/app/state.rs` and `src/config/theme.rs`. Re-transcribe them when herdr adds or retunes a theme.
+
+Where the board differs from herdr on purpose:
+
+- A missing, unreadable, oversized or malformed config, a missing `[theme] name`, or an unknown
+  name gives gruvbox. herdr itself falls back to catppuccin.
+- A `[theme.custom]` value herdr cannot parse keeps the base token. herdr paints it cyan.
+- `auto_switch`, `dark_name`, `light_name`, `[theme.custom.light|dark]` and the legacy
+  `[ui] accent` are not read.
+
+The board adds four tones herdr has no token for: the app background one step below `panel_bg`,
+the muted (unfocused) card just under it, muted text (`overlay0`) and muted detail one step dimmer.
+They are pinned for gruvbox (`#1e1e1e`, `#262626`, `#928374`, `#7c6f64`) and derived for every
+other theme, darker below the card on dark themes and lighter on light ones.
+
 ## Finding the caller's pane without herdr env (observed 2026-10-08)
 
 **Why env is not enough.** Claude Code pre-starts "warm spare" sessions from its own daemon. A
@@ -475,7 +625,7 @@ pane in this order, and stop at the first answer:
    within about 2 s, is skipped; the sessions are asked one after another, so a hung session
    costs a lookup about that long. Candidate titles and workspace labels have control and format
    characters stripped. The lookup is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
-   `pane.list`; a foreground process named `claude` set it (observed in scenario 46).
+   `pane.list`; a foreground process named `claude` set it (observed in scenario 48).
 
 **It never guesses.** A folder match is an `unconfirmed` answer, even when exactly one pane
 matches: a Claude session outside herdr in the same folder would otherwise take over another
@@ -546,7 +696,7 @@ DTOs are not part of this crate's public surface; repository isolation belongs i
 The checked-in schema fixture is regenerated from the installed Herdr contract and
 is not rewritten during unrelated API cleanup. The board fixture is pinned to the
 **Herdr 0.9.0** schema, and the typed client accepts **Herdr 0.9.x / protocol 22**;
-board protocol v1 and DB schema v16 remain independent and unchanged.
+board protocol v1 and DB schema v17 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

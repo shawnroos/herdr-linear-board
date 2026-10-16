@@ -24,6 +24,8 @@ DOCKERFILE = DOCKER_DIR / "Dockerfile"
 
 HERDR_X86_64_SHA = "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f"
 HERDR_AARCH64_SHA = "9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2"
+HERDR_093_X86_64_SHA = "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7"
+HERDR_093_AARCH64_SHA = "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0"
 RUST_VERSION = "1.97.0"
 
 
@@ -134,6 +136,32 @@ class ArgumentHandlingTests(unittest.TestCase):
                        "--allow-network", "--tui", "--seed")
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("--tui --seed seeds all three", proc.stderr)
+
+    def test_herdr_version_flag_refuses_an_unpinned_release(self) -> None:
+        for version in ("0.9.1", "0.9.4", "latest"):
+            with self.subTest(version=version):
+                proc = sandbox("--dry-run", "--herdr-version", version, "doctor")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("unsupported --herdr-version", proc.stderr)
+
+    def test_non_default_herdr_gets_its_own_image_and_state(self) -> None:
+        # A second Herdr must never reuse the default server's state volumes
+        # or image; only the version-neutral build caches are shared.
+        for args, env_extra in (
+            (("--herdr-version", "0.9.3"), None),
+            ((), {"SANDBOX_HERDR_VERSION": "0.9.3"}),
+        ):
+            with self.subTest(args=args, env=env_extra):
+                state = sandbox("--dry-run", *args, "--platform", "linux/arm64",
+                                "reset", "--state", env_extra=env_extra)
+                self.assertEqual(state.returncode, 0, state.stderr)
+                self.assertRegex(state.stdout, r"docker volume rm hb-sb-\S+-herdr093-state ")
+                image = sandbox("--dry-run", *args, "--platform", "linux/arm64",
+                                "reset", "--image", env_extra=env_extra)
+                self.assertEqual(image.returncode, 0, image.stderr)
+                self.assertRegex(image.stdout, r"docker rmi hb-sandbox:\S+-arm64-herdr0\.9\.3\n")
+        default = sandbox("--dry-run", "--platform", "linux/arm64", "reset", "--image")
+        self.assertRegex(default.stdout, r"docker rmi hb-sandbox:[0-9a-f]+-arm64\n")
 
     def test_board_requires_arguments(self) -> None:
         proc = sandbox("--dry-run", "board")
@@ -292,6 +320,9 @@ class PinningTests(unittest.TestCase):
         self.assertIn("herdr-linux-aarch64", text)
         self.assertIn("HERDR_VERSION=0.9.0", text)
         self.assertIn("releases/download/v${HERDR_VERSION}/", text)
+        self.assertIn(f"0.9.3/herdr-linux-x86_64) sha={HERDR_093_X86_64_SHA}", text)
+        self.assertIn(f"0.9.3/herdr-linux-aarch64) sha={HERDR_093_AARCH64_SHA}", text)
+        self.assertIn("no pinned SHA-256 for herdr", text)
 
     def test_herdr_version_and_protocol_verified_at_build(self) -> None:
         text = DOCKERFILE.read_text(encoding="utf-8")

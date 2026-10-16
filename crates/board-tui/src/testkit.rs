@@ -111,6 +111,7 @@ pub fn hostile_origin() -> OriginContext {
         origin_socket: Some("/hostile/socket".into()),
         session: Some("hostile-session".into()),
         plugin_id: Some("hostile-plugin-sentinel".into()),
+        entrypoint: Some("hostile-entrypoint-sentinel".into()),
         pane_id: Some("hostile-pane-sentinel".into()),
     }
 }
@@ -168,6 +169,14 @@ pub fn rendered_rows(app: &App) -> Vec<String> {
 pub fn render_at(d: &mut Driver, w: u16, h: u16) -> String {
     d.app.last_area = Rect::new(0, 0, w, h);
     draw(&d.app, w, h)
+}
+
+/// [`render_at`], keeping the styled cells for colour assertions.
+pub fn buffer_at(d: &mut Driver, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    d.app.last_area = Rect::new(0, 0, w, h);
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    term.draw(|f| view(&d.app, f)).unwrap();
+    term.backend().buffer().clone()
 }
 
 /// A [`FakeBoardClient`] wrapper that also answers the catalog RPCs
@@ -597,6 +606,28 @@ impl BoardClient for MethodNotFoundClient {
     }
 }
 
+/// A client that answers `method` as a daemon that predates it does, and
+/// passes every other call to the wrapped client.
+pub struct UnknownMethods<C>(pub C, pub &'static str);
+
+impl<C: BoardClient> BoardClient for UnknownMethods<C> {
+    fn call(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        if method == self.1 {
+            return Err(anyhow::Error::new(RpcClientError::new(
+                1,
+                None,
+                format!("bad request: unknown method: {method}"),
+                None,
+            )));
+        }
+        self.0.call(method, params)
+    }
+
+    fn subscribe(&mut self) -> anyhow::Result<Box<dyn Iterator<Item = Event> + Send>> {
+        self.0.subscribe()
+    }
+}
+
 /// Records URL opens and clipboard writes instead of touching the platform.
 #[derive(Default)]
 pub struct FakePlatform {
@@ -659,6 +690,7 @@ pub fn linear_start() -> LinearStart {
         board_version: "0.17.0".to_string(),
         daemon_version: Some("0.17.0".to_string()),
         herdr_keys: Vec::new(),
+        theme: crate::theme::Theme::default(),
         show: ShowContext::default(),
     }
 }
@@ -715,6 +747,17 @@ pub fn methods(log: &RequestLog) -> Vec<String> {
         .iter()
         .map(|(method, _)| method.clone())
         .collect()
+}
+
+/// A Linear-mode driver started at the split level beside the agent
+/// `identity` names, as `board tui --session` starts one.
+pub fn beside_driver<C: BoardClient + 'static>(
+    client: C,
+    start: LinearStart,
+    identity: SessionIdentity,
+) -> Driver {
+    let (platform, _, _) = FakePlatform::new();
+    Driver::linear_beside(Box::new(client), Box::new(platform), start, identity)
 }
 
 /// A session-pane driver over `client` with a fake platform, beside the

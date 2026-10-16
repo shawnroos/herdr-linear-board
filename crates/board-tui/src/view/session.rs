@@ -3,7 +3,7 @@
 //! `Mode::Session` only, at whatever width the split gives it.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -12,13 +12,14 @@ use unicode_width::UnicodeWidthStr;
 use super::linear::{fit, line, not_imported};
 use super::{centered_rect_abs, session_help_keys};
 use crate::app::{sanitise, session_lane, App, LinearState, Screen, SessionState, SessionView};
+use crate::theme::Theme;
 
 const LOADING: &str = " waiting for the first snapshot…";
 const HINT: &str = "not bound — /work:bind";
 const HELP_KEY_W: usize = 10;
 
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn dim(theme: &Theme) -> Style {
+    theme.dim()
 }
 
 pub(super) fn draw(app: &App, f: &mut Frame) {
@@ -27,7 +28,7 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
     let (Some(state), Some(session)) = (app.linear.as_ref(), app.session.as_ref()) else {
         return;
     };
-    let status = status_line(app, session);
+    let status = status_line(app, state, session);
     let body = Rect::new(
         area.x,
         area.y,
@@ -35,9 +36,11 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         area.height.saturating_sub(u16::from(status.is_some())),
     );
     match (session.bound_issue(), session.view) {
-        // The page keeps its own row for a toast.
         (Some(_), SessionView::Issue) => {
-            super::linear_issue::draw(app, state, f, if app.toast.is_some() { area } else { body })
+            if let Some(slot) = super::linear_issue::open_slot(state) {
+                let look = super::linear_issue::Look::Session;
+                super::linear_issue::draw(app, state, &slot, f, body, look);
+            }
         }
         (Some(issue), SessionView::List) => draw_list(state, session, issue, f, body),
         (None, _) => draw_unbound(state, session, f, body),
@@ -49,18 +52,15 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         );
     }
     if app.screen == Screen::Help {
-        draw_help(app, f, area);
+        draw_help(app, &state.theme, f, area);
     }
+    super::linear::scrub(f);
 }
 
 /// The bottom row: a toast, else why the read on screen is an older one.
-fn status_line(app: &App, session: &SessionState) -> Option<Line<'static>> {
+fn status_line(app: &App, state: &LinearState, session: &SessionState) -> Option<Line<'static>> {
     if let Some(toast) = &app.toast {
-        let style = if toast.is_error {
-            Style::default().fg(Color::White).bg(Color::Red)
-        } else {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
-        };
+        let style = state.theme.toast(toast.is_error);
         return Some(Line::from(Span::styled(
             fit(
                 &format!(" {} ", line(&sanitise(&toast.text))),
@@ -72,7 +72,7 @@ fn status_line(app: &App, session: &SessionState) -> Option<Line<'static>> {
     let failed = session.failed.as_ref().filter(|_| session.read.is_some())?;
     Some(Line::from(Span::styled(
         format!(" last read kept: {}", line(failed)),
-        Style::default().fg(Color::Yellow),
+        state.theme.warning(),
     )))
 }
 
@@ -95,9 +95,7 @@ fn draw_unbound(state: &LinearState, session: &SessionState, f: &mut Frame, area
     };
     lines.push(Line::from(Span::styled(
         format!(" {HINT}"),
-        Style::default()
-            .fg(Color::LightYellow)
-            .add_modifier(Modifier::BOLD),
+        state.theme.warning().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
         if read.space_bound {
@@ -105,10 +103,13 @@ fn draw_unbound(state: &LinearState, session: &SessionState, f: &mut Frame, area
         } else {
             " this space is not bound to a Linear project"
         },
-        dim(),
+        dim(&state.theme),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(" ? help · q close", dim())));
+    lines.push(Line::from(Span::styled(
+        " ? help · q close",
+        dim(&state.theme),
+    )));
     paragraph(f, area, lines);
 }
 
@@ -123,7 +124,7 @@ fn draw_list(state: &LinearState, session: &SessionState, issue: &str, f: &mut F
         None if state.snapshot().is_none() => lines.push(Line::from(LOADING)),
         None => lines.push(Line::from(Span::styled(
             fit(&format!(" {issue} is not on this board's view"), width),
-            dim(),
+            dim(&state.theme),
         ))),
         Some(lane) => {
             let scope = match &lane.lane {
@@ -144,7 +145,7 @@ fn draw_list(state: &LinearState, session: &SessionState, issue: &str, f: &mut F
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     fit(&format!(" {} ({})", line(label), issues.len()), width),
-                    Style::default().fg(Color::LightBlue),
+                    state.theme.accent(),
                 )));
                 for id in issues {
                     let title = state.issue(id).map(|i| line(&i.title)).unwrap_or_default();
@@ -180,7 +181,7 @@ fn draw_list(state: &LinearState, session: &SessionState, issue: &str, f: &mut F
         f.render_widget(
             Paragraph::new(Span::styled(
                 fit(" Tab issue · j/k move · ? help · q close", width),
-                dim(),
+                dim(&state.theme),
             )),
             Rect::new(area.x, area.bottom() - 1, area.width, 1),
         );
@@ -214,7 +215,7 @@ pub fn session_help_max_scroll(_app: &App, area: Rect) -> usize {
     rows.saturating_sub(sheet.height.saturating_sub(3) as usize)
 }
 
-fn draw_help(app: &App, f: &mut Frame, area: Rect) {
+fn draw_help(app: &App, theme: &Theme, f: &mut Frame, area: Rect) {
     let sheet = help_sheet(area, help_lines(area.width as usize).len());
     let inner = Block::default().borders(Borders::ALL).inner(sheet);
     let lines = help_lines(inner.width as usize);
@@ -224,7 +225,7 @@ fn draw_help(app: &App, f: &mut Frame, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .title(" Help — session pane ")
-            .border_style(Style::default().fg(Color::LightBlue)),
+            .border_style(theme.accent()),
         sheet,
     );
     let scroll = app
@@ -238,7 +239,7 @@ fn draw_help(app: &App, f: &mut Frame, area: Rect) {
         f.render_widget(
             Paragraph::new(Span::styled(
                 fit("any other key closes", inner.width as usize),
-                dim(),
+                dim(theme),
             )),
             Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
         );

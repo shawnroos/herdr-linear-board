@@ -38,7 +38,26 @@ pub struct LinearStart {
     pub board_version: String,
     pub daemon_version: Option<String>,
     pub herdr_keys: Vec<crate::herdr_keys::HerdrKey>,
+    pub theme: crate::theme::Theme,
     pub show: crate::ShowContext,
+}
+
+impl LinearStart {
+    /// The state every Linear-mode driver starts from, plus the parts each
+    /// constructor places itself. The session pane takes no Herdr keys.
+    fn into_state(
+        self,
+    ) -> (
+        LinearState,
+        Vec<crate::herdr_keys::HerdrKey>,
+        OriginContext,
+        crate::ShowContext,
+    ) {
+        let mut state =
+            LinearState::new(self.workspace_id, self.board_version, self.daemon_version);
+        state.theme = self.theme;
+        (state, self.herdr_keys, self.origin, self.show)
+    }
 }
 
 /// Owns the client + editor and applies [`Effect`](crate::app::Effect)s
@@ -85,15 +104,29 @@ impl Driver {
         start: LinearStart,
         defer_snapshots: bool,
     ) -> Driver {
-        let mut state = LinearState::new(
-            start.workspace_id,
-            start.board_version,
-            start.daemon_version,
-        );
-        state.herdr_keys = start.herdr_keys;
-        state.landing = Some(start.show);
-        let app = App::linear(state, start.origin.clone());
-        Driver::start_linear(app, client, editor, platform, start.origin, defer_snapshots)
+        let (mut state, herdr_keys, origin, show) = start.into_state();
+        state.herdr_keys = herdr_keys;
+        state.landing = Some(show);
+        state.level = level_for(&origin);
+        let app = App::linear(state, origin.clone());
+        Driver::start_linear(app, client, editor, platform, origin, defer_snapshots)
+    }
+
+    /// `board tui --session`: the Linear board, starting at the split level
+    /// beside the agent `identity` names. Its own session read picks that
+    /// agent's issue, so an older daemon without `pane.context` still shows it.
+    pub fn linear_beside(
+        client: Box<dyn BoardClient>,
+        platform: Box<dyn PlatformActions>,
+        start: LinearStart,
+        identity: crate::SessionIdentity,
+    ) -> Driver {
+        let (mut state, herdr_keys, origin, _) = start.into_state();
+        state.herdr_keys = herdr_keys;
+        let own = origin.pane_id.clone().unwrap_or_default();
+        state.level = Some(crate::app::LevelState::new(own, false).starting_beside(identity));
+        let app = App::linear(state, origin.clone());
+        Driver::start_linear(app, client, Box::new(RealEditor), platform, origin, false)
     }
 
     /// The session side pane beside the agent `identity` names. Its first
@@ -104,24 +137,13 @@ impl Driver {
         start: LinearStart,
         identity: crate::SessionIdentity,
     ) -> Driver {
-        let state = LinearState::new(
-            start.workspace_id,
-            start.board_version,
-            start.daemon_version,
-        );
+        let (state, _, origin, _) = start.into_state();
         let app = App::session(
             state,
             crate::app::SessionState::new(identity),
-            start.origin.clone(),
+            origin.clone(),
         );
-        Driver::start_linear(
-            app,
-            client,
-            Box::new(RealEditor),
-            platform,
-            start.origin,
-            false,
-        )
+        Driver::start_linear(app, client, Box::new(RealEditor), platform, origin, false)
     }
 
     fn start_linear(
@@ -246,6 +268,7 @@ impl Driver {
             self.needs_full_redraw = true;
         }
         self.app.last_area = area;
+        self.app.refit_linear_page();
     }
 
     /// Subscribe to the daemon's board events, for the runtime's redraw-ping
@@ -314,4 +337,14 @@ impl Driver {
             }
         }
     }
+}
+
+/// A board that knows its own herdr pane and session picks its level.
+fn level_for(origin: &OriginContext) -> Option<crate::app::LevelState> {
+    origin.origin_socket.as_ref()?;
+    let pane = origin.pane_id.clone()?;
+    Some(crate::app::LevelState::new(
+        pane,
+        origin.board_plugin_pane(),
+    ))
 }

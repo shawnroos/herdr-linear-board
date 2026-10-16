@@ -128,6 +128,14 @@ impl ActiveRun {
     }
 }
 
+pub struct SubscriberGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for SubscriberGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// In-memory scheduler state.
 #[derive(Default)]
 pub struct Sched {
@@ -147,6 +155,12 @@ pub struct Sched {
 #[derive(Default)]
 pub struct WatchState {
     pub panes_by_socket: HashMap<PathBuf, Vec<String>>,
+    /// Sessions a board read `pane.context` from: watched for focus and
+    /// layout events while any client is subscribed.
+    pub level_sockets: std::collections::HashSet<PathBuf>,
+    /// Sessions holding a Linear-bound space, watched so their tabs and
+    /// splits are named as they appear.
+    pub name_sockets: std::collections::HashSet<PathBuf>,
     pub generation: u64,
 }
 
@@ -175,6 +189,10 @@ pub struct Daemon {
     pub sched: Mutex<Sched>,
     pub watch: Mutex<WatchState>,
     pub linear: crate::linear::LinearService,
+    pub gh: crate::gh::GhService,
+    pub naming: crate::naming::Naming,
+    /// Connections that sent `events.subscribe` and are still open.
+    subscribers: Arc<std::sync::atomic::AtomicUsize>,
     /// Claude session id → the pane that session confirmed through
     /// `caller.resolve`. In memory only: a restart makes the agent confirm again.
     pub caller_locations: Mutex<HashMap<String, CallerLocation>>,
@@ -215,6 +233,9 @@ impl Daemon {
             sched: Mutex::new(Sched::default()),
             watch: Mutex::new(WatchState::default()),
             linear: crate::linear::LinearService::default(),
+            gh: crate::gh::GhService::default(),
+            naming: crate::naming::Naming::default(),
+            subscribers: Arc::default(),
             caller_locations: Mutex::new(HashMap::new()),
             shutdown_tx,
             stopping: AtomicBool::new(false),
@@ -234,7 +255,13 @@ impl Daemon {
             Event::RunEnded { .. } => "run_ended",
             Event::BoardChanged { .. } => "board_changed",
             Event::LocalStateChanged { .. } => "local_state_changed",
+            Event::PaneLayoutChanged { .. } => "pane_layout_changed",
         });
+        // A binding change, or a Linear read that brings an issue's title,
+        // can change a generated name.
+        if matches!(ev, Event::LocalStateChanged { .. }) {
+            self.naming.kick();
+        }
         let _ = self.events_tx.send(ev);
     }
 
@@ -349,6 +376,12 @@ impl Daemon {
         }
     }
 
+    pub fn watch_levels(&self, socket: PathBuf) {
+        crate::sync::locked(&self.watch)
+            .level_sockets
+            .insert(socket);
+    }
+
     #[cfg(test)]
     pub(crate) fn record_effect(&self, effect: &'static str) {
         if let Some(log) = self.effect_log.lock().unwrap().as_ref() {
@@ -359,6 +392,16 @@ impl Daemon {
     pub fn trigger_shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Counts one event subscriber until the guard drops.
+    pub fn subscriber(&self) -> SubscriberGuard {
+        self.subscribers.fetch_add(1, Ordering::SeqCst);
+        SubscriberGuard(self.subscribers.clone())
+    }
+
+    pub fn subscribed(&self) -> bool {
+        self.subscribers.load(Ordering::SeqCst) > 0
     }
 
     pub fn is_shutdown(&self) -> bool {

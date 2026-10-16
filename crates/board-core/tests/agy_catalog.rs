@@ -217,15 +217,41 @@ fn entry_count_is_hard_bounded() {
     assert_eq!(models.len(), MAX_MODELS, "entry cap applies");
 }
 
+/// Write an executable `/bin/sh` fixture and return once it can be executed.
+#[cfg(unix)]
+fn write_fixture(bin: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let script = format!("#!/bin/sh\n[ -n \"$HB_FIXTURE_PROBE\" ] && exit 0\n{body}");
+    fs::write(bin, script).unwrap();
+    fs::set_permissions(bin, fs::Permissions::from_mode(0o700)).unwrap();
+    // A sibling test's fork inherits the write fd above until it execs, and
+    // Linux refuses to exec a file still open for writing (ETXTBSY). The
+    // loader would read that as a missing CLI, so wait until a probe execs.
+    for _ in 0..500 {
+        match Command::new(bin)
+            .env("HB_FIXTURE_PROBE", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => panic!("fixture {bin:?} cannot run: {e}"),
+        }
+    }
+    panic!("fixture {bin:?} stayed busy (ETXTBSY)");
+}
+
 /// A fake `agy` executable that prints the fixture to stdout.
 #[cfg(unix)]
 fn fixture_agy_bin(dir: &tempfile::TempDir, stdout: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script = format!("#!/bin/sh\ncat <<'HBEOF'\n{stdout}\nHBEOF\n");
     let bin = dir.path().join("agy-fixture");
-    fs::write(&bin, script).unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(&bin, &format!("cat <<'HBEOF'\n{stdout}\nHBEOF\n"));
     bin
 }
 
@@ -253,9 +279,7 @@ fn load_from_cli_failing_binary_yields_none() {
     let dir = tempfile::tempdir().unwrap();
     // A script that exits non-zero (no model list) → None.
     let failing = dir.path().join("agy-failing");
-    fs::write(&failing, "#!/bin/sh\nexit 3\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&failing, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(&failing, "exit 3\n");
     assert!(load_from_cli(failing.to_str().unwrap()).is_none());
 
     // A missing binary → None.
@@ -266,12 +290,11 @@ fn load_from_cli_failing_binary_yields_none() {
 /// the recorded PID IS the killed process (no orphan child of a shell).
 #[cfg(unix)]
 fn pid_fixture_agy_bin(dir: &tempfile::TempDir, pid_file: &str, body: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let script = format!("#!/bin/sh\necho \"$$\" > \"{pid_file}\"\nexec {body}\n");
     let bin = dir.path().join("agy-pid-fixture");
-    fs::write(&bin, script).unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    write_fixture(
+        &bin,
+        &format!("echo \"$$\" > \"{pid_file}\"\nexec {body}\n"),
+    );
     bin
 }
 
@@ -335,6 +358,60 @@ fn load_from_cli_bounded_times_out_and_kills_the_child() {
     panic!("fixture PID file missing after 3 attempts");
 }
 
+/// `ps` reports a zombie as `Z`; an orphaned grandchild is reaped by init, not
+/// by the loader, so a zombie counts as gone here.
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|out| {
+            let stat = String::from_utf8_lossy(&out.stdout);
+            let stat = stat.trim();
+            !stat.is_empty() && !stat.starts_with('Z')
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+#[test]
+fn load_from_cli_bounded_kills_a_grandchild_holding_stdout() {
+    // The CLI backgrounds a grandchild that inherits stdout, then hangs. Killing
+    // only the direct child would leave the grandchild holding the pipe, and
+    // the loader would wait for it instead of returning at its deadline.
+    // Retried for the same starvation reason as the timeout test.
+    for attempt in 1..=3u32 {
+        let dir = tempfile::tempdir().unwrap();
+        let gc_file = dir.path().join("grandchild.pid");
+        let bin = dir.path().join("agy-grandchild-fixture");
+        write_fixture(
+            &bin,
+            &format!(
+                "sleep 60 &\necho \"$!\" > \"{}\"\nexec sleep 60\n",
+                gc_file.display()
+            ),
+        );
+        let started = Instant::now();
+        let models = load_from_cli_bounded(bin.to_str().unwrap(), Duration::from_secs(2));
+        let elapsed = started.elapsed();
+        assert!(models.is_none(), "a hung CLI must yield None");
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "a grandchild holding stdout must not stall the loader (took {elapsed:?})"
+        );
+        if let Some(gc) = wait_for_pid_file(&gc_file) {
+            assert!(
+                !process_running(gc),
+                "the grandchild (pid {gc}) must be killed with the CLI's process group"
+            );
+            return;
+        }
+        eprintln!("attempt {attempt}/3: grandchild PID file never appeared; retrying");
+    }
+    panic!("grandchild PID file missing after 3 attempts");
+}
+
 #[cfg(unix)]
 #[test]
 fn load_from_cli_bounded_rejects_oversized_stdout_and_kills_the_child() {
@@ -345,15 +422,20 @@ fn load_from_cli_bounded_rejects_oversized_stdout_and_kills_the_child() {
     let bin = pid_fixture_agy_bin(
         &dir,
         pid_file.to_str().unwrap(),
-        "head -c $((8 * 1024 * 1024 + 1)) /dev/zero | tr '\\0' x; exec sleep 30",
+        "head -c $((8 * 1024 * 1024 + 1)) /dev/zero | tr '\\0' x; exec sleep 600",
     );
+    // Returning before the deadline is what proves the size bound fired. The
+    // deadline sits far above the pipeline's worst measured time (16s at a
+    // quarter CPU) and the fixture's hang far above the deadline, so a
+    // missing size bound can only end by timeout.
+    let timeout = Duration::from_secs(120);
     let started = Instant::now();
-    let models = load_from_cli_bounded(bin.to_str().unwrap(), Duration::from_secs(30));
+    let models = load_from_cli_bounded(bin.to_str().unwrap(), timeout);
     let elapsed = started.elapsed();
     assert!(models.is_none(), "oversized stdout must yield None");
     assert!(
-        elapsed < Duration::from_secs(2),
-        "the oversized child must be killed promptly (took {elapsed:?})"
+        elapsed < timeout,
+        "the oversized child must be killed by the size bound, not the timeout (took {elapsed:?})"
     );
     let pid = wait_for_pid_file(&pid_file).expect("the fixture wrote its PID before the kill");
     assert!(

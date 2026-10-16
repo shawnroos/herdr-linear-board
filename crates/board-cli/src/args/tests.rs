@@ -328,6 +328,36 @@ fn the_three_linear_list_verbs_parse() {
 }
 
 #[test]
+fn linear_pr_parses_a_url_and_force() {
+    match parse(&["board", "linear", "pr", "https://github.com/a/b/pull/1"]).cmd {
+        Cmd::Linear {
+            sub: LinearCmd::Pr { url, force },
+        } => {
+            assert_eq!(url, "https://github.com/a/b/pull/1");
+            assert!(!force);
+        }
+        _ => panic!("expected linear pr"),
+    }
+    assert!(matches!(
+        parse(&[
+            "board",
+            "linear",
+            "pr",
+            "https://github.com/a/b/pull/1",
+            "--force"
+        ])
+        .cmd,
+        Cmd::Linear {
+            sub: LinearCmd::Pr { force: true, .. }
+        }
+    ));
+    assert_eq!(
+        reject(&["board", "linear", "pr"]).kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
 fn linear_report_parses_and_takes_no_arguments() {
     assert!(matches!(
         parse(&["board", "linear", "report"]).cmd,

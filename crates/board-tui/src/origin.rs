@@ -1,5 +1,7 @@
 //! The invoking Herdr/plugin context, read once at the composition root.
 
+use board_core::paths::{BOARD_ENTRYPOINT, BOARD_PLUGIN_ID};
+
 /// Explicit context supplied by the composition root to the TUI.
 ///
 /// Test and embedded drivers use [`Default::default`] so ambient Herdr/plugin
@@ -10,26 +12,36 @@ pub struct OriginContext {
     pub origin_socket: Option<String>,
     pub session: Option<String>,
     pub plugin_id: Option<String>,
+    pub entrypoint: Option<String>,
     pub pane_id: Option<String>,
 }
 
 impl OriginContext {
+    /// The herdr-board `board` entrypoint, which herdr opens as an overlay
+    /// unless the daemon placed it in a tab or split.
+    pub fn board_plugin_pane(&self) -> bool {
+        self.plugin_id.as_deref() == Some(BOARD_PLUGIN_ID)
+            && self
+                .entrypoint
+                .as_deref()
+                .is_none_or(|e| e == BOARD_ENTRYPOINT)
+    }
+
     /// Read the invoking Herdr/plugin context at the production boundary.
     pub fn from_environment() -> OriginContext {
-        let origin_socket = std::env::var("HERDR_SOCKET_PATH")
-            .ok()
-            .filter(|socket| !socket.is_empty());
+        let origin_socket = nonempty_var("HERDR_SOCKET_PATH");
         OriginContext {
             session: board_core::paths::session_name_from_socket(origin_socket.as_deref()),
             origin_socket,
-            plugin_id: std::env::var("HERDR_PLUGIN_ID")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            pane_id: std::env::var("HERDR_PANE_ID")
-                .ok()
-                .filter(|value| !value.is_empty()),
+            plugin_id: nonempty_var("HERDR_PLUGIN_ID"),
+            entrypoint: nonempty_var("HERDR_PLUGIN_ENTRYPOINT_ID"),
+            pane_id: nonempty_var("HERDR_PANE_ID"),
         }
     }
+}
+
+fn nonempty_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 /// What an agent-opened board was asked to show: the daemon's

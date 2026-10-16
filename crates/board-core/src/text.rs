@@ -50,6 +50,16 @@ pub fn sanitise_json(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// [`sanitise_json`] over a typed value, through its own serde round trip.
+pub fn scrubbed<T>(value: &T) -> Result<T, serde_json::Error>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    serde_json::to_value(value)
+        .map(sanitise_json)
+        .and_then(serde_json::from_value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -163,6 +163,30 @@ impl Agent {
     }
 }
 
+#[test]
+fn the_session_pane_keeps_the_theme_it_starts_with() {
+    let theme = board_tui::theme::Theme::named("nord").unwrap();
+    let start = board_tui::LinearStart {
+        theme: theme.clone(),
+        ..board_tui::testkit::linear_start()
+    };
+    let (platform, _, _) = board_tui::testkit::FakePlatform::new();
+    let identity = SessionIdentity {
+        space: "wA".into(),
+        herdr_socket: Some(SOCKET.into()),
+        herdr_pane_id: Some("wA:p1".into()),
+        claude_session_id: None,
+        cwd: None,
+    };
+    let d = Driver::session(
+        Box::new(FakeBoardClient::new().unwrap()),
+        Box::new(platform),
+        start,
+        identity,
+    );
+    assert_eq!(d.app.linear.as_ref().unwrap().theme, theme);
+}
+
 fn changed() -> LocalStateSignals {
     let mut signals = LocalStateSignals::default();
     signals.add(Some("wA".into()), false);

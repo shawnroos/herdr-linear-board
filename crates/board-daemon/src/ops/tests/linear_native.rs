@@ -1087,3 +1087,227 @@ fn a_session_read_after_a_failed_read_has_no_column() {
 
     assert_eq!(board.session(&wt).column, None);
 }
+
+fn attachment(url: &str, source: Option<&str>, created: &str, metadata: Value) -> Value {
+    json!({
+        "id": format!("a-{created}"), "url": url, "sourceType": source,
+        "title": format!("title of {url}"), "subtitle": null,
+        "createdAt": created, "metadata": metadata,
+    })
+}
+
+fn card_board(card: Value) -> Board {
+    Board::new(move |r, _| {
+        if query(r).contains("issues(") {
+            let mut issue = node("WEB-1", ("s-todo", "Todo", "unstarted"), None);
+            issue
+                .as_object_mut()
+                .unwrap()
+                .extend(card.as_object().unwrap().clone());
+            Reply::ok(json!({"data": {"issues": {
+                "nodes": [issue],
+                "pageInfo": {"hasNextPage": false, "endCursor": null}
+            }}}))
+        } else {
+            board_linear(r)
+        }
+    })
+}
+
+#[test]
+fn a_snapshot_issue_carries_its_description_milestone_and_newest_pull_request() {
+    let board = card_board(json!({
+        "description": "Line  one\n\nline two",
+        "projectMilestone": {"id": "m1", "name": "Beta"},
+        "attachments": {"nodes": [
+            attachment("https://github.com/acme/web/pull/7", Some("github"), "2026-09-01T00:00:00Z",
+                json!({"status": "merged", "draft": false})),
+            attachment("https://github.com/acme/web/pull/12", Some("github"), "2026-09-20T00:00:00Z",
+                json!({"status": "open", "draft": true})),
+            attachment("https://github.com/acme/api/pull/3", Some("unknown"), "2026-09-10T00:00:00Z", json!({})),
+        ]},
+    }));
+    board.bind(SPACE, None);
+
+    let issue = board.snapshot().issues["WEB-1"].clone();
+
+    assert_eq!(issue.description.as_deref(), Some("Line one line two"));
+    assert_eq!(issue.milestone.unwrap().name.as_deref(), Some("Beta"));
+    let pr = issue.pr.expect("a GitHub PR attachment fills the card PR");
+    assert_eq!(pr.repo, "acme/web");
+    assert_eq!(
+        pr.number, 12,
+        "the newest by createdAt, not the first listed"
+    );
+    assert_eq!(pr.url, "https://github.com/acme/web/pull/12");
+    assert_eq!(pr.status.as_deref(), Some("open"));
+    assert_eq!(pr.draft, Some(true));
+}
+
+#[test]
+fn a_long_description_is_cut_to_an_excerpt_on_a_character_boundary() {
+    let board = card_board(json!({"description": "é".repeat(2000)}));
+    board.bind(SPACE, None);
+
+    let excerpt = board.snapshot().issues["WEB-1"]
+        .description
+        .clone()
+        .unwrap();
+
+    assert_eq!(excerpt.chars().count(), 240);
+    assert!(excerpt.chars().all(|c| c == 'é'));
+}
+
+#[test]
+fn a_whitespace_only_description_is_no_excerpt() {
+    let board = card_board(json!({"description": " \n\t "}));
+    board.bind(SPACE, None);
+
+    assert!(board.snapshot().issues["WEB-1"].description.is_none());
+}
+
+#[test]
+fn attachments_that_are_not_pull_requests_leave_the_card_pr_empty() {
+    let board = card_board(json!({
+        "attachments": {"nodes": [
+            attachment("https://github.com/acme/web/commit/abc123", Some("githubCommit"), "2026-09-01T00:00:00Z", json!({})),
+            attachment("https://github.com/acme/web/pull/4/commits/abc123", Some("githubCommit"), "2026-09-02T00:00:00Z", json!({})),
+            attachment("https://acme.slack.com/archives/C1/p1", Some("slack"), "2026-09-03T00:00:00Z", json!({})),
+            attachment("https://uploads.linear.app/x/file.png", None, "2026-09-04T00:00:00Z", Value::Null),
+        ]},
+    }));
+    board.bind(SPACE, None);
+
+    assert!(board.snapshot().issues["WEB-1"].pr.is_none());
+}
+
+#[test]
+fn a_pull_request_url_of_the_wrong_shape_is_not_a_card_pr() {
+    let bad = [
+        "http://github.com/acme/web/pull/3",
+        "https://github.com/acme/../pull/3",
+        "https://github.com/-acme/web/pull/3",
+        "https://github.com/acme/web/pull/3x",
+        "https://github.com/acme/web/pull/",
+        "https://github.com/ac%20me/web/pull/3",
+    ];
+    let board = card_board(json!({
+        "attachments": {"nodes": bad
+            .iter()
+            .map(|url| attachment(url, Some("github"), "2026-09-01T00:00:00Z", json!({})))
+            .collect::<Vec<_>>()},
+    }));
+    board.bind(SPACE, None);
+
+    assert!(board.snapshot().issues["WEB-1"].pr.is_none());
+}
+
+#[test]
+fn the_snapshot_asks_only_for_pull_request_attachments_and_the_issue_read_for_all() {
+    let board = Board::new(|r, _| {
+        if query(r).contains("issue(id") {
+            issue_detail_reply()
+        } else {
+            board_linear(r)
+        }
+    });
+    board.bind(SPACE, None);
+    board.snapshot();
+    handle_request(&board.d, "linear.issue", json!({"issue": "WEB-7"})).unwrap();
+
+    let requests = board.fake.requests();
+    let list = requests
+        .iter()
+        .map(query)
+        .find(|q| q.contains("issues("))
+        .unwrap();
+    assert!(list.contains("description"), "{list}");
+    assert!(
+        list.contains(r#"attachments(first:10,filter:{url:{contains:"/pull/"}})"#),
+        "{list}"
+    );
+    let one = requests
+        .iter()
+        .map(query)
+        .find(|q| q.contains("issue(id"))
+        .unwrap();
+    assert_eq!(one.matches("attachments(").count(), 1, "{one}");
+    assert!(one.contains("attachments(first: 50)"), "{one}");
+}
+
+fn detail_with_attachments(nodes: Vec<Value>, more: bool) -> Reply {
+    let Reply::Json { mut body, .. } = issue_detail_reply() else {
+        unreachable!("the detail reply is JSON")
+    };
+    body["data"]["issue"]["attachments"] =
+        json!({"nodes": nodes, "pageInfo": {"hasNextPage": more}});
+    Reply::ok(body)
+}
+
+#[test]
+fn the_issue_read_keeps_every_attachment_with_null_fields_tolerated() {
+    let board = Board::new(|_, _| {
+        detail_with_attachments(
+            vec![
+                attachment(
+                    "https://github.com/acme/web/commit/abc123",
+                    Some("githubCommit"),
+                    "2026-09-01T00:00:00Z",
+                    json!({"sha": "abc123"}),
+                ),
+                attachment(
+                    "https://acme.slack.com/archives/C1/p1",
+                    Some("slack"),
+                    "2026-09-02T00:00:00Z",
+                    json!({}),
+                ),
+                json!({"id": "a-up", "url": "https://uploads.linear.app/x/file.png", "sourceType": null,
+                       "title": "file.png", "subtitle": null, "createdAt": null, "metadata": null}),
+            ],
+            false,
+        )
+    });
+
+    let value = handle_request(&board.d, "linear.issue", json!({"issue": "WEB-7"})).unwrap();
+    let doc: LinearIssueDocument = serde_json::from_value(value).unwrap();
+
+    let issue = doc.issue.unwrap();
+    let kinds: Vec<Option<&str>> = issue
+        .attachments
+        .iter()
+        .map(|a| a.source_type.as_deref())
+        .collect();
+    assert_eq!(kinds, [Some("githubCommit"), Some("slack"), None]);
+    assert_eq!(issue.attachments[0].metadata["sha"], "abc123");
+    assert_eq!(issue.attachments[2].title, "file.png");
+    assert!(issue.attachments[2].subtitle.is_none());
+    assert!(issue.attachments[2].metadata.is_null());
+    assert!(!doc.truncated.contains(&"attachments".to_string()));
+}
+
+#[test]
+fn more_than_fifty_attachments_marks_attachments_truncated() {
+    let board = Board::new(|_, _| {
+        let nodes = (0..50)
+            .map(|n| {
+                attachment(
+                    &format!("https://example.com/{n}"),
+                    None,
+                    "2026-09-01T00:00:00Z",
+                    json!({}),
+                )
+            })
+            .collect();
+        detail_with_attachments(nodes, true)
+    });
+
+    let value = handle_request(&board.d, "linear.issue", json!({"issue": "WEB-7"})).unwrap();
+    let doc: LinearIssueDocument = serde_json::from_value(value).unwrap();
+
+    assert!(
+        doc.truncated.contains(&"attachments".to_string()),
+        "{:?}",
+        doc.truncated
+    );
+    assert_eq!(doc.issue.unwrap().attachments.len(), 50);
+}

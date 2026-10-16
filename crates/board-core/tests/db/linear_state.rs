@@ -1,9 +1,9 @@
 use super::mem;
 use board_core::db::{
     is_issue_identifier, is_space_id, ActivityClaims, BoardPanePlacement, GroupingConfig,
-    GroupingMapping, LinearOwner, MarkKind, NewActivity, NewBoardPane, NewMark, NewShowRequest,
-    SessionScope, ShowOutcome, SpaceBinding, SpaceGrouping, WorktreeBinding, WorktreeBindingState,
-    LINEAR_ACTIVITY_KEEP_PER_SPACE,
+    GroupingMapping, LabelKind, LinearOwner, MarkKind, NewActivity, NewBoardPane, NewMark,
+    NewShowRequest, SessionScope, ShowOutcome, SpaceBinding, SpaceGrouping, WorktreeBinding,
+    WorktreeBindingState, LINEAR_ACTIVITY_KEEP_PER_SPACE,
 };
 use board_core::Error;
 use serde_json::{json, Value};
@@ -637,4 +637,66 @@ fn bindings_scopes_and_repos_round_trip() {
         .remove_scope_repo("project-p1.team-t1", "/repo/b")
         .unwrap());
     assert_eq!(db.scope_repos("project-p1.team-t1").unwrap(), ["/repo/a"]);
+}
+
+#[test]
+fn generated_labels_are_keyed_by_socket_kind_and_id() {
+    let db = mem();
+    db.set_generated_label("/tmp/a.sock", LabelKind::Tab, "w1:t1", "WEB-1 · Old")
+        .unwrap();
+    db.set_generated_label("/tmp/a.sock", LabelKind::Tab, "w1:t1", "WEB-1 · New")
+        .unwrap();
+    db.set_generated_label("/tmp/a.sock", LabelKind::Pane, "w1:t1", "web · claude")
+        .unwrap();
+    db.set_generated_label("/tmp/b.sock", LabelKind::Tab, "w1:t1", "other")
+        .unwrap();
+    let mut a = db.generated_labels("/tmp/a.sock").unwrap();
+    a.sort();
+    assert_eq!(
+        a,
+        vec![
+            (
+                LabelKind::Tab,
+                "w1:t1".to_string(),
+                "WEB-1 · New".to_string()
+            ),
+            (
+                LabelKind::Pane,
+                "w1:t1".to_string(),
+                "web · claude".to_string()
+            ),
+        ]
+    );
+    assert!(db
+        .forget_generated_label("/tmp/a.sock", LabelKind::Pane, "w1:t1")
+        .unwrap());
+    assert!(!db
+        .forget_generated_label("/tmp/a.sock", LabelKind::Pane, "w1:t1")
+        .unwrap());
+    db.set_generated_label("/tmp/a.sock", LabelKind::Pane, "w1:p2", "x")
+        .unwrap();
+    db.set_generated_label("/tmp/a.sock", LabelKind::Pane, "w1:p3", "y")
+        .unwrap();
+    assert_eq!(
+        db.prune_generated_labels("/tmp/a.sock", LabelKind::Pane, &["w1:p3".to_string()])
+            .unwrap(),
+        1
+    );
+    let mut a = db.generated_labels("/tmp/a.sock").unwrap();
+    a.sort();
+    assert_eq!(
+        a,
+        vec![
+            (
+                LabelKind::Tab,
+                "w1:t1".to_string(),
+                "WEB-1 · New".to_string()
+            ),
+            (LabelKind::Pane, "w1:p3".to_string(), "y".to_string()),
+        ]
+    );
+    assert_eq!(
+        db.generated_label_sockets().unwrap(),
+        vec!["/tmp/a.sock".to_string(), "/tmp/b.sock".to_string()]
+    );
 }

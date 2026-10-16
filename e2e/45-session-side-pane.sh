@@ -167,6 +167,9 @@ printf '%s' "$screen" | grep -q 'TEAM-45' || fail "session pane $SESSION_PANE ne
 printf '%s' "$screen" | grep -q 'not bound' && fail "session pane shows the bind hint for a bound session -- got: $screen"
 [ "$(focused_pane)" = "$AGENT_PANE" ] || fail "the session pane took focus after drawing"
 ok "TEAM-45 on screen in $SESSION_PANE; focus still on $AGENT_PANE"
+label="$(hrpc pane.get "{\"pane_id\":\"$SESSION_PANE\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["pane"].get("label") or "")')"
+case "$label" in "Linear: "*) fail "the session pane renamed itself to '$label', which scripts/open-board.sh takes for the board" ;; esac
+ok "the session pane keeps its label '$label'"
 
 step "close_board with session closes the side pane"
 call_tool 3 close_board '{"session":true}'

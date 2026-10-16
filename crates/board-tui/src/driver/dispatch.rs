@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 
-use super::linear::{linear_allows, session_allows};
+use super::linear::{linear_allows, session_allows, split_allows};
 use crate::app::{CardFilter, CommentHistoryView, Effect, Mode, Msg, Screen};
 use crate::view::pane_title;
 use crate::Driver;
@@ -64,6 +64,15 @@ impl Driver {
         // request.
         if self.app.mode == Mode::Linear && !linear_allows(&eff) {
             self.app.set_toast("not available in Linear mode", true);
+            return;
+        }
+        let at_split = self
+            .app
+            .linear
+            .as_ref()
+            .is_some_and(crate::app::LinearState::at_split);
+        if self.app.mode == Mode::Linear && at_split && !split_allows(&eff) {
+            self.app.set_toast("read-only beside a split", true);
             return;
         }
         if self.app.mode == Mode::Session && !session_allows(&eff) {
@@ -281,6 +290,7 @@ impl Driver {
             Effect::LinearSnapshot { force } => self.fetch_linear_snapshot(force),
             Effect::LinearStateGet => self.fetch_linear_state(),
             Effect::LinearSessionGet => self.fetch_session(),
+            Effect::PaneContext => self.fetch_pane_context(),
             Effect::LinearList { kind, id } => self.fetch_linear_list(kind, id),
             Effect::LinearIssue { issue, generation } => self.fetch_linear_issue(issue, generation),
             Effect::LinearSpaceBind {
@@ -294,6 +304,8 @@ impl Driver {
             Effect::LinearBind { mark, issue, cwd } => self.bind_worktree(mark, issue, cwd),
             Effect::FocusPane(pane_id) => self.focus_pane(pane_id),
             Effect::OpenIssueUrl(url) => self.open_issue_url(url),
+            Effect::OpenLink(url) => self.open_link(url),
+            Effect::LinearPr { url } => self.fetch_linear_pr(url),
             Effect::CopyWorktreePath { path, missing } => self.copy_worktree_path(path, missing),
         }
     }
@@ -313,7 +325,7 @@ impl Driver {
     /// examples, standalone TUI) it is a no-op — there is no pane to rename,
     /// and no invoking session to rename it in.
     fn send_pane_title(&mut self, title: &str) {
-        if self.origin.plugin_id.as_deref() != Some("herdr-board") {
+        if self.origin.plugin_id.as_deref() != Some(board_core::paths::BOARD_PLUGIN_ID) {
             return;
         }
         let (Some(pane_id), Some(origin_socket)) = (

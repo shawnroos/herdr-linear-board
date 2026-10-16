@@ -11,7 +11,7 @@ use board_core::protocol::{
     CardCreateParams, Event, LinearActivityRecordParams, LinearBindParams, LinearGroup,
     LinearMarkSetParams, LinearSnapshot, MarkKind, PaneFocusResult,
 };
-use board_tui::app::{Effect, LocalStateSignals, Mode, Msg, Screen};
+use board_tui::app::{Effect, Focus, LocalStateSignals, Mode, Msg, Screen};
 use board_tui::testkit::left_down;
 use board_tui::testkit::{
     draw, hostile_origin, key, linear_driver, linear_driver_deferred,
@@ -24,6 +24,8 @@ use crossterm::event::{KeyCode, MouseEventKind};
 use serde_json::Value;
 
 const W: u16 = 120;
+/// Three 48-cell columns: the board tests that reach In Progress need it shown.
+const BW: u16 = 144;
 /// How deep the back-stack test walks, and the cap it must hit.
 const HOPS: usize = 80;
 const CAP: usize = 32;
@@ -60,8 +62,27 @@ fn start_with_socket() -> LinearStart {
     }
 }
 
+fn ctrl_q() -> Msg {
+    Msg::Key(crossterm::event::KeyEvent::new(
+        KeyCode::Char('q'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))
+}
+
 fn press(d: &mut Driver, code: KeyCode) {
     d.handle(key(code));
+}
+
+/// `?` opens the bar on its first item, `keys`, which opens the help sheet.
+fn open_help(d: &mut Driver) {
+    press(d, KeyCode::Char('?'));
+    press(d, KeyCode::Enter);
+}
+
+/// A frame without its last `n` rows, the bottom bar.
+fn without_bar(frame: &str, n: usize) -> String {
+    let rows: Vec<&str> = frame.lines().collect();
+    rows[..rows.len() - n].join("\n")
 }
 
 fn toast(d: &Driver) -> String {
@@ -72,8 +93,10 @@ fn toast(d: &Driver) -> String {
         .unwrap_or_default()
 }
 
-/// Open WEB-3302 (third column, first card) from the board.
+/// Open WEB-3302 (third column, first card) from a board wide enough to show
+/// every column, so `l` moves between columns rather than onto a pager.
 fn open_web_3302(d: &mut Driver) {
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, 240, 60);
     press(d, KeyCode::Char('l'));
     press(d, KeyCode::Char('l'));
     press(d, KeyCode::Enter);
@@ -84,17 +107,17 @@ fn open_web_3302(d: &mut Driver) {
     );
 }
 
-// -- rendering (AE1, AE9, AE2, AE4, herdr down, mapping, detail, stale) -----
+// -- rendering (herdr down, mapping, detail, stale) ------------------------
 
 #[test]
 fn bound_with_view_renders_the_views_columns_in_order() {
     let (d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     assert_eq!(d.app.mode, Mode::Linear);
     assert_eq!(d.app.screen, Screen::LinearBoard);
-    let frame = draw(&d.app, W, H);
-    let backlog = frame.find("Backlog (1)").expect("Backlog column");
-    let todo = frame.find("Todo (1)").expect("Todo column");
-    let progress = frame.find("In Progress (1)").expect("In Progress column");
+    let frame = draw(&d.app, BW, H);
+    let backlog = frame.find("BACKLOG  1").expect("Backlog column");
+    let todo = frame.find("TODO  1").expect("Todo column");
+    let progress = frame.find("IN PROGRESS  1").expect("In Progress column");
     assert!(
         backlog < todo && todo < progress,
         "columns keep the view's order:\n{frame}"
@@ -115,16 +138,16 @@ fn bound_with_view_renders_the_views_columns_in_order() {
 #[test]
 fn bound_no_view_renders_team_states_under_the_default_view() {
     let (d, _, _) = linear_driver(fake_with(linear_fixture("bound-no-view")), linear_start());
-    let frame = draw(&d.app, W, H);
+    let frame = draw(&d.app, BW, H);
     assert!(frame.contains("view: project issues (default)"), "{frame}");
     assert!(
         !frame.contains("no view chosen") && !frame.contains("/work:bind"),
         "{frame}"
     );
-    // Five 36-cell columns need 180 cells; at W only the first three fit.
-    let wide = draw(&d.app, 180, H);
+    // Five 48-cell columns need 240 cells; at BW only the first three fit.
+    let wide = draw(&d.app, 240, H);
     assert!(
-        wide.contains("Backlog (1)") && wide.contains("Done (0)"),
+        wide.contains("BACKLOG  1") && wide.contains("DONE  0"),
         "{wide}"
     );
     insta::assert_snapshot!("linear_bound_no_view", frame);
@@ -142,7 +165,7 @@ fn a_view_linear_no_longer_has_is_named_with_why_it_is_unusable() {
         snapshot.view.id = Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".into());
         snapshot.view.name = Some("Old board".into());
         let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-        let frame = draw(&d.app, W, H);
+        let frame = draw(&d.app, BW, H);
         assert!(
             frame.contains(&format!(
                 "view Old board {words} · no view chosen: /work:bind"
@@ -156,9 +179,9 @@ fn a_view_linear_no_longer_has_is_named_with_why_it_is_unusable() {
     snapshot.view.status = "not_found".into();
     snapshot.view.name = Some("Old board".into());
     let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    let wide = draw(&d.app, 180, H);
+    let wide = draw(&d.app, 240, H);
     assert!(
-        wide.contains("Backlog (1)") && wide.contains("Done (0)"),
+        wide.contains("BACKLOG  1") && wide.contains("DONE  0"),
         "{wide}"
     );
 }
@@ -212,7 +235,7 @@ fn herdr_unavailable_still_renders_cards_with_unknown_pane_status() {
         fake_with(linear_fixture("herdr-unavailable")),
         linear_start(),
     );
-    let frame = draw(&d.app, W, H);
+    let frame = draw(&d.app, BW, H);
     assert!(frame.contains("! herdr unavailable"), "{frame}");
     assert!(
         frame.contains("space: wA"),
@@ -220,7 +243,7 @@ fn herdr_unavailable_still_renders_cards_with_unknown_pane_status() {
     );
     assert!(frame.contains("WEB-3302"), "{frame}");
     open_web_3302(&mut d);
-    let detail = draw(&d.app, W, H);
+    let detail = draw(&d.app, BW, H);
     assert!(detail.contains("(label unknown)"), "{detail}");
     assert!(detail.contains("(no panes listed)"), "{detail}");
     insta::assert_snapshot!("linear_herdr_unavailable", frame);
@@ -232,13 +255,13 @@ fn non_default_mapping_warns_and_renders_as_default() {
     snapshot.mapping.source = "config".into();
     snapshot.mapping.tab = "issue".into();
     let (d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    let frame = draw(&d.app, W, H);
+    let frame = draw(&d.app, BW, H);
     assert!(
         frame.contains("mapping config: space=project tab=issue pane=session is not the default"),
         "{frame}"
     );
     assert!(
-        frame.contains("In Progress (1)"),
+        frame.contains("IN PROGRESS  1"),
         "columns still render:\n{frame}"
     );
     insta::assert_snapshot!("linear_non_default_mapping", frame);
@@ -252,7 +275,7 @@ fn unsupported_grouping_is_named_in_the_header() {
     );
     let frame = draw(&d.app, W, H);
     assert!(frame.contains("view unsupported grouping cycle"), "{frame}");
-    assert!(frame.contains("Backlog (1)"), "fallback columns:\n{frame}");
+    assert!(frame.contains("BACKLOG  1"), "fallback columns:\n{frame}");
 }
 
 /// A document with one of everything the page draws, so a snapshot of it is a
@@ -360,10 +383,9 @@ fn detail_lists_bindings_tabs_and_panes_with_live_status() {
         frame.contains("wA:p1  idle") && frame.contains("▶ wA:p2  working"),
         "{frame}"
     );
-    // No raw URL row: Linear's own issue page has no URL property, and `u`
-    // opens the issue, which the hint line offers.
+    // No raw URL row: Linear's own issue page has no URL property; `u`
+    // opens the issue.
     assert!(!frame.contains("https://linear.app"), "{frame}");
-    assert!(frame.contains("u Linear"), "{frame}");
     insta::assert_snapshot!("linear_detail", frame);
 }
 
@@ -403,11 +425,11 @@ fn stale_daemon_screen_hides_equal_versions() {
 #[test]
 fn help_sheet_lists_the_linear_keys_and_any_key_closes_it() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start_with_herdr_fixture());
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     assert_eq!(d.app.screen, Screen::Help);
     let frame = render_at(&mut d, W, H);
     assert!(frame.contains("Help — Linear mode"), "{frame}");
-    assert!(frame.contains("copy worktree path"), "{frame}");
+    assert!(frame.contains("quit (q does nothing)"), "{frame}");
     assert!(frame.contains("more below"), "{frame}");
     insta::assert_snapshot!("linear_help", frame);
     press(&mut d, KeyCode::Char('x'));
@@ -420,14 +442,25 @@ fn herdr_fixture() -> std::path::PathBuf {
 
 fn start_with_herdr_fixture() -> LinearStart {
     LinearStart {
-        herdr_keys: board_tui::herdr_keys::read_file(&herdr_fixture()),
+        herdr_keys: board_tui::herdr_keys::read_file(&herdr_fixture()).keys,
         ..linear_start()
     }
 }
 
+#[test]
+fn the_board_keeps_the_theme_it_starts_with() {
+    let theme = board_tui::theme::Theme::named("tokyo-night").unwrap();
+    let start = LinearStart {
+        theme: theme.clone(),
+        ..linear_start()
+    };
+    let (d, _, _) = linear_driver(fake_with(bound_with_view()), start);
+    assert_eq!(d.app.linear.as_ref().unwrap().theme, theme);
+}
+
 fn help_scrolled_to_the_end(start: LinearStart) -> (Driver, String) {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), start);
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     render_at(&mut d, W, H);
     for _ in 0..200 {
         press(&mut d, KeyCode::Char('j'));
@@ -469,7 +502,7 @@ fn the_help_sheet_scrolls_to_a_herdr_section_built_from_the_config() {
 fn a_missing_herdr_config_leaves_no_herdr_section() {
     let dir = tempfile::tempdir().unwrap();
     let start = LinearStart {
-        herdr_keys: board_tui::herdr_keys::read_file(&dir.path().join("config.toml")),
+        herdr_keys: board_tui::herdr_keys::read_file(&dir.path().join("config.toml")).keys,
         ..linear_start()
     };
     let (_, frame) = help_scrolled_to_the_end(start);
@@ -479,7 +512,7 @@ fn a_missing_herdr_config_leaves_no_herdr_section() {
 
 #[test]
 fn herdr_keys_never_join_the_board_key_table() {
-    let rows = board_tui::herdr_keys::read_file(&herdr_fixture());
+    let rows = board_tui::herdr_keys::read_file(&herdr_fixture()).keys;
     assert!(!rows.is_empty());
     for row in rows {
         assert!(
@@ -510,7 +543,7 @@ fn control_characters_never_reach_the_frame() {
     );
 }
 
-// -- the allow set (AE11, R17) -----------------------------------------------
+// -- the allow set -----------------------------------------------
 
 #[test]
 fn a_card_create_effect_is_refused_before_any_request_is_built() {
@@ -545,7 +578,7 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
     press(&mut d, KeyCode::Char('r'));
     press(&mut d, KeyCode::Char('?'));
     press(&mut d, KeyCode::Esc);
-    press(&mut d, KeyCode::Char('q'));
+    d.handle(ctrl_q());
     assert!(d.app.should_quit);
     let seen = methods(&log);
     assert!(!seen.iter().any(|m| m == "board.get"), "{seen:?}");
@@ -557,6 +590,8 @@ fn only_the_linear_pane_title_and_no_board_get_across_construction_and_a_session
             // The first snapshot is followed by one local-state read.
             "linear.state.get",
             "linear.list",
+            // The board knows its own pane, so it reads where that pane sits.
+            "pane.context",
             // Opening WEB-3302's page reads it; the point of this test is that
             // no `board.get` ever appears, not that the page reads nothing.
             "linear.issue",
@@ -588,7 +623,7 @@ fn upstream_effects_still_run_outside_linear_mode() {
     assert!(d.app.toast.is_none());
 }
 
-// -- refresh policy (R21) ----------------------------------------------------
+// -- refresh policy ----------------------------------------------------
 
 #[test]
 fn a_refresh_while_one_is_in_flight_is_dropped_with_a_toast() {
@@ -824,7 +859,7 @@ fn a_snapshot_flag_reads_one_cached_snapshot_and_the_state_and_moves_the_card() 
     drop(sent);
     assert_eq!(column_of(&d, "WEB-3302"), Some("st-devdone"));
     let frame = draw(&d.app, 200, H);
-    assert!(frame.contains("Dev Done (1)"), "{frame}");
+    assert!(frame.contains("DEV DONE  1"), "{frame}");
 }
 
 #[test]
@@ -939,15 +974,15 @@ fn a_daemon_without_the_state_read_leaves_the_board_as_it_was() {
 fn a_key_is_handled_while_a_snapshot_is_in_flight_and_the_result_replaces_the_board() {
     let client = fake_with(bound_with_view());
     let mut d = linear_driver_deferred(client, linear_start());
-    let waiting = draw(&d.app, W, H);
+    let waiting = draw(&d.app, BW, H);
     assert!(waiting.contains("refreshing…"), "{waiting}");
     assert!(
         waiting.contains("waiting for the first snapshot"),
         "{waiting}"
     );
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     assert_eq!(d.app.screen, Screen::Help);
-    let help = draw(&d.app, W, H);
+    let help = draw(&d.app, BW, H);
     assert!(help.contains("Help — Linear mode"), "{help}");
     assert!(d.deliver_pending_linear_snapshot());
     assert_eq!(
@@ -957,12 +992,12 @@ fn a_key_is_handled_while_a_snapshot_is_in_flight_and_the_result_replaces_the_bo
     );
     press(&mut d, KeyCode::Char('x'));
     assert_eq!(d.app.screen, Screen::LinearBoard);
-    let board = draw(&d.app, W, H);
-    assert!(board.contains("In Progress (1)"), "{board}");
+    let board = draw(&d.app, BW, H);
+    assert!(board.contains("IN PROGRESS  1"), "{board}");
     assert!(!board.contains("refreshing…"), "{board}");
 }
 
-// -- errors (R19, R25) --------------------------------------------------------
+// -- errors --------------------------------------------------------
 
 /// Answers the first `linear.snapshot` from the fake, then fails every later
 /// one, so a test can watch the last good document survive a bad refresh.
@@ -999,14 +1034,14 @@ fn a_failed_refresh_keeps_the_last_good_snapshot_behind_the_error() {
     let (mut d, _, _) = linear_driver(client, linear_start());
     press(&mut d, KeyCode::Char('r'));
     assert_eq!(d.app.screen, Screen::LinearError);
-    let frame = draw(&d.app, W, H);
+    let frame = draw(&d.app, BW, H);
     assert!(frame.contains("Snapshot failed"), "{frame}");
     assert!(
         frame.contains("linear-read.sh: timed out[0m"),
         "sanitised error:\n{frame}"
     );
     assert!(
-        frame.contains("In Progress (1)"),
+        frame.contains("IN PROGRESS  1"),
         "last good stays behind:\n{frame}"
     );
     assert!(
@@ -1033,10 +1068,10 @@ fn a_first_fetch_failure_has_no_last_good_and_no_dismiss() {
     assert_eq!(d.app.screen, Screen::LinearError, "nothing to dismiss to");
 }
 
-// -- the three actions (R20, AE6) -------------------------------------------
+// -- the three actions -------------------------------------------
 
 #[test]
-fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
+fn detail_cursor_starts_on_the_working_pane_and_return_focuses_it() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
@@ -1045,7 +1080,7 @@ fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
         Some(board_tui::view::IssueRowKind::Pane(1)),
         "the page opens on the working pane, wA:p2"
     );
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     let requests = log.lock().unwrap();
     let (method, params) = requests.last().unwrap();
     assert_eq!(method, "pane.focus");
@@ -1054,7 +1089,7 @@ fn detail_cursor_starts_on_the_working_pane_and_o_focuses_it() {
     drop(requests);
     assert_eq!(toast(&d), "focused pane wA:p2");
     press(&mut d, KeyCode::Char('k'));
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert_eq!(log.lock().unwrap().last().unwrap().1["pane_id"], "wA:p1");
 }
 
@@ -1066,7 +1101,7 @@ fn a_gone_pane_toasts_and_changes_nothing_else() {
     });
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert_eq!(toast(&d), "pane is closed; refresh");
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert!(!d.app.should_quit);
@@ -1077,10 +1112,11 @@ fn focus_without_an_origin_socket_toasts_and_sends_nothing() {
     let (client, log) = RecordingClient::new(fake_with(bound_with_view()));
     let (mut d, _, _) = linear_driver(client, linear_start());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     assert!(toast(&d).contains("HERDR_SOCKET_PATH"), "{}", toast(&d));
     // `linear.issue` since the issue page: opening a card reads it. What this
-    // test pins is that `o` with no socket sends nothing MORE than that.
+    // test pins is that Return on a pane with no socket sends nothing MORE
+    // than that.
     assert_eq!(
         methods(&log),
         vec![
@@ -1179,8 +1215,12 @@ fn a_card_without_bindings_explains_instead_of_acting() {
         d.app.linear.as_ref().unwrap().detail.as_deref(),
         Some("WEB-3308")
     );
-    press(&mut d, KeyCode::Char('o'));
-    assert_eq!(toast(&d), "this card has no recorded pane");
+    press(&mut d, KeyCode::Enter);
+    assert_eq!(
+        d.app.screen,
+        Screen::LinearDetail,
+        "no row, nothing to follow"
+    );
     press(&mut d, KeyCode::Char('y'));
     assert_eq!(toast(&d), "this card has no worktree binding");
     assert!(copied.lock().unwrap().is_empty());
@@ -1210,7 +1250,7 @@ fn a_focus_the_daemon_cannot_carry_out_is_toasted_with_its_reason() {
     let client = fake_with(bound_with_view()).with_pane_focus_error("herdr is not running");
     let (mut d, _, _) = linear_driver(client, start_with_socket());
     open_web_3302(&mut d);
-    press(&mut d, KeyCode::Char('o'));
+    press(&mut d, KeyCode::Enter);
     let text = toast(&d);
     assert!(text.starts_with("pane wA:p2:"), "{text}");
     assert!(text.contains("herdr is not running"), "{text}");
@@ -1349,7 +1389,7 @@ fn narrow_rows(title: &str, assignee: Option<&str>) -> Vec<String> {
         name: Some(name.into()),
     });
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    render_at(&mut d, 36, 20).lines().map(backend_row).collect()
+    render_at(&mut d, 36, 30).lines().map(backend_row).collect()
 }
 
 /// The backend quotes each row and appends a note after the closing quote
@@ -1362,18 +1402,28 @@ fn backend_row(row: &str) -> String {
         .to_string()
 }
 
-/// The inside of the column's border on frame row `row`.
-fn cell(rows: &[String], row: usize) -> String {
-    let chars: Vec<char> = rows[row].chars().collect();
-    assert_eq!(chars.first(), Some(&'│'), "row {row}: {rows:#?}");
-    assert_eq!(chars.last(), Some(&'│'), "row {row}: {rows:#?}");
-    chars[1..chars.len() - 1]
+/// A 36-cell column's card text: the 28 cells between the card's 2-cell
+/// insets (the column keeps 2 cells of its gap on each side), trailing blanks
+/// trimmed, from the row holding `id` (the header) down.
+fn card(rows: &[String], id: &str) -> Vec<String> {
+    let header = rows
         .iter()
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+        .position(|row| row.contains(id))
+        .unwrap_or_else(|| panic!("no card {id}: {rows:#?}"));
+    rows[header..]
+        .iter()
+        .map(|row| {
+            row.chars()
+                .skip(4)
+                .take(28)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
 }
 
+const PERSON: &str = "\u{f415}";
 const NINETY: &str =
     "Example issue: the panel stays blank while a long list of items is still loading from disk";
 
@@ -1381,15 +1431,16 @@ const NINETY: &str =
 fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellipsis() {
     assert_eq!(NINETY.chars().count(), 90);
     let rows = narrow_rows(NINETY, Some("Example User"));
-    assert!(cell(&rows, 3).starts_with("  WEB-3308"), "{rows:#?}");
-    let first = cell(&rows, 4);
-    let second = cell(&rows, 5);
+    let card = card(&rows, "WEB-3308");
+    assert!(card[0].starts_with("WEB-3308"), "{rows:#?}");
+    let first = &card[2];
+    let second = &card[3];
     assert!(
-        NINETY.starts_with(&first) && !first.ends_with('…'),
+        NINETY.starts_with(first.as_str()) && !first.ends_with('…'),
         "{rows:#?}"
     );
     assert!(second.ends_with('…'), "{rows:#?}");
-    assert_eq!(cell(&rows, 6), "@Example User", "{rows:#?}");
+    assert_eq!(card[5], format!("{PERSON} @Example User"), "{rows:#?}");
     insta::assert_snapshot!("linear_card_two_line_title_36", rows.join("\n"));
 }
 
@@ -1397,144 +1448,175 @@ fn a_ninety_character_title_at_36_cells_wraps_to_two_lines_and_ends_in_an_ellips
 fn a_one_word_title_longer_than_the_column_breaks_mid_word() {
     let word = "Exampleissuewithoutanyspacesthatrunsfarpastthecolumnedge";
     let rows = narrow_rows(word, None);
-    let first = cell(&rows, 4);
-    assert_eq!(first.chars().count(), 34, "{rows:#?}");
-    assert!(word.starts_with(&first), "{rows:#?}");
-    let second = cell(&rows, 5);
-    assert!(word[34..].starts_with(&second), "{rows:#?}");
+    let card = card(&rows, "WEB-3308");
+    assert_eq!(card[2].chars().count(), 28, "{rows:#?}");
+    assert!(word.starts_with(card[2].as_str()), "{rows:#?}");
+    assert!(
+        word[28..].starts_with(card[3].trim_end_matches('…')),
+        "{rows:#?}"
+    );
 }
 
 #[test]
 fn a_title_of_wide_glyphs_wraps_by_display_width() {
     let title = "例".repeat(40);
     let rows = narrow_rows(&title, None);
-    assert_eq!(cell(&rows, 4), "例".repeat(17), "{rows:#?}");
-    assert_eq!(cell(&rows, 5), format!("{}…", "例".repeat(16)), "{rows:#?}");
-    assert_eq!(cell(&rows, 6), "unassigned", "{rows:#?}");
+    let card = card(&rows, "WEB-3308");
+    assert_eq!(card[2], "例".repeat(14), "{rows:#?}");
+    assert_eq!(card[3], format!("{}…", "例".repeat(13)), "{rows:#?}");
 }
 
 #[test]
-fn a_one_line_title_leaves_the_second_title_row_blank() {
+fn a_one_line_title_takes_one_row() {
     let rows = narrow_rows("Example short title", Some("Example User"));
-    assert_eq!(cell(&rows, 4), "Example short title", "{rows:#?}");
-    assert_eq!(cell(&rows, 5), "", "{rows:#?}");
-    assert_eq!(cell(&rows, 6), "@Example User", "{rows:#?}");
+    let card = card(&rows, "WEB-3308");
+    assert_eq!(card[2], "Example short title", "{rows:#?}");
+    assert!(card[3].starts_with("─ ─"), "the meta rule: {rows:#?}");
+    assert_eq!(card[4], format!("{PERSON} @Example User"), "{rows:#?}");
 }
 
 #[test]
-fn an_empty_title_and_a_missing_assignee_render_placeholders() {
+fn an_empty_title_shows_a_placeholder_and_no_assignee_drops_the_meta_row() {
     let rows = narrow_rows("", None);
-    assert_eq!(cell(&rows, 4), "(no title)", "{rows:#?}");
-    assert_eq!(cell(&rows, 5), "", "{rows:#?}");
-    assert_eq!(cell(&rows, 6), "unassigned", "{rows:#?}");
+    let card = card(&rows, "WEB-3308");
+    assert_eq!(card[2], "(no title)", "{rows:#?}");
+    assert_eq!(card[3], "", "{rows:#?}");
+    assert!(
+        !card[..4].iter().any(|row| row.contains(PERSON)),
+        "{rows:#?}"
+    );
 }
 
 #[test]
-fn cards_in_a_column_are_separated_by_a_blank_row() {
+fn cards_in_a_column_are_sized_to_their_content_with_a_blank_row_between_them() {
     let mut snapshot = bound_with_view();
     snapshot.groups.truncate(1);
     snapshot.groups[0].issues = vec!["WEB-3308".into(), "WEB-3307".into()];
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
-    let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
-    assert_eq!(cell(&rows, 7), "", "{rows:#?}");
-    assert!(cell(&rows, 8).starts_with("  WEB-3307"), "{rows:#?}");
+    let rows: Vec<String> = render_at(&mut d, 36, 40).lines().map(backend_row).collect();
+    let first = rows.iter().position(|r| r.contains("WEB-3308")).unwrap();
+    let second = rows.iter().position(|r| r.contains("WEB-3307")).unwrap();
+    // Padding, header, rule, a 2-row title, the meta rule, the assignee row
+    // and padding: 8 rows, then the blank row between cards.
+    assert_eq!(second, first + 9, "{rows:#?}");
+    assert_eq!(rows[first + 7].trim(), "", "{rows:#?}");
 }
 
 #[test]
-fn a_column_of_zero_cards_renders_its_header_and_nothing_else() {
+fn a_column_of_zero_cards_renders_its_title_and_says_no_issues() {
     let mut snapshot = bound_with_view();
     snapshot.groups.truncate(1);
     snapshot.groups[0].issues.clear();
-    let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
+    let (mut d, _, _) = linear_driver(
+        fake_with(snapshot).with_linear_list(spaces(vec![])),
+        linear_start(),
+    );
     let rows: Vec<String> = render_at(&mut d, 36, 20).lines().map(backend_row).collect();
-    assert!(rows[2].contains("Backlog (0)"), "{rows:#?}");
-    let bottom = rows.iter().position(|r| r.starts_with('└')).unwrap();
-    for row in 3..bottom {
-        assert_eq!(cell(&rows, row), "", "{rows:#?}");
+    let title = rows.iter().position(|r| r.contains("BACKLOG  0")).unwrap();
+    assert_eq!(rows[title + 2].trim(), "no issues", "{rows:#?}");
+    for row in &rows[title + 3..rows.len() - 3] {
+        assert_eq!(row.trim(), "", "{rows:#?}");
     }
 }
 
 #[test]
-fn a_body_36_cells_wide_draws_one_column_and_72_draws_two() {
+fn a_body_95_cells_wide_draws_one_column_and_96_draws_two() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    for (width, columns) in [(36u16, 1usize), (71, 1), (72, 2)] {
+    for (width, columns) in [(36u16, 1usize), (95, 1), (96, 2)] {
         let frame = render_at(&mut d, width, 20);
-        let top = column_tops(&frame);
-        assert_eq!(top.matches('┌').count(), columns, "{width}:\n{frame}");
+        assert_eq!(titles(&frame), columns, "{width}:\n{frame}");
     }
 }
 
-/// The top border of every drawn column: the first row holding one.
+/// The column title bar: the powerline row whose segments read
+/// `LABEL  count` (the view tab row above it has no counts).
 fn column_tops(frame: &str) -> String {
     frame
         .lines()
-        .find(|row| row.contains('┌'))
+        .map(backend_row)
+        .find(|row| row.contains('\u{e0bc}') && title_count(row) > 0)
         .unwrap_or_default()
-        .to_string()
 }
 
-/// The pager row: the one row naming a hidden column with an arrow.
-fn pager(frame: &str) -> String {
-    frame
+fn title_count(row: &str) -> usize {
+    let row: Vec<char> = row.chars().collect();
+    row.windows(4)
+        .filter(|w| {
+            w[0].is_ascii_uppercase() && w[1] == ' ' && w[2] == ' ' && w[3].is_ascii_digit()
+        })
+        .count()
+}
+
+/// How many column titles the title bar draws.
+fn titles(frame: &str) -> usize {
+    title_count(&column_tops(frame))
+}
+
+/// The paging buttons' hidden counts as `(left, right)`: the arrow in each
+/// outer gap and the count under it.
+fn pager(frame: &str) -> (Option<usize>, Option<usize>) {
+    let rows: Vec<Vec<char>> = frame
         .lines()
-        .map(backend_row)
-        .find(|row| row.starts_with('‹') || row.trim_end().ends_with('›'))
-        .unwrap_or_default()
+        .map(|row| backend_row(row).chars().collect())
+        .collect();
+    let count = |y: usize, x: usize| {
+        rows.get(y + 1)
+            .and_then(|row| row.get(x..x + 2))
+            .and_then(|cells| cells.iter().collect::<String>().trim().parse().ok())
+    };
+    let (mut left, mut right) = (None, None);
+    for (y, row) in rows.iter().enumerate() {
+        if row.len() >= 2 && row[0] == ' ' && row[1] == '←' {
+            left = count(y, 0);
+        }
+        let w = row.len();
+        if w >= 2 && row[w - 2] == '→' && row[w - 1] == ' ' {
+            right = count(y, w - 2);
+        }
+    }
+    (left, right)
 }
 
 #[test]
-fn a_70_cell_body_shows_one_column_a_page_and_the_pager_names_its_neighbours() {
+fn a_70_cell_body_shows_one_column_and_a_button_counting_the_hidden_ones() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 70, 20);
     let tops = column_tops(&frame);
-    assert_eq!(tops.matches('┌').count(), 1, "{frame}");
-    assert!(tops.contains("Backlog (1)"), "{frame}");
+    assert_eq!(titles(&frame), 1, "{frame}");
+    assert!(tops.contains("BACKLOG  1"), "{frame}");
     assert!(
-        !tops.contains("1/5"),
-        "the pager carries the position:\n{frame}"
-    );
-    assert!(
-        tops.trim_end_matches('"').ends_with('┐'),
+        tops.trim_end().ends_with('\u{e0bc}') && tops.chars().count() == 70,
         "fills the width:\n{frame}"
     );
-    assert!(!frame.contains("Todo (1)"), "{frame}");
-    let row = pager(&frame);
-    assert!(!row.contains('‹'), "{frame}");
-    assert!(
-        row.contains("1/5") && row.trim_end().ends_with("Todo 1 ›"),
-        "{frame}"
-    );
+    assert!(!frame.contains("TODO  1"), "{frame}");
+    assert_eq!(pager(&frame), (None, Some(4)), "{frame}");
     insta::assert_snapshot!("linear_stacked_70", frame);
     press(&mut d, KeyCode::Char('l'));
+    press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Todo (1)"), "{frame}");
-    assert!(pager(&frame).starts_with("‹ Backlog 1"), "{frame}");
-    assert!(
-        pager(&frame).trim_end().ends_with("In Progress 1 ›"),
-        "{frame}"
-    );
-    assert!(!frame.contains("Backlog (1)"), "{frame}");
+    assert!(column_tops(&frame).contains("TODO  1"), "{frame}");
+    assert_eq!(pager(&frame), (Some(1), Some(3)), "{frame}");
+    assert!(!frame.contains("BACKLOG  1"), "{frame}");
+    press(&mut d, KeyCode::Left);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-3307"));
+    press(&mut d, KeyCode::Left);
     press(&mut d, KeyCode::Left);
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Backlog (1)"), "{frame}");
+    assert!(column_tops(&frame).contains("BACKLOG  1"), "{frame}");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-3308"));
 }
 
 #[test]
-fn two_columns_at_100_and_all_five_groups_at_200_carry_no_position() {
+fn two_columns_at_100_and_all_five_groups_at_240_have_no_buttons() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 100, 20);
-    assert_eq!(column_tops(&frame).matches('┌').count(), 2, "{frame}");
-    assert!(!column_tops(&frame).contains("/5"), "{frame}");
-    assert!(
-        pager(&frame).trim_end().ends_with("In Progress 1 ›"),
-        "{frame}"
-    );
+    assert_eq!(titles(&frame), 2, "{frame}");
+    assert_eq!(pager(&frame), (None, Some(3)), "{frame}");
     insta::assert_snapshot!("linear_two_column_100", frame);
-    let frame = render_at(&mut d, 200, 20);
-    assert_eq!(column_tops(&frame).matches('┌').count(), 5, "{frame}");
-    assert!(!column_tops(&frame).contains("/5"), "{frame}");
-    assert_eq!(pager(&frame), "", "every column fits:\n{frame}");
-    insta::assert_snapshot!("linear_five_column_200", frame);
+    let frame = render_at(&mut d, 240, 20);
+    assert_eq!(titles(&frame), 5, "{frame}");
+    assert_eq!(pager(&frame), (None, None), "every column fits:\n{frame}");
+    insta::assert_snapshot!("linear_five_column_240", frame);
 }
 
 #[test]
@@ -1543,8 +1625,14 @@ fn a_one_group_board_at_full_width_is_not_stacked() {
     snapshot.groups.truncate(1);
     let (mut d, _, _) = linear_driver(fake_with(snapshot), linear_start());
     let frame = render_at(&mut d, 200, 20);
-    assert!(column_tops(&frame).contains("Backlog (1) ─"), "{frame}");
-    assert!(!column_tops(&frame).contains("1/1"), "{frame}");
+    let tops = column_tops(&frame);
+    assert!(tops.contains("BACKLOG  1"), "{frame}");
+    assert_eq!(
+        tops.chars().count(),
+        200,
+        "one title spans the board:\n{frame}"
+    );
+    assert!(!tops.contains("1/1"), "{frame}");
 }
 
 #[test]
@@ -1554,20 +1642,20 @@ fn resizing_from_200_to_70_keeps_the_selected_group() {
     press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 70, 20);
     assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 1);
-    assert!(column_tops(&frame).contains("Todo (1)"), "{frame}");
-    assert!(pager(&frame).contains("2/5"), "{frame}");
+    assert!(column_tops(&frame).contains("TODO  1"), "{frame}");
+    assert_eq!(pager(&frame), (Some(1), Some(3)), "{frame}");
 }
 
 #[test]
 fn resizing_from_70_to_200_keeps_the_same_group_in_view() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    render_at(&mut d, 70, 20);
+    render_at(&mut d, 200, 20);
     press(&mut d, KeyCode::Char('l'));
     press(&mut d, KeyCode::Char('l'));
-    assert!(column_tops(&render_at(&mut d, 70, 20)).contains("In Progress (1)"));
+    assert!(column_tops(&render_at(&mut d, 70, 20)).contains("IN PROGRESS  1"));
     let frame = render_at(&mut d, 200, 20);
     assert_eq!(d.app.linear.as_ref().unwrap().sel_group, 2);
-    assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
+    assert!(column_tops(&frame).contains("IN PROGRESS  1"), "{frame}");
 }
 
 #[test]
@@ -1575,13 +1663,13 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     d.app.linear.as_mut().unwrap().sel_group = 9;
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("Done (0)"), "{frame}");
-    assert!(pager(&frame).starts_with("‹ Dev Done 0"), "{frame}");
+    assert!(column_tops(&frame).contains("DONE  0"), "{frame}");
+    assert_eq!(pager(&frame), (Some(4), None), "{frame}");
     let state = d.app.linear.as_mut().unwrap();
     state.sel_group = 2;
-    state.sel_card = 9;
+    state.focus = Focus::Card(9);
     let frame = render_at(&mut d, 70, 20);
-    assert!(column_tops(&frame).contains("In Progress (1)"), "{frame}");
+    assert!(column_tops(&frame).contains("IN PROGRESS  1"), "{frame}");
     assert!(
         frame.contains("WEB-3302"),
         "scrolled past the only card:\n{frame}"
@@ -1589,22 +1677,24 @@ fn a_selection_past_the_last_group_is_clamped_when_drawn() {
 }
 
 #[test]
-fn a_body_two_rows_tall_renders_the_header_and_says_the_body_is_too_short() {
+fn a_pane_shorter_than_the_header_a_card_and_the_bar_says_pane_too_short() {
     let (mut d, _, _) = linear_driver(
         fake_with(bound_with_view()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
-    // Header 2, pager 1, body 2, footer 1; with every space bound the strip
-    // takes no rows.
-    let frame = render_at(&mut d, 70, 6);
+    let frame = render_at(&mut d, 70, 15);
     let rows: Vec<&str> = frame.lines().collect();
+    assert!(rows[7].contains("pane too short"), "{frame}");
     assert!(
-        rows[0].contains(" Linear ") && rows[0].contains("view: Canvas board"),
+        !frame.contains(" Linear ") && !frame.contains("WEB-"),
         "{frame}"
     );
-    assert!(rows[3].contains("too short"), "{frame}");
-    assert!(!frame.contains("no columns"), "{frame}");
-    insta::assert_snapshot!("linear_body_too_short", frame);
+    insta::assert_snapshot!("linear_pane_too_short", frame);
+    assert!(
+        render_at(&mut d, 70, 17).contains("pane too short"),
+        "the stacked bar takes three rows"
+    );
+    assert!(render_at(&mut d, 70, 18).contains("WEB-"));
 }
 
 #[test]
@@ -1831,7 +1921,7 @@ fn a_reconnect_leaves_the_picker_open() {
 #[test]
 fn a_help_sheet_open_when_a_snapshot_lands_stays_open() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
-    press(&mut d, KeyCode::Char('?'));
+    open_help(&mut d);
     d.handle(Msg::LinearRefresh);
     assert_eq!(d.app.screen, Screen::Help);
     press(&mut d, KeyCode::Char('x'));
@@ -2151,7 +2241,7 @@ fn a_view_picker_reads_the_views_of_the_project_it_was_opened_for() {
 // -- mouse on the board ------------------------------------------------------
 
 /// `bound_with_view` with three more cards under In Progress, so a second card
-/// sits at frame rows 8..=11 of the third column at `W`×`H`.
+/// sits from frame row 18 of the third column at `BW`×`H`.
 fn four_in_progress() -> LinearSnapshot {
     let mut snapshot = bound_with_view();
     let template = snapshot.issues["WEB-3302"].clone();
@@ -2181,7 +2271,11 @@ fn wheel(d: &mut Driver, kind: MouseEventKind) {
 
 fn selection(d: &Driver) -> (usize, usize, Option<String>) {
     let state = d.app.linear.as_ref().unwrap();
-    (state.sel_group, state.sel_card, state.detail.clone())
+    let card = match state.focus {
+        Focus::Card(card) => card,
+        _ => usize::MAX,
+    };
+    (state.sel_group, card, state.detail.clone())
 }
 
 /// Frame row `row` as the screen shows it, without the backend's quoting.
@@ -2189,29 +2283,27 @@ fn frame_row(frame: &str, row: usize) -> String {
     backend_row(frame.lines().nth(row).unwrap_or_default())
 }
 
-/// The In Progress column at `W`×`H`, under the pager row: x 80..120, title
-/// row 3, first card rows 4..=7, separator row 8, second card rows 9..=12.
+/// The In Progress column at `BW`×`H`: slot x 96..144 with its cards at x
+/// 98..142, title row 2, first card rows 4..=11 (header row 5; no
+/// description, one meta row), gap row 12, second card rows 13..=20 (header
+/// row 14).
 fn assert_in_progress_geometry(frame: &str) {
-    assert!(
-        frame_row(frame, 2).trim_end().ends_with("Dev Done 0 ›"),
-        "{frame}"
-    );
-    let title: String = frame_row(frame, 3).chars().skip(80).collect();
-    assert!(title.contains("In Progress (4)"), "{frame}");
-    let first: String = frame_row(frame, 4).chars().skip(80).collect();
+    let title: String = frame_row(frame, 2).chars().skip(96).collect();
+    assert!(title.contains("IN PROGRESS  4"), "{frame}");
+    let first: String = frame_row(frame, 5).chars().skip(96).collect();
     assert!(first.contains("WEB-3302"), "{frame}");
-    let gap: String = frame_row(frame, 8).chars().skip(81).take(38).collect();
+    let gap: String = frame_row(frame, 12).chars().skip(96).take(48).collect();
     assert!(gap.trim().is_empty(), "{frame}");
-    let second: String = frame_row(frame, 9).chars().skip(80).collect();
+    let second: String = frame_row(frame, 14).chars().skip(96).collect();
     assert!(second.contains("WEB-9001"), "{frame}");
 }
 
 #[test]
 fn a_click_on_a_card_selects_it_and_opens_its_detail() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
-    d.handle(left_down(90, 10));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
 }
@@ -2219,9 +2311,9 @@ fn a_click_on_a_card_selects_it_and_opens_its_detail() {
 #[test]
 fn a_click_on_a_column_header_selects_that_group_without_opening_anything() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
-    d.handle(left_down(95, 3));
+    d.handle(left_down(111, 2));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(selection(&d), (2, 0, None));
 }
@@ -2229,9 +2321,9 @@ fn a_click_on_a_column_header_selects_that_group_without_opening_anything() {
 #[test]
 fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
-    for (x, y) in [(90, 8), (90, 25), (10, 0), (80, 6)] {
+    for (x, y) in [(106, 12), (116, 12), (10, 0), (96, 5), (97, 9)] {
         d.handle(left_down(x, y));
         assert_eq!(d.app.screen, Screen::LinearBoard, "click at {x},{y}");
         assert_eq!(selection(&d), (0, 0, None), "click at {x},{y}");
@@ -2242,8 +2334,8 @@ fn a_click_on_the_gap_between_cards_or_off_the_columns_changes_nothing() {
 fn a_card_click_in_the_stacked_layout_opens_that_card() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, 70, 20);
-    assert!(frame_row(&frame, 4).contains("WEB-3308"), "{frame}");
-    d.handle(left_down(10, 5));
+    assert!(frame_row(&frame, 5).contains("WEB-3308"), "{frame}");
+    d.handle(left_down(10, 6));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (0, 0, Some("WEB-3308".into())));
 }
@@ -2251,7 +2343,7 @@ fn a_card_click_in_the_stacked_layout_opens_that_card() {
 #[test]
 fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
     let group = snapshot.tabs[0]
@@ -2260,7 +2352,7 @@ fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
         .find(|g| g.key == "st-prog")
         .unwrap();
     group.issues.retain(|id| id != "WEB-3302");
-    d.handle(left_down(90, 10));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 0, Some("WEB-9001".into())));
 }
@@ -2268,7 +2360,7 @@ fn a_click_on_a_card_that_moved_since_the_draw_resolves_by_identifier() {
 #[test]
 fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
     for group in snapshot.tabs[0].groups.iter_mut() {
@@ -2280,7 +2372,7 @@ fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
         .find(|g| g.key == "st-todo")
         .unwrap();
     todo.issues.push("WEB-9001".into());
-    d.handle(left_down(90, 10));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (1, 1, Some("WEB-9001".into())));
 }
@@ -2288,14 +2380,14 @@ fn a_click_on_a_card_that_changed_columns_since_the_draw_follows_it() {
 #[test]
 fn a_click_on_a_card_that_left_the_snapshot_since_the_draw_does_nothing() {
     let mut d = mouse_driver();
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert_in_progress_geometry(&frame);
     let snapshot = d.app.linear.as_mut().unwrap().last_good.as_mut().unwrap();
     for group in snapshot.tabs[0].groups.iter_mut() {
         group.issues.retain(|id| id != "WEB-9001");
     }
     snapshot.issues.remove("WEB-9001");
-    d.handle(left_down(90, 10));
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearBoard);
     assert_eq!(selection(&d), (0, 0, None));
 }
@@ -2303,9 +2395,9 @@ fn a_click_on_a_card_that_left_the_snapshot_since_the_draw_does_nothing() {
 #[test]
 fn scrolling_moves_the_card_selection_and_stops_at_the_ends() {
     let mut d = mouse_driver();
+    render_at(&mut d, BW, H);
     press(&mut d, KeyCode::Char('l'));
     press(&mut d, KeyCode::Char('l'));
-    render_at(&mut d, W, H);
     wheel(&mut d, MouseEventKind::ScrollDown);
     assert_eq!(selection(&d), (2, 1, None));
     for _ in 0..6 {
@@ -2325,7 +2417,7 @@ fn scrolling_moves_the_card_selection_and_stops_at_the_ends() {
 fn a_click_on_the_issue_page_does_not_reach_the_board() {
     let mut d = mouse_driver();
     open_web_3302(&mut d);
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     // The page replaces the board rather than covering it, so no card is drawn
     // anywhere on screen to click through to.
     assert!(!frame_row(&frame, 3).starts_with("│W"), "{frame}");
@@ -2335,7 +2427,7 @@ fn a_click_on_the_issue_page_does_not_reach_the_board() {
         assert_eq!(selection(&d), (2, 0, Some("WEB-3302".into())));
     }
     wheel(&mut d, MouseEventKind::ScrollDown);
-    assert_eq!(d.app.linear.as_ref().unwrap().sel_card, 0);
+    assert_eq!(d.app.linear.as_ref().unwrap().focus, Focus::Card(0));
 }
 
 #[test]
@@ -2345,18 +2437,18 @@ fn a_click_inside_an_open_picker_does_not_reach_the_board_behind_it() {
     let client = fake_with(four_in_progress())
         .with_linear_list_error(LinearListKind::Spaces, "herdr socket missing");
     let (mut d, _, _) = linear_driver(client, linear_start());
-    render_at(&mut d, W, H);
+    render_at(&mut d, BW, H);
     assert!(
         matches!(
-            d.app.hit_map.borrow().hit(81, 15),
-            Some(Zone::LinearCard { ref identifier, .. }) if identifier == "WEB-9002"
+            d.app.hit_map.borrow().hit(110, 15),
+            Some(Zone::LinearCard { .. })
         ),
         "a card sits under the picker's body"
     );
     d.open_linear_picker(LinearListKind::Spaces, None);
-    let frame = render_at(&mut d, W, H);
+    let frame = render_at(&mut d, BW, H);
     assert!(frame_row(&frame, 14).contains("Choose a space"), "{frame}");
-    d.handle(left_down(81, 15));
+    d.handle(left_down(110, 15));
     assert_eq!(d.app.screen, Screen::LinearPicker);
     assert_eq!(selection(&d), (0, 0, None));
 }
@@ -2385,7 +2477,7 @@ fn strip_client() -> FakeBoardClient {
 }
 
 fn strip_lines(frame: &str) -> Vec<String> {
-    frame
+    without_bar(frame, 1)
         .lines()
         .map(backend_row)
         .skip_while(|row| {
@@ -2594,8 +2686,8 @@ fn a_click_on_a_card_while_the_strip_has_focus_opens_the_card() {
     let (mut d, _, _) = linear_driver(client, linear_start());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Down);
-    render_at(&mut d, W, H);
-    d.handle(left_down(90, 10));
+    render_at(&mut d, BW, H);
+    d.handle(left_down(106, 16));
     assert_eq!(d.app.screen, Screen::LinearDetail);
     assert_eq!(selection(&d), (2, 1, Some("WEB-9001".into())));
     assert!(d.app.picker.is_none());
@@ -2979,7 +3071,12 @@ fn escape_on_the_not_bound_strip_unfocuses_it_and_a_second_escape_quits() {
     let (mut d, _, _) = linear_driver(not_bound_client(), linear_start());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Char('q'));
-    assert!(d.app.should_quit, "q quits even with the strip focused");
+    assert!(!d.app.should_quit, "plain q is inert");
+    d.handle(ctrl_q());
+    assert!(
+        d.app.should_quit,
+        "ctrl+q quits even with the strip focused"
+    );
     let (mut d, _, _) = linear_driver(not_bound_client(), linear_start());
     press(&mut d, KeyCode::Char('s'));
     press(&mut d, KeyCode::Esc);
@@ -3166,7 +3263,7 @@ fn a_snapshot_timeout_still_names_its_own_limit_and_the_refresh_key() {
     );
 }
 
-// -- the issue-page read (R14, R15, R17, R18, R19) --------------------------
+// -- the issue-page read --------------------------
 
 fn issue_doc(identifier: &str) -> board_core::protocol::LinearIssueDocument {
     board_core::protocol::LinearIssueDocument {
@@ -3196,7 +3293,7 @@ fn in_flight_issue(d: &Driver) -> Option<&str> {
         .map(|(issue, _)| issue.as_str())
 }
 
-/// R14 -- the page opens on what the snapshot already holds and asks for the
+/// The page opens on what the snapshot already holds and asks for the
 /// rest; it never waits on a blank screen.
 #[test]
 fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
@@ -3217,7 +3314,7 @@ fn opening_a_card_starts_one_issue_read_and_marks_it_in_flight() {
     assert!(detail_state(&d).detail_error.is_none());
 }
 
-/// R18 -- overlapping reads are the normal case once Enter opens a linked issue
+/// Overlapping reads are the normal case once Enter opens a linked issue
 /// in place, so a result for an issue the reader has left must be dropped
 /// rather than painted under the open issue's title.
 #[test]
@@ -3257,7 +3354,7 @@ fn a_failure_for_an_issue_the_reader_has_left_is_dropped() {
     assert!(detail_state(&d).detail_error.is_none(), "failure leaked");
 }
 
-/// R15 -- a failed read keeps what the page already shows, says what happened,
+/// A failed read keeps what the page already shows, says what happened,
 /// and `r` sends the read again.
 #[test]
 fn a_failed_read_is_retryable_with_r() {
@@ -3282,7 +3379,7 @@ fn a_failed_read_is_retryable_with_r() {
     );
 }
 
-/// R16 -- a plugin that ships no issue script is fixed by updating it, so the
+/// A plugin that ships no issue script is fixed by updating it, so the
 /// page must not offer a retry that can never succeed.
 #[test]
 fn a_plugin_without_the_issue_script_is_not_retryable() {
@@ -3307,7 +3404,7 @@ fn a_plugin_without_the_issue_script_is_not_retryable() {
     assert!(detail_state(&d).last_good.is_some());
 }
 
-/// R17 -- each open fetches fresh; nothing is cached between opens.
+/// Each open fetches fresh; nothing is cached between opens.
 #[test]
 fn opening_the_same_issue_again_reads_it_again() {
     let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", issue_doc("WEB-3302"));
@@ -3329,7 +3426,7 @@ fn opening_the_same_issue_again_reads_it_again() {
     );
 }
 
-/// R19 -- the page is read-only. The effect gate is the guard (its exhaustive
+/// The page is read-only. The effect gate is the guard (its exhaustive
 /// classification is proven in `driver::linear`); what this adds is that
 /// reading a page sends no write to the daemon at all.
 #[test]
@@ -3349,7 +3446,7 @@ fn opening_and_reading_a_page_sends_no_write() {
     assert!(called.iter().any(|m| m == "linear.issue"), "{called:?}");
 }
 
-// -- one cursor, Enter, and the back stack (R11, R12, R13, R17) -------------
+// -- one cursor, Enter, and the back stack -------------
 
 use board_tui::view::IssueRowKind;
 
@@ -3369,7 +3466,7 @@ fn page_selection(d: &Driver) -> Option<IssueRowKind> {
     d.app.linear.as_ref().unwrap().detail_selection.clone()
 }
 
-/// R11 -- one cursor over every selectable row, in the order the page draws
+/// One cursor over every selectable row, in the order the page draws
 /// them: the main column's rows before the sidebar's, at both widths.
 #[test]
 fn the_cursor_moves_through_every_selectable_row_in_reading_order() {
@@ -3462,7 +3559,7 @@ fn the_selection_survives_the_document_arriving_above_it() {
     assert!(after.contains("▶ wA:p2"), "{after}");
 }
 
-/// R12 -- Enter on an issue row opens that issue in place, and Esc walks back
+/// Enter on an issue row opens that issue in place, and Esc walks back
 /// one issue at a time before leaving the page.
 #[test]
 fn enter_opens_a_linked_issue_and_esc_walks_back() {
@@ -3503,7 +3600,7 @@ fn enter_opens_a_linked_issue_and_esc_walks_back() {
     assert!(d.app.linear.as_ref().unwrap().detail.is_none());
 }
 
-/// R17 -- a back-step re-shows what that page last displayed while its fresh
+/// A back-step re-shows what that page last displayed while its fresh
 /// read runs; it does not empty to loading markers on the way back.
 #[test]
 fn a_back_step_shows_the_previous_page_immediately() {
@@ -3532,7 +3629,7 @@ fn a_back_step_shows_the_previous_page_immediately() {
         Some("WEB-3302")
     );
     let frame = draw(&d.app, W, H);
-    assert!(frame.contains("Sub-issues"), "{frame}");
+    assert!(frame.contains("SUB-ISSUES"), "{frame}");
 }
 
 /// The generation the reducer issues must be the generation the driver hands
@@ -3740,22 +3837,20 @@ fn the_back_stack_stops_growing_at_its_cap() {
     assert_eq!(stack.first().unwrap().issue, pushed(HOPS - CAP + 1));
 }
 
-/// R13 -- each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
+/// Each key acts on what it is about: `o` on a pane, `u`/`y`/`b` on the
 /// page's own issue whatever row is selected.
 #[test]
-fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
+fn return_focuses_a_pane_row_and_the_issue_keys_need_no_row() {
     let client = fake_with(bound_with_view()).with_linear_issue("WEB-3302", page_document());
     let (client, log) = RecordingClient::new(client);
     let mut d = linear_driver_deferred(client, start_with_socket());
     open_page_with_document(&mut d);
     d.app.last_area = ratatui::layout::Rect::new(0, 0, W, H);
 
-    // On a pane row, `o` focuses it.
-    press(&mut d, KeyCode::Char('o'));
+    // On a pane row, Return focuses it.
+    press(&mut d, KeyCode::Enter);
     assert_eq!(toast(&d), "focused pane wA:p2");
 
-    // On an issue row, `o` says what it is for rather than focusing the first
-    // pane it can find.
     for _ in 0..5 {
         press(&mut d, KeyCode::Char('k'));
     }
@@ -3763,8 +3858,6 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
         page_selection(&d),
         Some(IssueRowKind::Issue("WEB-3319".into()))
     );
-    press(&mut d, KeyCode::Char('o'));
-    assert!(toast(&d).contains("o focuses a pane"), "{}", toast(&d));
 
     // `y` still copies the page's own worktree path from an issue row.
     press(&mut d, KeyCode::Char('y'));
@@ -3779,7 +3872,7 @@ fn o_needs_a_pane_row_and_the_issue_keys_do_not() {
     );
 }
 
-/// Covers AE5. The description's Markdown reaches the page as structure, not
+/// The description's Markdown reaches the page as structure, not
 /// as markup, and the media it cannot draw is named rather than dropped.
 #[test]
 fn the_description_renders_its_markdown_on_the_page() {
@@ -3819,7 +3912,7 @@ fn the_description_renders_its_markdown_on_the_page() {
 
 // -- findings from code review ---------------------------------------------
 
-/// R14, and the defect that made it a P0: a linked issue is deliberately NOT on
+/// The defect that made this a P0: a linked issue is deliberately NOT on
 /// the board, so resolving the page's subject out of the snapshot rendered it
 /// blank. The earlier back-stack test passed over this because it asserted the
 /// state and never that anything was drawn.
@@ -3937,8 +4030,11 @@ fn a_truncated_document_says_so_and_does_not_print_a_false_count() {
 
     let frame = draw(&d.app, W, H);
     // The count says the total is at least this, not exactly this.
-    assert!(frame.contains("Sub-issues  1/2+"), "{frame}");
-    assert!(!frame.contains("Sub-issues  1/2 "), "{frame}");
+    assert!(
+        frame.contains("SUB-ISSUES") && frame.contains(" 1/2+ "),
+        "{frame}"
+    );
+    assert!(!frame.contains(" 1/2 "), "{frame}");
     // And Activity says where the rest is.
     assert!(frame.contains("the rest is in Linear"), "{frame}");
 }
@@ -3953,7 +4049,10 @@ fn an_untruncated_document_prints_a_plain_count_and_no_note() {
     assert!(d.deliver_pending_linear_issue());
 
     let frame = draw(&d.app, W, H);
-    assert!(frame.contains("Sub-issues  1/2"), "{frame}");
+    assert!(
+        frame.contains("SUB-ISSUES") && frame.contains(" 1/2 "),
+        "{frame}"
+    );
     assert!(!frame.contains("1/2+"), "{frame}");
     assert!(!frame.contains("the rest is in Linear"), "{frame}");
 }
@@ -4042,11 +4141,14 @@ fn tabs_lanes() -> LinearSnapshot {
     snapshot
 }
 
+/// Starts wide enough to show all four columns, so `l` and `h` move between
+/// columns until a test renders it narrower.
 fn tabs_driver() -> Driver {
-    let (d, _, _) = linear_driver(
+    let (mut d, _, _) = linear_driver(
         fake_with(tabs_lanes()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
+    d.app.last_area = ratatui::layout::Rect::new(0, 0, 240, 60);
     d
 }
 
@@ -4117,9 +4219,9 @@ fn a_selected_card_that_moved_columns_is_followed() {
 #[test]
 fn a_selected_card_that_left_the_snapshot_leaves_the_cursor_in_the_same_column() {
     let mut d = tabs_driver();
-    press(&mut d, KeyCode::Char('j'));
-    press(&mut d, KeyCode::Char('j'));
-    press(&mut d, KeyCode::Char('j'));
+    for _ in 0..4 {
+        press(&mut d, KeyCode::Char('j'));
+    }
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
     let mut snapshot = tabs_lanes();
     edit_first_tab(&mut snapshot, |groups| {
@@ -4168,122 +4270,130 @@ fn the_strip_takes_no_rows_when_no_space_is_unbound_and_no_tab_is_unmapped() {
         );
         assert!(!frame.contains("every space is bound"), "{view}:\n{frame}");
         assert!(!frame.contains("Unmapped tabs"), "{view}:\n{frame}");
-        let bottom = frame.lines().nth(H as usize - 2).unwrap_or_default();
-        assert!(
-            bottom.contains('└'),
-            "the columns reach the footer:\n{frame}"
-        );
+        let bottom = frame_row(&frame, H as usize - 2);
+        assert_eq!(bottom.trim(), "", "no strip row above the footer:\n{frame}");
         press(&mut d, KeyCode::Char('t'));
     }
 }
 
 #[test]
-fn a_sidebar_board_on_in_progress_names_the_hidden_neighbour_on_each_side() {
+fn a_sidebar_board_on_in_progress_counts_the_hidden_columns_on_each_side() {
     let mut d = tabs_driver();
+    render_at(&mut d, 240, 30);
     press(&mut d, KeyCode::Char('l'));
     let frame = render_at(&mut d, 44, 30);
-    let pager = frame
-        .lines()
-        .map(backend_row)
-        .find(|row| row.contains('‹'))
-        .unwrap_or_else(|| panic!("no pager row:\n{frame}"));
-    assert!(pager.starts_with("‹ Todo 4"), "{frame}");
-    assert!(pager.trim_end().ends_with("In Review 1 ›"), "{frame}");
-    assert!(frame.contains("In Progress (2)"), "{frame}");
+    assert_eq!(pager(&frame), (Some(1), Some(2)), "{frame}");
+    assert!(frame.contains("IN PROGRESS  2"), "{frame}");
     insta::assert_snapshot!("linear_lanes_44", frame);
 }
 
 #[test]
-fn two_lanes_render_inside_each_column_at_140_80_and_44_cells() {
+fn two_lanes_render_once_across_the_columns_at_144_96_and_44_cells() {
     let mut d = tabs_driver();
-    for (width, columns) in [(140u16, 3usize), (80, 2), (44, 1)] {
-        let frame = render_at(&mut d, width, 30);
-        assert_eq!(
-            column_tops(&frame).matches('┌').count(),
-            columns,
-            "{width}:\n{frame}"
-        );
-        assert!(frame.contains("│── Alpha 3 "), "{width}:\n{frame}");
-        assert!(frame.contains("│── Beta 1 "), "{width}:\n{frame}");
-        let alpha = frame.find("── Alpha 3").unwrap();
-        let beta = frame.find("── Beta 1").unwrap();
+    for (width, columns) in [(144u16, 3usize), (96, 2), (44, 1)] {
+        let frame = render_at(&mut d, width, 70);
+        assert_eq!(titles(&frame), columns, "{width}:\n{frame}");
+        assert_eq!(frame.matches("─ ALPHA ─").count(), 1, "{width}:\n{frame}");
+        assert_eq!(frame.matches("─ BETA ─").count(), 1, "{width}:\n{frame}");
+        let alpha = frame.find("─ ALPHA ─").unwrap();
+        let beta = frame.find("─ BETA ─").unwrap();
         let web_104 = frame.find("WEB-104").unwrap();
         assert!(alpha < beta && beta < web_104, "{width}:\n{frame}");
-        if width == 140 {
-            insta::assert_snapshot!("linear_lanes_140", frame);
-        } else if width == 80 {
-            insta::assert_snapshot!("linear_lanes_80", frame);
+        if width == 144 {
+            insta::assert_snapshot!("linear_lanes_144", frame);
+        } else if width == 96 {
+            insta::assert_snapshot!("linear_lanes_96", frame);
         }
     }
 }
 
 #[test]
-fn a_lane_with_no_cards_in_a_column_has_no_sub_header_there() {
+fn a_lane_with_no_cards_in_a_column_leaves_that_columns_band_blank() {
     let mut d = tabs_driver();
+    render_at(&mut d, 96, 80);
     press(&mut d, KeyCode::Char('>'));
-    let frame = render_at(&mut d, 80, 30);
-    let review = frame
-        .lines()
-        .map(backend_row)
-        .find(|row| row.contains("In Review (1)"))
-        .map(|_| ())
-        .is_some();
-    assert!(review, "{frame}");
-    assert!(frame.contains("── Beta 1"), "{frame}");
-    assert_eq!(frame.matches("── Alpha").count(), 1, "Done only:\n{frame}");
+    press(&mut d, KeyCode::Char('>'));
+    let frame = render_at(&mut d, 96, 80);
+    let rows: Vec<String> = frame.lines().map(backend_row).collect();
+    let row_of = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}:\n{frame}"))
+    };
+    assert!(column_tops(&frame).contains("IN REVIEW  1"), "{frame}");
+    let beta = row_of("─ BETA ─");
+    assert!(row_of("WEB-108") < beta, "Done's Alpha card:\n{frame}");
+    assert!(row_of("WEB-107") > beta, "In Review's Beta card:\n{frame}");
+    let review_alpha: String = rows[row_of("WEB-108")].chars().take(48).collect();
+    assert_eq!(
+        review_alpha.trim(),
+        "",
+        "In Review holds no Alpha card:\n{frame}"
+    );
 }
 
 #[test]
 fn without_lane_grouping_columns_have_no_sub_headers() {
     let (mut d, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut d, W, H);
-    assert!(!frame.contains("│── "), "{frame}");
+    assert!(
+        !frame.contains('\u{f0233}') && !frame.contains('\u{f0232}'),
+        "no lane line:\n{frame}"
+    );
 }
 
 #[test]
 fn the_tab_row_marks_the_active_tab_and_a_document_without_tabs_has_none() {
+    let accent = board_tui::theme::Theme::default().palette.accent;
     let mut d = tabs_driver();
     let frame = render_at(&mut d, 140, 30);
     let row = frame_row(&frame, 2);
     assert!(
-        row.contains("[Frontend]") && row.contains(" Backend "),
+        row.starts_with("   Frontend  \u{e0bc}  Backend  \u{e0bc}"),
         "{frame}"
     );
+    let buf = board_tui::testkit::buffer_at(&mut d, 140, 30);
+    assert_eq!(buf[(3, 2)].bg, accent, "Frontend is active");
+    assert_ne!(buf[(15, 2)].bg, accent, "Backend is not");
     press(&mut d, KeyCode::Char(']'));
-    let row = frame_row(&render_at(&mut d, 140, 30), 2);
-    assert!(
-        row.contains(" Frontend ") && row.contains("[Backend]"),
-        "{row}"
-    );
+    let buf = board_tui::testkit::buffer_at(&mut d, 140, 30);
+    assert_ne!(buf[(3, 2)].bg, accent);
+    assert_eq!(buf[(15, 2)].bg, accent);
     let (mut legacy, _, _) = linear_driver(fake_with(bound_with_view()), linear_start());
     let frame = render_at(&mut legacy, W, H);
-    assert!(!frame_row(&frame, 2).contains('['), "{frame}");
+    assert!(
+        frame_row(&frame, 2).contains("BACKLOG  1"),
+        "the column titles, not tabs:\n{frame}"
+    );
 }
 
 #[test]
-fn angle_brackets_jump_a_page_and_h_l_flip_it_at_the_edge() {
+fn angle_brackets_page_one_column_on_a_button_and_leave_the_selection() {
     let mut d = tabs_driver();
-    render_at(&mut d, 80, 30);
+    render_at(&mut d, 96, 30);
     press(&mut d, KeyCode::Char('>'));
-    assert_eq!(selected_column(&d), "st-review");
-    let frame = render_at(&mut d, 80, 30);
-    assert!(pager(&frame).starts_with("‹ In Progress 2"), "{frame}");
-    assert!(!pager(&frame).contains('›'), "{frame}");
-    press(&mut d, KeyCode::Char('>'));
-    assert_eq!(selected_column(&d), "st-review", "the last page stays");
-    press(&mut d, KeyCode::Char('<'));
     assert_eq!(selected_column(&d), "st-todo");
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    let frame = render_at(&mut d, 96, 30);
+    assert_eq!(pager(&frame), (Some(1), Some(1)), "{frame}");
+    press(&mut d, KeyCode::Char('>'));
+    press(&mut d, KeyCode::Char('>'));
+    let frame = render_at(&mut d, 96, 30);
+    assert_eq!(
+        pager(&frame),
+        (Some(2), None),
+        "the last page stays:\n{frame}"
+    );
+    press(&mut d, KeyCode::Esc);
+    let frame = render_at(&mut d, 96, 30);
+    assert_eq!(selected_id(&d).as_deref(), Some("WEB-101"));
+    assert!(column_tops(&frame).contains("TODO  4"), "{frame}");
     press(&mut d, KeyCode::Char('<'));
-    assert_eq!(selected_column(&d), "st-todo", "the first page stays");
-    press(&mut d, KeyCode::Char('l'));
-    press(&mut d, KeyCode::Char('l'));
-    assert_eq!(selected_column(&d), "st-review");
-    let frame = render_at(&mut d, 80, 30);
-    assert!(column_tops(&frame).contains("In Review (1)"), "{frame}");
-    assert!(!column_tops(&frame).contains("Todo (4)"), "{frame}");
-    press(&mut d, KeyCode::Char('h'));
-    let frame = render_at(&mut d, 80, 30);
-    assert!(column_tops(&frame).contains("Todo (4)"), "{frame}");
+    assert_eq!(selected_column(&d), "st-todo", "nothing to page back to");
+    assert!(matches!(
+        d.app.linear.as_ref().unwrap().focus,
+        Focus::Pager(..)
+    ));
 }
 
 /// WEB-104 listed in both lanes of Todo, as a label grouping can list it.
@@ -4306,14 +4416,15 @@ fn an_issue_in_two_lanes_keeps_the_lane_it_was_selected_in() {
         fake_with(web_104_in_two_lanes()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
-    for _ in 0..4 {
+    // WEB-101..103, WEB-104 in Alpha, the Beta lane line, WEB-104 in Beta.
+    for _ in 0..5 {
         press(&mut d, KeyCode::Char('j'));
     }
     assert_eq!(selected_id(&d).as_deref(), Some("WEB-104"));
     assert_eq!(selected_lane(&d), "ln-beta");
     arrive(&mut d, web_104_in_two_lanes());
     assert_eq!(selected_lane(&d), "ln-beta");
-    let frame = render_at(&mut d, 140, 40);
+    let frame = without_bar(&render_at(&mut d, 140, 120), 1);
     let highlighted = frame.matches("WEB-104").count();
     assert_eq!(highlighted, 2, "drawn once per lane:\n{frame}");
     // Its lane gone, the card is found again in the first lane that lists it.
@@ -4332,7 +4443,7 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
         fake_with(web_104_in_two_lanes()).with_linear_list(spaces(vec![])),
         linear_start(),
     );
-    let frame = render_at(&mut d, 140, 40);
+    let frame = render_at(&mut d, 140, 120);
     let rows: Vec<String> = frame.lines().map(backend_row).collect();
     let second = rows
         .iter()
@@ -4347,5 +4458,10 @@ fn a_click_on_the_second_lane_copy_of_an_issue_selects_that_copy() {
     assert_eq!(selected_lane(&d), "ln-beta");
 }
 
+mod bar;
+mod focus;
+mod issue;
 mod landing;
+mod layout;
+mod levels;
 mod marks;

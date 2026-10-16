@@ -1,10 +1,11 @@
 # herdr-board sandbox image.
 #
 # Everything is pinned: the base image by digest (Rust 1.97.0 on Debian
-# bookworm slim), the Herdr 0.9.0 release asset by SHA-256 per architecture,
-# and the socket protocol by a build-time check (must be exactly 22).
+# bookworm slim), the Herdr release asset by SHA-256 per version and
+# architecture (default 0.9.0; 0.9.3 via --build-arg HERDR_VERSION=0.9.3), and
+# the socket protocol by a build-time check (must be exactly 22).
 #
-# Build: docker build --platform linux/<amd64|arm64> -t <tag> docker/
+# Build: docker build --platform linux/<amd64|arm64> [--build-arg HERDR_VERSION=<v>] -t <tag> docker/
 # The sandbox wrapper (scripts/sandbox.sh) is the supported entry point.
 
 FROM rust:1.97.0-slim-bookworm@sha256:6d220bf85c74e842a79da63997af8d2e74455c0b8847d8bb3a5888572334991d
@@ -26,20 +27,26 @@ RUN apt-get update \
 # fmt/clippy components for the pinned toolchain (no-op when present).
 RUN rustup component add clippy rustfmt
 
-# Herdr 0.9.0 — one pinned release asset per architecture, verified by
-# SHA-256, exact version string, and socket protocol 22 before the image can
-# be produced. Mirrors the pins enforced by e2e/ci.sh (x86_64) and extends
-# them to aarch64 with the upstream-published digest.
-ENV HERDR_VERSION=0.9.0
+# Herdr — one pinned release asset per supported version and architecture,
+# verified by SHA-256, exact version string, and socket protocol 22 before the
+# image can be produced. An unlisted version fails the build. The 0.9.0 x86_64
+# pin mirrors e2e/ci.sh.
+ARG HERDR_VERSION=0.9.0
+ENV HERDR_VERSION=${HERDR_VERSION}
 ENV HERDR_PROTOCOL=22
 RUN set -eu; \
   arch="${TARGETARCH:-$(uname -m)}"; \
   case "$arch" in \
-    x86_64|amd64) asset=herdr-linux-x86_64; \
-      sha=4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f ;; \
-    aarch64|arm64) asset=herdr-linux-aarch64; \
-      sha=9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2 ;; \
+    x86_64|amd64) asset=herdr-linux-x86_64 ;; \
+    aarch64|arm64) asset=herdr-linux-aarch64 ;; \
     *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+  esac; \
+  case "${HERDR_VERSION}/${asset}" in \
+    0.9.0/herdr-linux-x86_64) sha=4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f ;; \
+    0.9.0/herdr-linux-aarch64) sha=9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2 ;; \
+    0.9.3/herdr-linux-x86_64) sha=18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7 ;; \
+    0.9.3/herdr-linux-aarch64) sha=4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0 ;; \
+    *) echo "no pinned SHA-256 for herdr ${HERDR_VERSION} ${asset}" >&2; exit 1 ;; \
   esac; \
   curl --fail --location --silent --show-error \
     --connect-timeout 15 --max-time 300 --retry 3 --retry-all-errors \

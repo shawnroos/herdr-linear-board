@@ -1009,3 +1009,104 @@ fn new_local_state_results_read_every_field_as_null() {
     let older_reader: LinearChange<WorktreeBinding> = serde_json::from_value(bound).unwrap();
     assert_eq!(older_reader.after, None);
 }
+
+#[test]
+fn card_fields_on_a_snapshot_issue_read_absent_or_null_as_empty() {
+    use board_core::protocol::{LinearCardPr, LinearIssue};
+
+    let older: LinearIssue =
+        serde_json::from_value(json!({"identifier": "WEB-1", "title": "t"})).unwrap();
+    assert!(older.description.is_none() && older.milestone.is_none() && older.pr.is_none());
+    let nulls: LinearIssue = serde_json::from_value(json!({
+        "identifier": "WEB-1", "description": null, "milestone": null, "pr": null
+    }))
+    .unwrap();
+    assert!(nulls.pr.is_none());
+    let pr: LinearCardPr = serde_json::from_value(json!({
+        "repo": null, "number": null, "url": null, "status": null, "draft": null
+    }))
+    .unwrap();
+    assert_eq!(pr, LinearCardPr::default());
+    let issue = LinearIssue {
+        pr: Some(LinearCardPr {
+            repo: "acme/web".into(),
+            number: 12,
+            url: "https://github.com/acme/web/pull/12".into(),
+            status: Some("open".into()),
+            draft: Some(false),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let back: LinearIssue = serde_json::from_value(serde_json::to_value(&issue).unwrap()).unwrap();
+    assert_eq!(back, issue);
+}
+
+#[test]
+fn gh_fields_on_a_card_pr_and_the_pr_document_read_absent_or_null_as_empty() {
+    use board_core::protocol::{
+        LinearCardPr, LinearGhSource, LinearPrCheck, LinearPrCi, LinearPrDetail, LinearPrDocument,
+        LinearPrReview, LinearSnapshot,
+    };
+
+    let nulls: LinearCardPr = serde_json::from_value(json!({
+        "repo": "acme/web", "number": 12, "url": "https://github.com/acme/web/pull/12",
+        "state": null, "ci": null, "additions": null, "deletions": null,
+        "preview": null, "blocker": null, "gh_error": null
+    }))
+    .unwrap();
+    assert!(nulls.ci.is_none() && nulls.blocker.is_none() && nulls.gh_error.is_none());
+    let ci: LinearPrCi = serde_json::from_value(json!({
+        "state": null, "passed": null, "pending": null, "failed": null, "skipped": null
+    }))
+    .unwrap();
+    assert_eq!(ci, LinearPrCi::default());
+    let source: LinearGhSource =
+        serde_json::from_value(json!({"status": null, "message": null})).unwrap();
+    assert_eq!(source, LinearGhSource::default());
+    let snapshot: LinearSnapshot = serde_json::from_value(json!({"gh": null})).unwrap();
+    assert!(snapshot.gh.is_none());
+
+    let document: LinearPrDocument = serde_json::from_value(json!({
+        "schema": 1, "status": null, "message": null, "fetched_at": null, "pr": {
+            "repo": null, "number": null, "url": null, "title": null, "state": null,
+            "draft": null, "merged_at": null, "merge_state": null, "mergeable": null,
+            "review_decision": null, "additions": null, "deletions": null,
+            "changed_files": null, "head_ref": null, "head_sha": null, "ci": null,
+            "checks": null, "blocker": null, "reviews": null, "preview": null
+        }
+    }))
+    .unwrap();
+    assert_eq!(document.pr, Some(LinearPrDetail::default()));
+    let check: LinearPrCheck = serde_json::from_value(json!({
+        "name": null, "bucket": null, "state": null, "required": null, "url": null
+    }))
+    .unwrap();
+    assert_eq!(check, LinearPrCheck::default());
+    let review: LinearPrReview =
+        serde_json::from_value(json!({"author": null, "state": null, "submitted_at": null}))
+            .unwrap();
+    assert_eq!(review, LinearPrReview::default());
+}
+
+#[test]
+fn gh_unavailable_is_protocol_code_8() {
+    assert_eq!(board_core::Error::GhUnavailable("no gh".into()).code(), 8);
+}
+
+#[test]
+fn issue_detail_attachments_read_absent_null_or_null_fields() {
+    use board_core::protocol::{LinearAttachment, LinearIssueDetail};
+
+    let absent: LinearIssueDetail = serde_json::from_value(json!({"identifier": "WEB-1"})).unwrap();
+    assert!(absent.attachments.is_empty());
+    let null: LinearIssueDetail =
+        serde_json::from_value(json!({"identifier": "WEB-1", "attachments": null})).unwrap();
+    assert!(null.attachments.is_empty());
+    let row: LinearAttachment = serde_json::from_value(json!({
+        "id": null, "source_type": null, "title": null, "subtitle": null,
+        "url": null, "created_at": null, "metadata": null
+    }))
+    .unwrap();
+    assert_eq!(row, LinearAttachment::default());
+}

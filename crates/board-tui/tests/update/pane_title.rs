@@ -61,6 +61,7 @@ fn plugin_origin() -> OriginContext {
         origin_socket: Some("/run/herdr/sessions/work/herdr.sock".into()),
         session: Some("work".into()),
         plugin_id: Some("herdr-board".into()),
+        entrypoint: Some("board".into()),
         pane_id: Some("w1:p1".into()),
     }
 }

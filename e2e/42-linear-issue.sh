@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 42-linear-issue.sh — `board linear issue` returns the whole issue the issue page draws from
-# (description, sub-issues, parent, relations both ways, comments and history) in ONE GraphQL call
+# (description, sub-issues, parent, relations both ways, comments, history and attachments) in ONE GraphQL call
 # to the scenario's own fake Linear (e2e/fake-linear.py). An issue Linear cannot read is a document
 # with status `unavailable`, not an error code, and a refused id stops before any call.
 set -euo pipefail
@@ -36,6 +36,16 @@ issue = {
     "inverseRelations": page([{"id": "r-2", "type": "blocks", "issue": linked("E2E-3", "Blocking work")}]),
     "comments": page([{"id": "cm-1", "body": "Looks right", "createdAt": "2026-09-30T00:00:00Z",
                        "user": {"id": "u-1", "name": "Ada"}, "parent": None}]),
+    "attachments": page([
+        {"id": "a-1", "sourceType": "github", "title": "E2E-7 the fix", "subtitle": None,
+         "url": "https://github.com/e2e/repo/pull/12", "createdAt": "2026-09-30T00:00:00Z",
+         "metadata": {"status": "open", "draft": False}},
+        {"id": "a-2", "sourceType": "githubCommit", "title": "a commit", "subtitle": "abc123",
+         "url": "https://github.com/e2e/repo/commit/abc123", "createdAt": "2026-09-29T00:00:00Z",
+         "metadata": None},
+        {"id": "a-3", "sourceType": None, "title": "notes.txt", "subtitle": None,
+         "url": "https://uploads.linear.app/e2e/notes.txt", "createdAt": None, "metadata": None},
+    ]),
     "history": page([{"id": "h-1", "createdAt": "2026-09-29T00:00:00Z", "actor": {"id": "u-1", "name": "Ada"},
                       "fromState": {"name": "Todo"}, "toState": {"name": "In Progress"},
                       "fromAssignee": None, "toAssignee": None, "fromPriority": 2, "toPriority": 2,
@@ -64,6 +74,9 @@ checks=[
     len(i.get("children", [])) == 1, len(i.get("comments", [])) == 1, len(i.get("history", [])) == 1,
     (i.get("milestone") or {}).get("name") == "Beta",
     {r["direction"] for r in i.get("relations", [])} == {"inward", "outward"},
+    [a.get("source_type") for a in i.get("attachments", [])] == ["github", "githubCommit", None],
+    i["attachments"][0]["url"] == "https://github.com/e2e/repo/pull/12",
+    i["attachments"][0]["metadata"] == {"status": "open", "draft": False},
     all(row.get("identifier") and row.get("title") and (row.get("state") or {}).get("name") for row in linked),
 ]
 raise SystemExit(0 if all(checks) else 1)

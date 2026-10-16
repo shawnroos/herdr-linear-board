@@ -16,6 +16,7 @@
 
 pub mod agy_catalog;
 pub mod capability;
+pub mod cli_child;
 pub mod client;
 pub mod codex_catalog;
 pub mod config;
@@ -79,6 +80,10 @@ pub enum Error {
     #[error("plugin op unsupported: {0}")]
     PluginOpUnsupported(String),
 
+    /// `gh` could not run: not installed, or not logged in (protocol code 8).
+    #[error("gh unavailable: {0}")]
+    GhUnavailable(String),
+
     #[error(transparent)]
     Validation(#[from] ValidationError),
 }
@@ -93,6 +98,7 @@ pub mod error_code {
     pub const INTERNAL: i32 = 5;
     pub const PLUGIN_UNAVAILABLE: i32 = 6;
     pub const PLUGIN_OP_UNSUPPORTED: i32 = 7;
+    pub const GH_UNAVAILABLE: i32 = 8;
 }
 
 impl Error {
@@ -106,6 +112,7 @@ impl Error {
             Error::HerdrUnavailable(_) => error_code::HERDR_UNAVAILABLE,
             Error::PluginUnavailable(_) => error_code::PLUGIN_UNAVAILABLE,
             Error::PluginOpUnsupported(_) => error_code::PLUGIN_OP_UNSUPPORTED,
+            Error::GhUnavailable(_) => error_code::GH_UNAVAILABLE,
             Error::Sqlite(_) | Error::Json(_) | Error::Io(_) | Error::Config(_) => {
                 error_code::INTERNAL
             }

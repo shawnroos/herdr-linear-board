@@ -2,8 +2,9 @@ use anyhow::{anyhow, bail, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::paths;
 use board_core::protocol::{
-    CallerLocation, LinearIssueParams, LinearListKind, LinearListParams, LinearSnapshotParams,
-    LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
+    CallerLocation, LinearIssueParams, LinearListKind, LinearListParams, LinearPrParams,
+    LinearSnapshotParams, LINEAR_ISSUE_CLIENT_TIMEOUT, LINEAR_LIST_CLIENT_TIMEOUT,
+    LINEAR_PR_CLIENT_TIMEOUT, LINEAR_SNAPSHOT_CLIENT_TIMEOUT,
 };
 use serde_json::json;
 
@@ -132,6 +133,13 @@ pub(crate) fn cmd_linear(sub: LinearCmd, ctx: &mut Ctx) -> Result<()> {
                     issue,
                     origin_socket: env_text(HERDR_SOCKET_PATH),
                 })
+            })?;
+            let text = serde_json::to_string_pretty(&document)?;
+            emit_line(&document, json, text)
+        }
+        LinearCmd::Pr { url, force } => {
+            let document = with_read_timeout(ctx, LINEAR_PR_CLIENT_TIMEOUT, |client| {
+                client.linear_pr(&LinearPrParams { url, force })
             })?;
             let text = serde_json::to_string_pretty(&document)?;
             emit_line(&document, json, text)

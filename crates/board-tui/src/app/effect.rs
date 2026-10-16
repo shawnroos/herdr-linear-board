@@ -112,8 +112,12 @@ pub enum Effect {
     /// Linear mode: fetch `linear.state.get` for the space. The reducer marks
     /// the read in flight before emitting it.
     LinearStateGet,
-    /// Session pane: fetch `linear.session.get` for the agent it is beside.
+    /// Session pane, or a board started at the split level: fetch
+    /// `linear.session.get` for the agent it is beside.
     LinearSessionGet,
+    /// Linear mode: fetch `pane.context` for the board's own pane, which
+    /// picks the level.
+    PaneContext,
     /// Linear mode: fetch `linear.list` for `kind` (`id` is a views list's
     /// project id). The reducer marks the read in flight before emitting it.
     LinearList {
@@ -162,6 +166,13 @@ pub enum Effect {
     FocusPane(String),
     /// Linear mode: open the issue URL with the platform opener.
     OpenIssueUrl(String),
+    /// Linear mode: open an attachment or pull request link with the
+    /// platform opener.
+    OpenLink(String),
+    /// Linear mode: read one pull request's `gh` detail through `linear.pr`.
+    LinearPr {
+        url: String,
+    },
     /// Linear mode: copy a binding's worktree path; `missing` when the
     /// binding's state is `worktree_missing`.
     CopyWorktreePath {

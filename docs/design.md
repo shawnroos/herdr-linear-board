@@ -204,8 +204,8 @@ runs(id, card_id, column_id, harness, argv_json, prompt_snapshot,
      result_summary, log_path)
 ```
 
-Schema is versioned via `PRAGMA user_version` (current = **v16**). A fresh DB is built straight from
-`schema.sql` and stamped v16. Existing v1→v4 migrations retain their space/session, archive, and Pi
+Schema is versioned via `PRAGMA user_version` (current = **v17**). A fresh DB is built straight from
+`schema.sql` and stamped v17. Existing v1→v4 migrations retain their space/session, archive, and Pi
 effort behavior. v5 adds unique non-null `boards.scope_path`, preserves board `id=1` plus every
 related row as `Global`, and leaves existing card harnesses unchanged. v6 rebuilds `cards` to admit
 the `awaiting`/`done` statuses and adds `cards.awaiting_reason` (NULL outside `awaiting`). v7 adds
@@ -231,7 +231,9 @@ board_selection, project_recents, and board_recents tables. The v13→v14 migrat
 keys disabled (boards is the parent of columns/cards): every existing scoped board becomes its own
 project's first board `main` and the Global board becomes the Global project's `main`, so **all**
 board ids, columns, cards, runs, and comment history are preserved; a crash rolls the upgrade back
-and `user_version` stays 13. A legacy NULL remains a
+and `user_version` stays 13. v15 adds archive timestamps, v16 the Linear-mode local-state tables,
+and v17 `linear_generated_labels`: each tab or pane label the daemon wrote, keyed by session socket,
+kind and id, so a label it did not write is never replaced. A legacy NULL remains a
 launch-version marker: pre-v7 built-ins
 execute their persisted all-in-one argv unchanged, while pre-v7 configured rows retain their
 historical spawn-time current-column reconstruction. `Run` deserialization defaults an omitted field
@@ -239,7 +241,7 @@ to NULL, but serialization always omits `system_prompt_snapshot` and its content
 responses. `launch_spec_json` is likewise internal and omitted in full from boardd wire responses.
 
 Source ownership is explicit: `schema.sql` is the fresh schema source, `board-core::db` owns ordered
-upgrades through v16, and `board-core::protocol` owns the v1 wire DTOs and additive compatibility
+upgrades through v17, and `board-core::protocol` owns the v1 wire DTOs and additive compatibility
 rules. The CLI and TUI use typed `BoardClient` wrappers; only boardd reads or writes SQLite. New
 v1 fields such as `BoardSnapshot.active_runs` and RPC error `kind`/`details` are additive, so older
 clients can continue decoding the existing fields.
@@ -940,7 +942,9 @@ notes, show-requests and Linear activity — in SQLite, and is the only writer o
 [board-owns-the-store.md](board-owns-the-store.md)). The TUI's own writes are the person's
 answers to agents (clearing the marks a card's detail showed, accepting or rejecting a
 show-request, accepting a suggestion), binding a space to a project or view, and binding a
-worktree. Its only herdr writes are its own pane title and focusing a pane the person chose.
+worktree. Its only herdr writes are its own pane title and focusing a pane the person chose. The
+daemon names every tab and split in a bound space from its scope and never replaces a label set by
+hand (`docs/herdr.md`, "Tab and split names").
 
 **Local state and the import.** Bindings and the grouping config used to live in the work
 plugin's store, `~/.claude/work`. `board import work-store [--dry-run]` copies them into the
@@ -1023,10 +1027,14 @@ The Linear read is cached per space for 15 s and shared, so ten open boards cost
 Linear cannot be read, the last good read stays on screen marked stale. The wire contract is
 [protocol.md](protocol.md) → linear.
 
-**The issue page.** Opening a card opens a page, not an overlay: it replaces the board at every
-width and is laid out like Linear's own issue page — title, description, sub-issues and Activity in
-a main column, every Linear property in a sidebar, and the board's own bindings last in that
-sidebar. Below 72 cells of body width it is one column in the same order.
+**The issue view.** Opening a card opens the issue as a borderless window over the faded board
+when the pane is at least 136 cells wide, and over the whole board below that; `e` expands the
+window and `o` pins the issue into a column's slot beside the board (`responsive-board.md`,
+"Opening an issue"). It is laid out like Linear's own issue page — title, description,
+attachment and pull request cards, sub-issues and Activity in a main column, every Linear property
+in a 40-cell sidebar, and the board's own bindings last in that sidebar. Below 100 cells it is one
+column in the same order (this supersedes the 72-cell rule). Pull request cards fill in from the
+daemon's `linear.pr` read.
 
 The snapshot has none of what that page shows, so a second request fills it in:
 
@@ -1061,6 +1069,9 @@ the document as JSON either way. With no positional it reads the space from
 `HERDR_WORKSPACE_ID`; without that it asks an already running daemon for the pane this Claude
 session confirmed, and never starts one, so a missing id still exits 64.
 `board linear issue <ID>` is the issue read.
+`board linear pr <url> [--force]` reads one pull request through the daemon's `gh` and prints the
+`linear.pr` document as JSON; `gh` missing or logged out is protocol error `8`, a URL that is not a
+GitHub pull request is error `1`.
 
 **Lists.** `linear.list {kind, id?}` answers three lists: `spaces` (every herdr space of the
 caller's session with its binding state), `projects` (the Linear projects the person is a member
@@ -1093,20 +1104,40 @@ carries (`kind`) puts them in Linear's own progression — triage, backlog, unst
 completed, canceled. A group with no type, which is every group under a grouping other than
 workflow state, keeps its place among its equals.
 
-**Layout.** The snapshot's tabs are a row under the header, the active one in brackets; `[` and
-`]` switch tabs, and each tab keeps its own cursor. A document from before tabs has no tab row.
-Columns are fixed at a page: a page holds as many 36-cell columns as fit, at least one, so a
-narrow pane shows one column a page. When not every column fits, a pager row names the hidden
-column and its card count at each edge (`‹ Todo 4`, `In Review 1 ›`); `←`/`→` flip the page past
-its edge and `<`/`>` jump a page. Inside a column, cards sit under lane sub-headers
-(`── Alpha 3`) with the lane's card count in that column; a board with no lane grouping has none.
-Cards are five rows tall, and a title wraps to two lines by display width, so wide characters do
-not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
+**Layout.** The board follows [`board-design.md`](board-design.md) §2–§3 and draws every colour
+from herdr's theme. The snapshot's tabs are a powerline row under the header, the active one on
+herdr's accent; `[` and `]` switch tabs, and each tab keeps its own cursor. A document from before
+tabs has no tab row. Columns have no borders: their titles (`TODO  4`, the count after any filter)
+form one powerline bar, the focused column on the accent. A page holds the pane width ÷ 48
+columns, at least one, stretched to fill, so a narrow pane shows one column a page. Cards cap at
+64 cells and sit two to a row once a column's inside reaches 81. When columns are hidden on a
+side, that side's outer gap becomes a `←` or `→` button with the hidden count under it: `←`/`→`
+past the page's edge select the button, a further press toward it pages one column, and `<`/`>`
+page one column; paging never moves the selected issue. The filter, while open or holding text
+or a group alert's mark chip, is a full-width card under the column titles with a blank row either
+side, showing the chip, the text and a right-aligned match count. Lanes are one line each across the
+whole board (`─ ALPHA ──── 5 󰈳 ─`, the count across the tab and a fold icon), and each lane's band
+is as tall as its tallest column (its summed card heights and gaps), so a lane starts on the
+same row in every column; a board with no lane grouping has no lane lines. Cards have a 2-cell
+inset and are sized to their content: header (identifier, priority, panes; marks and `▶`
+right-aligned), one or two title rows, up to three description rows (the newest note takes the
+last as `› note`), then one row each for assignee and milestone and for the pull request, when
+the issue has them. The default density adds a padding row above and below, a rule row under the
+header and above the meta rows, and a blank row before the description: a full card is 13 rows, a
+title-only card 5. `z` toggles a compact density for the board session that drops those rows (8
+and 2) and the blank row under lane lines. A 2-up row is as tall as its taller card. Selecting a
+card changes only its surface, title colour and, in the default density, two inner rules, so no
+text moves and no height changes. Unfocused columns are muted; with nothing selected none is. The board scrolls as
+one unit by the least that keeps the selection in view. An empty column says `no issues`, a filter
+that matches nothing says `no matching issues`, and a pane shorter than the header, one card and
+the bar says `pane too short` (a full card in the current density). Titles and descriptions wrap by display width, so wide characters
+do not overflow the card. The cursor is held as tab, column, lane and identifier, so a new snapshot
 keeps it on the same card when it can. The header names the recorded view, or `view: project issues (default)` when none is
 chosen. The `?` sheet scrolls, and ends with a section listing the keys the person set in their
 herdr config (`$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`), read
 once at start. A missing, unreadable, oversized (over 64 KiB) or unparseable config leaves the
-section out; it is never an error.
+section out; it is never an error. The same read takes herdr's `[theme] name` and `[theme.custom]`
+for the board's colours (`docs/herdr.md`, "The board uses herdr's theme").
 
 **Mouse.** A click on a card opens its detail. A click on a group header focuses that group. The
 wheel moves the card selection. A click on a strip row opens the project picker for that space, a
@@ -1141,8 +1172,9 @@ retired, and the daemon answers its method as unknown.
 
 **Agent marks.** Agents mark cards through `board mcp`: needs you (`!`), question (`?`) and done
 (`✓`). The board adds a suggestion (`◇`) when a reported Linear write could not link a worktree.
-A 2-cell gutter left of each identifier shows a card's marks, with `◉` for a pending show-request,
-and a card with a note shows the latest one under its title. Pending show-requests pin one line
+A card's header shows its marks right-aligned, each in its own colour (also in muted columns),
+with `◉` for a pending show-request, and a card with a note shows the latest one in place of its
+last description line. Pending show-requests pin one line
 between the columns and the strip, oldest first. `a` accepts (binds a selected suggestion, or
 shows the oldest request's card), `x` rejects, and `n`/`N` walk the marked cards across columns,
 pages and tabs. Opening a card's detail clears the `!`, `?` and `✓` marks it showed. Pager arrows

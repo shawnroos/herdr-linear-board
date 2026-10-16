@@ -1,6 +1,6 @@
 //! Interaction contract for the functional 1:1 TUI redesign.
 //!
-//! Freezes the exact current interaction surface (the 72-row `view::HELP_KEYS`
+//! Freezes the exact current interaction surface (the `view::HELP_KEYS`
 //! contract): every documented binding, in order. Any keyboard/mouse behavior
 //! change must be mirrored here deliberately — this is the "nothing removed,
 //! nothing added, nothing remapped" gate for the redesign.
@@ -103,18 +103,36 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::Board, "drag", "move card/reorder column"),
     (Screen::Board, "wheel", "scroll cards"),
     (Screen::LinearBoard, "--", "-- linear mode --"),
-    (Screen::LinearBoard, "←/→ h/l", "focus column"),
-    (Screen::LinearBoard, "↑/↓ k/j", "focus card"),
+    (Screen::LinearBoard, "←/→ h/l Tab", "focus column / pager"),
+    (Screen::LinearBoard, "↑/↓ k/j", "lane lines and cards"),
+    (Screen::LinearBoard, "/", "filter; ↑ at the top too"),
+    (Screen::LinearBoard, "Enter Tab ↓", "filter: to the cards"),
+    (Screen::LinearBoard, "Esc ⌫", "filter: clear / drop chip"),
     (Screen::LinearBoard, "[ / ]", "previous / next tab"),
-    (Screen::LinearBoard, "< / >", "prev / next column page"),
+    (Screen::LinearBoard, "< / >", "page one column"),
+    (Screen::LinearBoard, "Enter Esc", "pager: back to the card"),
     (Screen::LinearBoard, "Enter", "detail; clears its marks"),
-    (Screen::LinearBoard, "a", "accept: ◇ bind, else show"),
-    (Screen::LinearBoard, "x", "dismiss: ◇, else request"),
+    (Screen::LinearBoard, "Enter", "lane line: fold / unfold"),
+    (Screen::LinearBoard, "a", "accept: ◇ card / request"),
+    (Screen::LinearBoard, "x", "dismiss: ◇ card / request"),
     (Screen::LinearBoard, "n / N", "next / prev marked card"),
+    (Screen::LinearBoard, "z", "compact / roomy cards"),
+    (Screen::LinearBoard, "o", "unpin the pinned issue"),
+    (Screen::LinearBoard, "p", "pinned: focus; Esc/p back"),
+    (
+        Screen::LinearBoard,
+        "↑/↓ PgUp/Dn",
+        "pinned: rows, then scroll",
+    ),
+    (Screen::LinearBoard, "Enter ⌫ ←", "pinned: open row / back"),
     (Screen::LinearBoard, "r / R", "refresh; R skips cache"),
-    (Screen::LinearBoard, "?", "this help (any screen)"),
+    (Screen::LinearBoard, "?", "bottom bar; help: keys"),
+    (Screen::LinearBoard, "←/→ h/l Tab", "bar: move along it"),
+    (Screen::LinearBoard, "Enter", "bar: run the item"),
+    (Screen::LinearBoard, "↑ / Esc", "bar: board / deselect"),
     (Screen::LinearBoard, "↑/↓ k/j", "scroll this help"),
-    (Screen::LinearBoard, "q / Esc", "quit"),
+    (Screen::LinearBoard, "Esc", "clear the selection"),
+    (Screen::LinearBoard, "Ctrl+Q", "quit (q does nothing)"),
     (Screen::LinearBoard, "s", "focus the spaces strip"),
     (Screen::LinearBoard, "t", "strip: spaces / tabs"),
     (Screen::LinearBoard, "↑/↓ k/j", "strip: select a space"),
@@ -129,13 +147,23 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     ),
     (Screen::LinearBoard, "click view", "choose a view to bind"),
     (Screen::LinearBoard, "wheel", "focus card"),
-    (Screen::LinearDetail, "↑/↓ k/j", "select pane"),
-    (Screen::LinearDetail, "o", "focus selected pane"),
+    (Screen::LinearBoard, "Shift+wheel", "page hidden columns"),
+    (Screen::LinearDetail, "↑/↓ k/j", "rows, then scroll"),
+    (Screen::LinearDetail, "PgUp/PgDn", "scroll a page"),
+    (Screen::LinearDetail, "Enter", "open issue / pane / link"),
+    (Screen::LinearDetail, "e", "expand / window (wide)"),
+    (Screen::LinearDetail, "o", "pin beside the board"),
     (Screen::LinearDetail, "u", "open issue in Linear"),
     (Screen::LinearDetail, "y", "copy worktree path"),
     (Screen::LinearDetail, "b", "bind selected worktree"),
     (Screen::LinearDetail, "r / R", "refresh; R skips cache"),
-    (Screen::LinearDetail, "q / Esc", "back to board"),
+    (Screen::LinearDetail, "Esc ⌫ ←", "back an issue, then close"),
+    (Screen::LinearDetail, "?", "bottom bar; ↑/Esc back"),
+    (
+        Screen::LinearDetail,
+        "Esc (split)",
+        "space board till refocus",
+    ),
     (Screen::LinearNotBound, "s", "focus the spaces strip"),
     (Screen::LinearNotBound, "↑/↓ Enter", "strip: pick a project"),
     (
@@ -146,12 +174,12 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
     (Screen::LinearNotBound, "t", "strip: spaces / tabs"),
     (Screen::LinearNotBound, "r / R", "refresh after a bind"),
     (Screen::LinearNotBound, "Esc", "strip: unfocus, else quit"),
-    (Screen::LinearNotBound, "q", "quit"),
+    (Screen::LinearNotBound, "Ctrl+Q", "quit"),
     (Screen::LinearError, "r / R", "retry; R skips cache"),
     (Screen::LinearError, "Esc", "dismiss, keep last good"),
-    (Screen::LinearError, "q", "quit"),
+    (Screen::LinearError, "Ctrl+Q", "quit"),
     (Screen::LinearStaleDaemon, "r / R", "retry the snapshot"),
-    (Screen::LinearStaleDaemon, "q / Esc", "quit"),
+    (Screen::LinearStaleDaemon, "Ctrl+Q/Esc", "quit"),
     (Screen::LinearPicker, "--", "-- linear picker --"),
     (
         Screen::LinearPicker,
@@ -169,11 +197,11 @@ const EXPECTED: &[(Screen, &str, &str)] = &[
 ];
 
 #[test]
-fn contract_freezes_the_exact_72_row_interaction_table() {
+fn contract_freezes_the_exact_interaction_table() {
     assert_eq!(
         HELP_KEYS.len(),
-        139,
-        "the interaction contract must stay at exactly 139 bindings (87 upstream + 47 Linear mode + 5 session pane)"
+        159,
+        "the interaction contract must stay at exactly 159 bindings (87 upstream + 67 Linear mode + 5 session pane)"
     );
     assert_eq!(EXPECTED.len(), HELP_KEYS.len());
     for (idx, (expected, actual)) in EXPECTED.iter().zip(HELP_KEYS.iter()).enumerate() {

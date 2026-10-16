@@ -28,7 +28,7 @@ resume = false             # can this harness resume a recorded conversation? de
 ```
 
 `[linear] show_request_ttl_secs` applies to every show-request an agent makes (`board mcp`'s
-`ask_to_show`). When it runs out, the request leaves the board's pinned line and its outcome
+`ask_to_show`). When it runs out, the request leaves the board's bottom bar and its outcome
 becomes `expired`. An agent cannot set its own expiry. Values below 1 count as 1.
 
 `[daemon] work_plugin_root` is retired. Linear mode no longer runs the work plugin's scripts, so
@@ -173,4 +173,4 @@ override values also prevent daemon startup.
 | `OPENCODE_BIN` | OpenCode binary used for live `opencode models --verbose` model discovery; default `opencode` on `PATH`. An unset/invalid binary keeps the static fallback catalog. |
 | `AGY_BIN` | Antigravity binary used for the live `agy --output-format json models` model catalog; default `agy` on `PATH`. An unset/invalid binary means the catalog is unavailable: model selection becomes free-form (stored models keep running) and the picker is empty. |
 | `BOARD_TIMEOUT_UNIT_SECS` / `BOARD_LOCAL_POLL_MS` / `BOARD_TICK_MS` | Test-tuning knobs. |
-| `XDG_CONFIG_HOME` | Linear mode: where the TUI looks for the herdr config whose keys the `?` sheet lists, `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`. The TUI reads that file once at start and never writes it; a missing, unreadable, unparseable or over-64 KiB file leaves the section out. |
+| `XDG_CONFIG_HOME` | Linear mode: where the TUI looks for the herdr config whose keys the `?` sheet lists, `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`. The TUI reads that file once at start and never writes it; a missing, unreadable, unparseable or over-64 KiB file leaves the section out. The same read takes `[theme] name` and `[theme.custom]` for the board's colours, falling back to gruvbox. |

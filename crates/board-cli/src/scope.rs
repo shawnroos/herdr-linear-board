@@ -4,7 +4,7 @@ use board_core::protocol::BoardSnapshot;
 use board_core::scope::{resolve_scope_path, select_scope_candidate, space_identity};
 
 /// Which board `board tui` opens. Decided from the herdr space id alone,
-/// before any store row exists (KTD2, KTD3): a directory never selects
+/// before any store row exists: a directory never selects
 /// Linear mode, and once a space id was read there is no fall-through.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TuiMode {

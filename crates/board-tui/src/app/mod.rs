@@ -39,7 +39,10 @@ mod effect;
 mod forms;
 mod help;
 mod linear;
+mod linear_bar;
 mod linear_cursor;
+mod linear_issue;
+mod linear_level;
 mod linear_picker;
 mod mouse;
 mod move_column;
@@ -52,11 +55,15 @@ mod switcher;
 
 pub use effect::Effect;
 pub use linear::{
-    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays,
-    LinearArrival, LinearFailure, LinearState, LinearWrite, LocalStateSignals, PaneRow, SpaceList,
-    StripView, WriteFailure,
+    mark_glyph, sanitise, sanitise_list, sanitise_snapshot, CardOverlay, CardOverlays, Density,
+    DetailError, DetailStep, IssueMode, LinearArrival, LinearFailure, LinearState, LinearWrite,
+    LocalStateSignals, PaneRow, PinnedIssue, PrRead, SpaceList, StripView, WriteFailure,
 };
-pub use linear_cursor::{column_cards, lane_sections, CardCursor, LaneSection};
+pub use linear_bar::{item_width, BarItem, BarLayout, BAR_GAP, BAR_HINT, CONTROLS};
+pub use linear_cursor::{
+    column_cards, lane_sections, CardCursor, Focus, LaneRow, LaneSection, Page, Side,
+};
+pub use linear_level::LevelState;
 pub use linear_picker::{open_linear_picker, LinearPick};
 pub use nav::clamp_selection;
 pub use session::{session_lane, SessionLane, SessionState, SessionView};
@@ -186,6 +193,9 @@ pub enum Msg {
     LinearArrived(Box<LinearArrival>),
     /// Linear mode: the `local_state_changed` events of one event-loop tick.
     LocalStateChanged(LocalStateSignals),
+    /// Linear mode: the workspaces of one tick's `pane_layout_changed`
+    /// events; `None` for an event that named none.
+    PaneLayoutChanged(std::collections::BTreeSet<Option<String>>),
 }
 
 /// The whole TUI state.
@@ -403,6 +413,14 @@ impl App {
         self.col_scroll.clear();
     }
 
+    /// Re-fits the Linear board's page to `last_area`, as a resize needs.
+    pub fn refit_linear_page(&mut self) {
+        let width = self.last_area.width;
+        if let Some(state) = self.linear.as_mut() {
+            state.refit(width);
+        }
+    }
+
     // -- board queries -------------------------------------------------------
 
     pub fn layout_mode(&self) -> crate::view::LayoutMode {
@@ -538,7 +556,10 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Refresh => vec![Effect::Refetch],
         Msg::Key(k) => on_key(app, k),
         Msg::Mouse(m) => mouse::on_mouse(app, m),
-        Msg::LinearRefresh | Msg::LinearArrived(_) | Msg::LocalStateChanged(_) => vec![],
+        Msg::LinearRefresh
+        | Msg::LinearArrived(_)
+        | Msg::LocalStateChanged(_)
+        | Msg::PaneLayoutChanged(_) => vec![],
     }
 }
 

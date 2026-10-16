@@ -347,7 +347,10 @@ fn join_error_response(
 
 fn spawn_event_forwarder(d: &Arc<Daemon>, outbox: Arc<Outbox>) -> tokio::task::JoinHandle<()> {
     let mut ev_rx = d.events_tx.subscribe();
+    let subscriber = d.subscriber();
     tokio::spawn(async move {
+        // Moved in so an aborted forwarder still drops it.
+        let _subscriber = subscriber;
         loop {
             let event = match ev_rx.recv().await {
                 Ok(ev) => ev,

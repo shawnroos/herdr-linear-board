@@ -220,6 +220,30 @@ fn subscribe_ack_arrives_only_after_the_event_receiver_is_registered() {
     );
 }
 
+#[test]
+fn a_subscribed_connection_counts_as_a_subscriber_until_it_closes() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let d = test_daemon();
+    let (_dir, socket) = serve_on_tempdir(&rt, d.clone());
+    let mut client = Client::connect(&socket);
+    assert!(!d.subscribed());
+
+    client.send("sub", "events.subscribe");
+    client.next_line("subscribe ack");
+    assert!(d.subscribed());
+
+    drop(client);
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while d.subscribed() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!d.subscribed(), "a closed subscriber still counts");
+}
+
 /// Pipelined requests answer in request order even though every handler now
 /// runs on the blocking pool. The store lock is held across the whole batch, so
 /// the store-touching requests cannot overtake the store-free ones unless the
