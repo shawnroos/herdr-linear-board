@@ -489,7 +489,14 @@ impl LinearState {
                     lanes
                         .get(cursor.at.2)
                         .or(lanes.last())
-                        .map_or(Focus::Filter, |(lane, _)| Focus::LaneLine(lane.to_string()))
+                        .map(|(lane, _)| Focus::LaneLine(lane.to_string()))
+                        .unwrap_or_else(|| {
+                            if self.filtering() {
+                                Focus::Filter
+                            } else {
+                                Focus::Card(0)
+                            }
+                        })
                 }
             }
             Focus::Pager(side, from) => {

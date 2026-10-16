@@ -379,3 +379,23 @@ fn a_board_started_beside_an_agent_never_renames_its_pane() {
     assert!(sent.iter().any(|m| m == "linear.snapshot"), "{sent:?}");
     assert!(!sent.iter().any(|m| m == "pane.set_title"), "{sent:?}");
 }
+
+#[test]
+fn a_refresh_at_the_split_level_reads_no_space_list_and_leaving_the_split_reads_it_again() {
+    let mut l = levels(beside_two());
+    assert_eq!(l.split_issue().as_deref(), Some("WEB-3302"));
+    l.d.app.toast = None;
+    l.log.lock().unwrap().clear();
+    l.d.handle(Msg::LinearRefresh);
+    assert_eq!(toast(&l.d), "", "the refresh drew a refusal");
+    let sent = methods(&l.log);
+    assert!(sent.iter().any(|m| m == "linear.snapshot"), "{sent:?}");
+    assert!(!sent.iter().any(|m| m == "linear.list"), "{sent:?}");
+
+    press(&mut l.d, KeyCode::Esc);
+    assert_eq!(l.split_issue(), None);
+    l.log.lock().unwrap().clear();
+    press(&mut l.d, KeyCode::Char('r'));
+    let sent = methods(&l.log);
+    assert!(sent.iter().any(|m| m == "linear.list"), "{sent:?}");
+}

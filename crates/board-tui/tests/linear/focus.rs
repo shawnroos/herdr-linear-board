@@ -352,3 +352,18 @@ fn folds_are_kept_per_tab() {
     assert!(d.app.linear.as_ref().unwrap().folded("ln-gamma"));
     assert_eq!(focus(&d), line("ln-gamma"));
 }
+
+#[test]
+fn a_lane_line_whose_lanes_all_vanish_with_no_filter_selects_a_card_not_the_filter() {
+    let mut d = tabs_driver();
+    press(&mut d, KeyCode::Char('k'));
+    assert_eq!(focus(&d), line("ln-alpha"));
+    let mut snapshot = tabs_lanes();
+    edit_first_tab(&mut snapshot, |groups| {
+        for group in groups.iter_mut() {
+            group.lanes.clear();
+        }
+    });
+    arrive(&mut d, snapshot);
+    assert!(matches!(focus(&d), Focus::Card(_)), "{:?}", focus(&d));
+}

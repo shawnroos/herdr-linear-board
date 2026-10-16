@@ -1133,8 +1133,10 @@ fn request_snapshot(app: &mut App, force: bool) -> Vec<Effect> {
     };
     state.in_flight = true;
     let mut effects = vec![Effect::LinearSnapshot { force }];
-    // The strip's space list is read with every snapshot.
-    if state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
+    // The strip's space list is read with every snapshot. The split level
+    // has no strip and its gate refuses the read, which would leave the key
+    // in flight for good.
+    if !state.at_split() && state.lists_in_flight.insert((LinearListKind::Spaces, None)) {
         effects.push(Effect::LinearList {
             kind: LinearListKind::Spaces,
             id: None,
@@ -1224,7 +1226,10 @@ fn local_state_arrived(app: &mut App, result: Result<LocalState, LinearFailure>)
             last.space_bindings != local.space_bindings
                 || last.worktree_bindings != local.worktree_bindings
         });
+        // Taken before the swap: a mark chip filters by the old marks.
+        let cursor = state.cursor();
         state.local = Some(local);
+        state.refind(&cursor);
         state.refind_bar(width);
     }
     let mut effects = vec![];
@@ -1357,7 +1362,9 @@ fn write_arrived(
     };
     match (write, result) {
         (LinearWrite::ClearMarks { ids, .. }, Ok(())) => {
+            let cursor = state.cursor();
             state.forget_marks(&ids);
+            state.refind(&cursor);
             vec![]
         }
         // The marks stay and the next open retries.
@@ -1368,12 +1375,16 @@ fn write_arrived(
             vec![]
         }
         (LinearWrite::AcceptShow { id, issue }, Ok(())) => {
+            let cursor = state.cursor();
             state.forget_request(id);
+            state.refind(&cursor);
             state.refind_bar(width);
             show_target(app, &issue)
         }
         (LinearWrite::DismissShow { id }, Ok(())) => {
+            let cursor = state.cursor();
             state.forget_request(id);
+            state.refind(&cursor);
             state.refind_bar(width);
             vec![]
         }
