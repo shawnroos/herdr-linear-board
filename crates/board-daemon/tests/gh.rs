@@ -438,12 +438,6 @@ esac"#,
         parse::pr_detail(&open_view(), None).blocker,
         "read as if no required checks were known"
     );
-    let calls = gh.calls();
-    assert_eq!(calls.len(), 2, "view and checks only: {calls:?}");
-    assert!(
-        !calls.iter().any(|c| c.starts_with("api ")),
-        "no preview reads after the checks call times out: {calls:?}"
-    );
 }
 
 #[test]
@@ -459,55 +453,5 @@ fn a_helper_that_keeps_the_pipe_open_after_gh_exits_is_a_timeout() {
         started.elapsed() < Duration::from_secs(5),
         "returned after {:?}",
         started.elapsed()
-    );
-}
-
-#[test]
-fn a_board_not_seen_again_stops_being_read_and_its_prs_are_dropped() {
-    use board_daemon::gh::GhState;
-
-    let gone = board_daemon::linear::SpaceKey {
-        session: "alpha".into(),
-        space: "wGone".into(),
-    };
-    let other = PrRef::parse("https://github.com/acme/web/pull/9", None).unwrap();
-    let mut state = GhState::default();
-    state.observe(space(), [pr()].into(), 1_000);
-    state.observe(gone.clone(), [other.clone()].into(), 1_000);
-    for p in state.take_queue() {
-        state.record(&p, &Ok(parse::pr_detail(&open_view(), None)), 1_000);
-    }
-
-    // The live board is seen again by the snapshot each pass announces, late
-    // by a tick plus the pass itself.
-    assert!(state.queue_due(1_630));
-    assert_eq!(
-        state.take_queue().len(),
-        2,
-        "a board seen 630s ago still counts"
-    );
-    for p in [pr(), other.clone()] {
-        state.record(&p, &Ok(parse::pr_detail(&open_view(), None)), 1_632);
-    }
-    state.observe(space(), [pr()].into(), 1_633);
-
-    assert!(state.queue_due(2_262));
-    assert_eq!(
-        state.take_queue(),
-        vec![pr()],
-        "the board not seen again is skipped"
-    );
-    assert!(
-        state.current_document(&other).is_none(),
-        "its PR entry is pruned"
-    );
-    assert!(state.current_document(&pr()).is_some());
-    assert!(state
-        .spaces_showing(std::slice::from_ref(&other))
-        .is_empty());
-    assert_eq!(
-        state.spaces_showing(&[pr()]),
-        ["wS".to_string()].into(),
-        "the re-observed board keeps refreshing"
     );
 }

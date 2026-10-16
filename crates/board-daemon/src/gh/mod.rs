@@ -19,14 +19,9 @@ use crate::linear::{Debouncer, SpaceKey};
 use crate::sync::locked;
 
 /// Chosen, not measured: a PR with pending checks is read again after
-/// two minutes, any other after ten, and only while a board showing it
-/// was seen within [`BOARD_GONE_AFTER_SECS`].
+/// two minutes, any other after ten, and only while a board is subscribed.
 pub const PENDING_REFRESH_SECS: i64 = 120;
 pub const STALE_AFTER_SECS: i64 = 600;
-// A live board is seen again only by the snapshot a pass announces, which
-// lands a tick plus the pass after STALE_AFTER_SECS; a window of exactly
-// STALE_AFTER_SECS would drop live boards.
-pub const BOARD_GONE_AFTER_SECS: i64 = 2 * STALE_AFTER_SECS;
 pub const PASS_CONCURRENCY: usize = 4;
 const PASS_DEBOUNCE: Duration = Duration::from_millis(500);
 
@@ -133,16 +128,10 @@ impl Entry {
     }
 }
 
-#[derive(Debug)]
-struct Board {
-    prs: BTreeSet<PrRef>,
-    observed_at: i64,
-}
-
 #[derive(Debug, Default)]
 pub struct GhState {
     entries: HashMap<PrRef, Entry>,
-    boards: HashMap<SpaceKey, Board>,
+    boards: HashMap<SpaceKey, BTreeSet<PrRef>>,
     queue: BTreeSet<PrRef>,
     unavailable: Option<(String, i64)>,
     ever_read: bool,
@@ -150,24 +139,17 @@ pub struct GhState {
 
 impl GhState {
     pub fn observe(&mut self, space: SpaceKey, prs: BTreeSet<PrRef>, now: i64) -> bool {
-        let board = Board {
-            prs,
-            observed_at: now,
-        };
         if self.backing_off(now) {
-            self.boards.insert(space, board);
+            self.boards.insert(space, prs);
             return false;
         }
         let before = self.boards.get(&space);
-        let new: Vec<PrRef> = board
-            .prs
+        let new: Vec<PrRef> = prs
             .iter()
-            .filter(|pr| {
-                before.is_none_or(|b| !b.prs.contains(*pr)) || !self.entries.contains_key(*pr)
-            })
+            .filter(|pr| before.is_none_or(|b| !b.contains(*pr)) || !self.entries.contains_key(*pr))
             .cloned()
             .collect();
-        self.boards.insert(space, board);
+        self.boards.insert(space, prs);
         let queued = !new.is_empty();
         self.queue.extend(new);
         queued
@@ -182,11 +164,10 @@ impl GhState {
     }
 
     pub fn queue_due(&mut self, now: i64) -> bool {
-        self.prune(now);
         if self.backing_off(now) {
             return false;
         }
-        let on_board: BTreeSet<&PrRef> = self.boards.values().flat_map(|b| &b.prs).collect();
+        let on_board: BTreeSet<&PrRef> = self.boards.values().flatten().collect();
         let due: Vec<PrRef> = on_board
             .into_iter()
             .filter(|pr| match self.entries.get(*pr) {
@@ -201,23 +182,6 @@ impl GhState {
         let queued = !due.is_empty();
         self.queue.extend(due);
         queued
-    }
-
-    // While gh is unavailable a pass announces nothing, so an open board is
-    // never seen again; pruning then would drop it for good.
-    fn prune(&mut self, now: i64) {
-        if self.unavailable.is_some() {
-            return;
-        }
-        self.boards
-            .retain(|_, board| now - board.observed_at < BOARD_GONE_AFTER_SECS);
-        let on_board: BTreeSet<PrRef> = self
-            .boards
-            .values()
-            .flat_map(|b| b.prs.iter().cloned())
-            .collect();
-        self.entries.retain(|pr, _| on_board.contains(pr));
-        self.queue.retain(|pr| on_board.contains(pr));
     }
 
     pub fn take_queue(&mut self) -> Vec<PrRef> {
@@ -299,7 +263,7 @@ impl GhState {
     pub fn spaces_showing(&self, prs: &[PrRef]) -> BTreeSet<String> {
         self.boards
             .iter()
-            .filter(|(_, board)| prs.iter().any(|pr| board.prs.contains(pr)))
+            .filter(|(_, shown)| prs.iter().any(|pr| shown.contains(pr)))
             .map(|(key, _)| key.space.clone())
             .collect()
     }
