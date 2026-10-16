@@ -73,6 +73,14 @@ pub(crate) enum Cmd {
     Skill,
     /// Serve the board's agent tools as an MCP server over stdio.
     Mcp,
+    /// Show the herdr pane this session runs in: resolved, unconfirmed (with
+    /// candidates to confirm) or not_in_herdr. Read-only.
+    Caller {
+        /// Confirm this `<session>/<pane id>` as the session's pane; boardd
+        /// remembers it for $CLAUDE_CODE_SESSION_ID.
+        #[arg(long, value_name = "SESSION/PANE")]
+        pane: Option<String>,
+    },
     /// Board operations.
     Board {
         #[command(subcommand)]

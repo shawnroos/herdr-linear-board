@@ -40,12 +40,15 @@ every site calls. It is not worth a shared crate for a shell script and a Rust
 client, so the next best thing is what this file is for: the sites know about
 each other now.
 
-The widening to 0.9.0–0.9.3 changed all eleven together. The runtime client reads
-`SUPPORTED_HERDR_VERSIONS`; `e2e/lib.sh` and the four smokes use the shell pattern
-`"0.9."[0-3]` (plus `-preview.*`), and the smokes' `ping` checks use the matching
-`jq` regex. `scripts/tests/test_e2e_ci.py` asserts each site carries the pattern and
-also runs the patterns against accepted and refused versions, because a string match
-proves the pattern is present, not that it accepts the right releases.
+All eleven now apply one rule: any `0.9.<patch>` release, or a `-preview.*` build
+of one, at protocol 22 (widened from exactly 0.9.0 after the 0.9.3 schema diff in
+`docs/herdr.md`). The runtime copy is `is_supported_release` in
+`crates/board-herdr/src/client.rs`, with unit tests beside it. The shell copies are
+`E2E_HERDR_SERIES_RE` in `e2e/lib.sh` and `HERDR_SERIES_RE` in each real-provider
+smoke. `scripts/tests/test_e2e_ci.py` evaluates the `lib.sh` pattern against an
+accept and a refuse list and checks every smoke carries the same pattern, rather
+than pinning an exact string — the pinned string was how the gap survived here in
+the first place.
 
 ## The general shape
 

@@ -4,13 +4,13 @@ The install steps the [root README](../README.md) summarizes, plus everything op
 them: a custom CLI directory, a Herdr keybinding, the harness integration, the agent skill, Linear
 mode's agent tools and hook, and named Herdr sessions.
 
-Requires **Herdr 0.9.0–0.9.3 (socket protocol 22)**, Git, and a Rust toolchain with `cargo`; Linux
-and macOS are supported. The board-side compatibility contract remains board protocol v1 and
+Requires **Herdr 0.9.x (socket protocol 22)**, Git, and a Rust toolchain with `cargo`; Linux
+and macOS are supported. Any 0.9 patch release, or a `-preview.*` build of one, is accepted. The board-side compatibility contract remains board protocol v1 and
 SQLite schema v17. See the README for the one-line install command itself.
 
 | Component | Required support level | How to verify |
 |---|---|---|
-| Herdr binary | 0.9.0–0.9.3 | `herdr --version` → `herdr 0.9.0` … `herdr 0.9.3` |
+| Herdr binary | 0.9.x | `herdr --version` → `herdr 0.9.<patch>` (for example `herdr 0.9.3`) |
  | Herdr socket | protocol 22 | `herdr api schema --json` → top-level `protocol: 22`; a running session's `herdr api snapshot` also reports `version` and `protocol` |
 | Board socket | v1 | `docs/protocol.md` and `board-core::protocol` |
 | SQLite | schema v17 | `schema.sql` and `board-core::db` migrations |
@@ -18,7 +18,7 @@ SQLite schema v17. See the README for the one-line install command itself.
 | Claude integration | v7 for precise Claude lifecycle/session signals | `herdr integration status` |
 | Antigravity CLI integration | v1 for the `agy` conversation-id capture (resume/retry/rescue) | `herdr integration status` |
 
-The board rejects a different Herdr version or socket protocol before workspace discovery or pane
+The board rejects a Herdr version outside the 0.9 series, or a different socket protocol, before workspace discovery or pane
 placement; it does not silently fall back to an older wire contract. The integration versions are
 user-managed prerequisites, not plugin files installed by herdr-board.
 
@@ -27,7 +27,7 @@ user-managed prerequisites, not plugin files installed by herdr-board.
 These are read-only checks against the binary and session you are about to use:
 
 ```bash
-case "$(herdr --version)" in "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;; *) false ;; esac
+herdr --version | grep -Eq '^herdr 0\.9\.(0|[1-9][0-9]*)(-preview\..*)?$'
 herdr api schema --json | python3 -c \
   'import json, sys; s=json.load(sys.stdin); assert s["protocol"] == 22, s'
 herdr api snapshot
@@ -50,7 +50,7 @@ binary, registers the plugin, and copies the CLI to `~/.local/bin/board` as a re
 After reviewing the manifest and scripts, a noninteractive install is available:
 
 ```bash
-herdr plugin install nelsonPires5/herdr-board --ref v0.17.0 --yes
+herdr plugin install shawnroos/herdr-linear-board --ref v0.18.1 --yes
 ```
 
 Set `HERDR_BOARD_CLI_INSTALL_DIR` to an absolute user bin directory before installing to override

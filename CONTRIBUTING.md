@@ -6,13 +6,13 @@ welcome. For the full cross-agent contributor guide (crate ownership, herdr gotc
 
 ## Development setup
 
-Requirements: a **Rust toolchain** (stable, edition 2021) and **Herdr 0.9.0–0.9.3 with
+Requirements: a **Rust toolchain** (stable, edition 2021) and **Herdr 0.9.x with
 socket protocol 22** on `PATH` for the end-to-end path (unit and integration tests need neither
 herdr nor an agent harness).
 
 ```bash
-git clone https://github.com/nelsonPires5/herdr-board
-cd herdr-board
+git clone https://github.com/shawnroos/herdr-linear-board
+cd herdr-linear-board
 cargo build            # or ./scripts/build.sh for the release binary herdr's [[build]] step runs
 cargo run -p board-cli -- tui   # run the board locally
 ```

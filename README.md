@@ -1,7 +1,7 @@
 # herdr-board
 
 ![Rust](https://img.shields.io/badge/rust-edition%202021-orange.svg)
-![herdr 0.9.0–0.9.3](https://img.shields.io/badge/herdr-0.9.0--0.9.3-8a2be2)
+![herdr 0.9.x](https://img.shields.io/badge/herdr-0.9.x-8a2be2)
 ![board protocol v1 · schema v17](https://img.shields.io/badge/board-protocol%20v1%20%C2%B7%20schema%20v17-blue.svg)
 ![platforms: linux, macOS](https://img.shields.io/badge/platforms-linux%2C%20macOS-informational)
 
@@ -98,7 +98,8 @@ with the key from your macOS Keychain, and keeps bindings, marks and notes in it
 It never writes Linear: agents create and update tickets through Linear's own MCP server, and the
 board links that work to your sessions. Agents use `board mcp` to bind their worktree, mark cards,
 notify you, ask you to look at an issue, and open a board beside their own pane without taking
-focus; `a` / `x` answer them. Coming from the work plugin? Run `board import work-store` once to
+focus; `a` / `x` answer them. When Claude Code starts a session without herdr's variables, the
+agent may ask you once which pane it runs in; `board caller --json` shows what it found. Coming from the work plugin? Run `board import work-store` once to
 copy its bindings and grouping into the board. `board linear snapshot <workspace-id> --json`
 prints the board's read from the command line, and `board linear status-line` puts an agent's
 bound issue in Claude Code's status line. Setup: [`docs/install.md`](docs/install.md) → Linear mode
@@ -107,7 +108,7 @@ and agent tools. Design: [`docs/design.md`](docs/design.md) section 13.
 ## Install
 
 ```bash
-herdr plugin install nelsonPires5/herdr-board --ref v0.17.0
+herdr plugin install shawnroos/herdr-linear-board --ref v0.18.1
 ```
 
 Open the board:
@@ -150,7 +151,7 @@ prefix is `ctrl+a`, it is `Ctrl+A Shift+K`). Do not reuse `prefix+k` — it is H
 <details>
 <summary><strong>Requirements and details</strong></summary>
 
-- Requires **Herdr 0.9.0–0.9.3 (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
+- Requires **Herdr 0.9.x (socket protocol 22)**, Git, and a Rust toolchain with `cargo`;
   Linux and macOS are supported. The daemon rejects any other Herdr version or protocol before
   workspace discovery and pane launch.
 - Board protocol **v1**, SQLite schema **v17** (`schema.sql`; upgrades via `board-core::db`).
@@ -278,6 +279,7 @@ selected/current board.
 | `board linear` | `snapshot [WORKSPACE_ID]`, `issue <ID>`, `space list`, `project list`, `view list <PROJECT_ID>`, `session [WORKSPACE_ID]`, `status-line`, `report` |
 | `board import` | `work-store [--dry-run]` |
 | `board mcp` | the stdio MCP server for agents (see the skill) |
+| `board caller [--pane SESSION/PANE]` | show the herdr pane this session runs in: `resolved`, `unconfirmed` (with candidates to confirm) or `not_in_herdr` |
 | `board tui` · `board daemon` · `board version` · `board skill` | see below |
 
 Legacy top-level forms stay supported and re-dispatch into the nested handlers: `board comment`,
@@ -317,7 +319,7 @@ The exit status carries the same number, so scripts branch on `$?` instead of pa
 
 - [`docs/README.md`](docs/README.md) — the documentation index (design, protocol, herdr facts,
   testing, releasing), the single source of the
-  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–47);
+  [test gates](docs/README.md#test-gates-single-source), and the `e2e/` catalog (scenarios 01–48);
 - [`docs/configuration.md`](docs/configuration.md) — `config.toml`, `[daemon]` settings,
   config-defined harnesses, and every environment variable;
 - [`docs/operations.md`](docs/operations.md) — update, uninstall, and local-development

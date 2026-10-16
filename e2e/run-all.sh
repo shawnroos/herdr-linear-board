@@ -86,6 +86,7 @@ SCENARIOS=(
   39-managed-slow-provider.sh 40-linear-mode.sh 41-linear-bind-space.sh
   42-linear-issue.sh 43-open-board-pane.sh 44-linear-report-link.sh
   45-session-side-pane.sh 46-board-levels.sh 47-tab-split-names.sh
+  48-caller-without-herdr-env.sh
 )
 # Scenarios that start the person's real agent CLI; --provider-free leaves them out.
 PROVIDER_SCENARIOS=()

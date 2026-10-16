@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::spawner::{RuntimeHandle, Spawner};
 use board_core::config::Config;
-use board_core::protocol::{BoardChangedReason, Event, RunOutcome};
+use board_core::protocol::{BoardChangedReason, CallerLocation, Event, RunOutcome};
 use board_herdr::{HerdrClient, HerdrError, NotificationSound};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch, Mutex as AsyncMutex};
@@ -193,6 +193,9 @@ pub struct Daemon {
     pub naming: crate::naming::Naming,
     /// Connections that sent `events.subscribe` and are still open.
     subscribers: Arc<std::sync::atomic::AtomicUsize>,
+    /// Claude session id → the pane that session confirmed through
+    /// `caller.resolve`. In memory only: a restart makes the agent confirm again.
+    pub caller_locations: Mutex<HashMap<String, CallerLocation>>,
     shutdown_tx: watch::Sender<bool>,
     stopping: AtomicBool,
     #[cfg(test)]
@@ -233,6 +236,7 @@ impl Daemon {
             gh: crate::gh::GhService::default(),
             naming: crate::naming::Naming::default(),
             subscribers: Arc::default(),
+            caller_locations: Mutex::new(HashMap::new()),
             shutdown_tx,
             stopping: AtomicBool::new(false),
             #[cfg(test)]

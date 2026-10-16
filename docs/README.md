@@ -9,11 +9,11 @@ The reference detail behind the [root README](../README.md). Start here to find 
 | Board socket | v1; `board-core::protocol` (additive `active_runs`, error `kind`/`details`) | [protocol.md](protocol.md) |
 | SQLite | schema v17; `schema.sql` + `board-core::db` migrations | [design.md](design.md) |
 | CLI | canonical nested `board board/card/comment/run/column` taxonomy; `board-cli` wiring | [README CLI reference](../README.md#cli-reference), [skill](../skill/SKILL.md) |
-| Herdr client | 0.9.0–0.9.3 / socket protocol 22; `board-herdr` typed calls | [herdr.md](herdr.md) |
+| Herdr client | 0.9.x / socket protocol 22 (schema pinned to 0.9.0); `board-herdr` typed calls | [herdr.md](herdr.md) |
 | Herdr integrations | Pi v8; Claude v7; Antigravity CLI v1 for the agy conversation capture (installed and updated by the user) | [herdr.md](herdr.md), [install.md](install.md) |
 | Runtime launch | daemon-owned `Spawner`, placement, process/pane handles | [implementation.md](implementation.md) |
 | Config | typed `RootConfig`, one parse, environment overrides after parse | [configuration.md](configuration.md), [design.md](design.md) |
-| Live catalog | scenarios 01–47; provider-free fake/safe harness boundary | [e2e/README.md](../e2e/README.md) |
+| Live catalog | scenarios 01–48; provider-free fake/safe harness boundary | [e2e/README.md](../e2e/README.md) |
 | Branches | `dev` integration; `main` production (PR-only, merge-commit, signed); action-owned promotion; tags only from green `main` | [releasing.md](releasing.md) |
 
 Keep these links as navigation, not duplicate wire definitions: serde types and migrations are the
@@ -31,14 +31,15 @@ isolation is an agent prompt concern, not a board space primitive.
 | [research.md](research.md) | The verified herdr capability map (commands/events/IDs), prior-art survey of agent-kanban tools, and verified harness invocation flags (Pi/Claude/codex/gemini/opencode/antigravity). | are scoping a feature that touches herdr or a new harness, and want the background that grounded the design. |
 | [releasing.md](releasing.md) | The release contract: the `dev`/`main` branch model (feature → dev, action-owned promotion to main, hotfix, back-merge), Prepare Release, version bumps, CI-gated tagging/publishing, artifacts, reruns, and tag policy. | are cutting a release or need the repo's release policy. |
 | [board-owns-the-store.md](board-owns-the-store.md) | An accepted, built decision: boardd is the only owner of Linear-mode local state (imported once from the work plugin's store), reads Linear itself read-only, renders the grouping as tabs, columns and swimlanes, and offers agents a `board mcp` server, while agents keep writing Linear through Linear's own MCP server. The plugin test inventory that priced it is in [board-owns-the-store-tests.md](board-owns-the-store-tests.md). | want to know why Linear mode works the way it does, or why §9.7 was amended. |
-| [herdr.md](herdr.md) | How to learn and verify **Herdr** facts (there is no man page): the live sources of truth (`herdr api schema --json`, `herdr <cmd> --help`, `herdr api snapshot`), the Herdr 0.9.0/protocol-22 delta, per-harness integrations, and the exact compatibility gate. | hit a Herdr command/shape that misbehaves, or need to confirm what the installed Herdr actually does. |
+| [herdr.md](herdr.md) | How to learn and verify **Herdr** facts (there is no man page): the live sources of truth (`herdr api schema --json`, `herdr <cmd> --help`, `herdr api snapshot`), the Herdr 0.9.0/protocol-22 delta and the 0.9.3 schema check, per-harness integrations, and the 0.9.x compatibility gate. | hit a Herdr command/shape that misbehaves, or need to confirm what the installed Herdr actually does. |
+| [upstream/claude-code-spare-env.md](upstream/claude-code-spare-env.md) | The bug report for Claude Code: a session that claims a warm spare loses the terminal's `HERDR_*` variables, with the reproduction and process tree. | need the root cause behind the board's caller-pane lookup, or want to follow it upstream. |
 | [testing.md](testing.md) | The testing pyramid in this repo (unit/pure → daemon+CLI integration → TUI snapshots → live E2E), how the provider-free fake managed-harness suite works (fake Pi/Claude/Codex/OpenCode/Antigravity `agy`, including the current pane-first scenarios 16/17, whose filenames are historical), and how to write a scenario. The use case ↔ scenario catalog lives in [`../e2e/README.md`](../e2e/README.md). | are adding a feature and need to test it, or are writing/running the live E2E suite. |
 | [sandbox.md](sandbox.md) | The Docker sandbox (`scripts/sandbox.sh`): running the full gate set and every live E2E scenario in an isolated, network-disabled, non-root container from a read-only worktree mount; shell/CLI/TUI use against a container-local Herdr; the explicit real-provider agent opt-in (pi/codex/antigravity, keyed to pinned CLIs and SHA-verified antigravity tarballs); artifacts, cache reset, architecture behavior, and troubleshooting. | want a fast edit-test loop without touching the host's active Herdr, board daemon, or sessions. |
 
 The [`schema.sql`](../schema.sql) at the repo root is the fresh SQLite schema; migration behavior
 and upgrade tests live in `board-core::db`. Before handoff, check that docs still point to existing
 schema v17
-the scenario catalog lists every `e2e/NN-*.sh` from 01 through 47.
+the scenario catalog lists every `e2e/NN-*.sh` from 01 through 48.
 
 ## Test gates (single source)
 

@@ -1,8 +1,10 @@
-//! The column engine: pure, synchronous, no I/O. Given the current world it
+//! The column engine: pure, synchronous, no I/O (except `canonical_dir`'s
+//! read-only symlink lookup for caller matching). Given the current world it
 //! returns *decisions* (target column, new statuses, system-comment text,
 //! validation verdicts). The daemon executes the resulting effects.
 
 pub mod archive;
+mod caller;
 mod columns;
 pub mod grouping;
 mod lifecycle;
@@ -14,6 +16,7 @@ pub use archive::{
     decide_board_archive, decide_new_work_on_board, decide_new_work_on_project,
     decide_project_archive, ArchivedDestination, BoardArchiveRejection, ProjectArchiveRejection,
 };
+pub use caller::{canonical_dir, match_caller, parse_pane_filter, CallerPane, PaneFilter};
 pub use columns::resolve_column;
 pub use lifecycle::{
     decide_lifecycle, FinalizePlan, LifecycleAction, LifecycleDecision, LifecycleFacts,

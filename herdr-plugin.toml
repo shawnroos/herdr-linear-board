@@ -6,11 +6,11 @@
 # TUI into herdr as an overlay pane plus a keybindable action to summon it.
 #
 # Field reference validated against `herdr plugin` in Herdr 0.9.0. The manifest
-# enforces the install-time version floor; runtime also requires 0.9.0 through 0.9.3
-# and rejects every socket protocol other than 22.
+# enforces the install-time version floor; runtime also requires a 0.9.x
+# release and rejects every socket protocol other than 22.
 id = "herdr-board"
 name = "Herdr Board"
-version = "0.17.0"
+version = "0.18.1"
 description = "Kanban board for AI coding agents: cards are prompts, columns are pipeline stages; moving a card dispatches an agent into a herdr pane."
 min_herdr_version = "0.9.0"
 platforms = ["linux", "macos"]

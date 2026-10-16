@@ -6,7 +6,7 @@
 //! ignored run is safe on machines without the supported Herdr.
 
 use board_herdr::{
-    default_socket_path, HerdrClient, ReadSource, SUPPORTED_HERDR_PROTOCOL, SUPPORTED_HERDR_VERSION,
+    default_socket_path, HerdrClient, ReadSource, SUPPORTED_HERDR_PROTOCOL, SUPPORTED_HERDR_SERIES,
 };
 
 fn client_or_skip() -> Option<HerdrClient> {
@@ -26,7 +26,7 @@ fn client_or_skip() -> Option<HerdrClient> {
         Ok(_) => Some(client),
         Err(e) => {
             eprintln!(
-                "socket is not Herdr {SUPPORTED_HERDR_VERSION} / protocol {SUPPORTED_HERDR_PROTOCOL}: {e}; skipping"
+                "socket is not Herdr {SUPPORTED_HERDR_SERIES}.x / protocol {SUPPORTED_HERDR_PROTOCOL}: {e}; skipping"
             );
             None
         }

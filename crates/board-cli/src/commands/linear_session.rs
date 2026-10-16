@@ -8,16 +8,20 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use board_core::client::{BoardClient, UnixClient};
 use board_core::paths;
 use board_core::protocol::{
-    parse_timestamp, LinearSessionGetParams, LinearSessionGetResult, MarkKind,
+    parse_timestamp, CallerResolveResult, LinearSessionGetParams, LinearSessionGetResult, MarkKind,
 };
 use board_core::text::strip_control_and_format;
 use serde_json::{json, Value};
 
-use super::{canonical_text, env_text};
+use super::canonical_text;
+use crate::caller::{
+    candidate_list, env_text, hook_cwd, resolve, CallerQuery, CLAUDE_SESSION_ENV, HERDR_PANE_ID,
+    HERDR_SOCKET_PATH, HERDR_WORKSPACE_ID,
+};
 use crate::render::{emit, emit_line};
 
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,22 +40,73 @@ const GLYPH_ORDER: [MarkKind; 4] = [
 pub(crate) fn session(workspace_id: Option<String>, json: bool) -> Result<()> {
     let space = workspace_id
         .filter(|id| !id.is_empty())
-        .or_else(|| env_text("HERDR_WORKSPACE_ID"))
-        .ok_or_else(|| anyhow!("no space id given and $HERDR_WORKSPACE_ID is unset"))?;
-    let params = session_params(space, None);
+        .or_else(|| env_text(HERDR_WORKSPACE_ID));
     let path = paths::socket_path();
-    let mut client = UnixClient::connect(&path)
-        .with_context(|| format!("boardd is not running at {}", path.display()))?;
-    client.set_read_timeout(Some(SESSION_TIMEOUT))?;
-    let result = client.linear_session_get(&params)?;
+    let connect = || -> Result<UnixClient> {
+        let mut client = UnixClient::connect(&path)
+            .with_context(|| format!("boardd is not running at {}", path.display()))?;
+        client.set_read_timeout(Some(SESSION_TIMEOUT))?;
+        Ok(client)
+    };
+    let Some(space) = space else {
+        return located_session(connect, json);
+    };
+    let params = session_params(space, None);
+    let result = connect()?.linear_session_get(&params)?;
     emit(&result, json)
 }
 
+/// The SessionStart hook in a session whose env lacks herdr's variables: it
+/// uses the pane this Claude session confirmed earlier and never confirms one
+/// itself. Every other outcome is a notice and exit 0, so the session still
+/// starts with what the board could tell it.
+fn located_session(connect: impl Fn() -> Result<UnixClient>, json: bool) -> Result<()> {
+    let input = claude_input();
+    let field = |pointer: &str| input_text(input.as_ref(), pointer);
+    let query = CallerQuery::new(
+        hook_cwd(field("/cwd").as_deref()),
+        None,
+        field("/session_id").or_else(|| env_text(CLAUDE_SESSION_ENV)),
+    );
+    let resolution = connect().and_then(|mut client| {
+        let resolution = resolve(&query, env_text, |params| client.caller_resolve(params))?;
+        Ok((client, resolution.result))
+    });
+    match resolution {
+        Ok((mut client, CallerResolveResult::Resolved { location })) => {
+            let mut params = session_params(location.workspace_id, input.as_ref());
+            params.herdr_socket = Some(location.socket);
+            params.herdr_pane_id = Some(location.pane_id);
+            emit(&client.linear_session_get(&params)?, json)
+        }
+        Ok((_, CallerResolveResult::Unconfirmed { candidates })) => emit_line(
+            &json!({"state": "unconfirmed", "candidates": candidates}),
+            json,
+            format!(
+                "board: this session's herdr pane is not confirmed. Claude panes in its folder: \
+                 {}. Ask the person which one is this session, then confirm it with `pane` \
+                 (`board caller --pane <PANE>` or the `pane` argument of any board tool).",
+                candidate_list(&candidates)
+            ),
+        ),
+        Ok((_, CallerResolveResult::NotInHerdr)) => no_space(json, None),
+        Err(error) => no_space(json, Some(format!("{error:#}"))),
+    }
+}
+
+fn no_space(json: bool, reason: Option<String>) -> Result<()> {
+    if let Some(reason) = &reason {
+        eprintln!("board linear session: {reason}");
+    }
+    emit_line(
+        &json!({"state": "not_in_herdr", "reason": reason}),
+        json,
+        "board: no herdr space for this session, so there is no board context.",
+    )
+}
+
 pub(crate) fn status_line(json: bool) {
-    let (Some(space), Some(_)) = (
-        env_text("HERDR_WORKSPACE_ID"),
-        env_text("HERDR_SOCKET_PATH"),
-    ) else {
+    let (Some(space), Some(_)) = (env_text(HERDR_WORKSPACE_ID), env_text(HERDR_SOCKET_PATH)) else {
         return;
     };
     let params = session_params(space, claude_input().as_ref());
@@ -71,13 +126,7 @@ pub(crate) fn status_line(json: bool) {
 /// The socket is sent exactly as herdr exported it: the daemon keys its
 /// snapshot cache on that raw string, as the TUI's `origin_socket` does.
 fn session_params(space: String, input: Option<&Value>) -> LinearSessionGetParams {
-    let field = |pointer: &str| {
-        input
-            .and_then(|v| v.pointer(pointer))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    };
+    let field = |pointer: &str| input_text(input, pointer);
     let cwd = field("/workspace/current_dir")
         .or_else(|| field("/cwd"))
         .map(PathBuf::from)
@@ -85,11 +134,19 @@ fn session_params(space: String, input: Option<&Value>) -> LinearSessionGetParam
         .map(canonical_text);
     LinearSessionGetParams {
         space,
-        herdr_socket: env_text("HERDR_SOCKET_PATH"),
-        herdr_pane_id: env_text("HERDR_PANE_ID"),
-        claude_session_id: field("/session_id").or_else(|| env_text("CLAUDE_CODE_SESSION_ID")),
+        herdr_socket: env_text(HERDR_SOCKET_PATH),
+        herdr_pane_id: env_text(HERDR_PANE_ID),
+        claude_session_id: field("/session_id").or_else(|| env_text(CLAUDE_SESSION_ENV)),
         cwd,
     }
+}
+
+fn input_text(input: Option<&Value>, pointer: &str) -> Option<String> {
+    input
+        .and_then(|v| v.pointer(pointer))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// The JSON Claude Code pipes to a status-line command. A terminal on stdin

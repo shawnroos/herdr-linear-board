@@ -7,14 +7,14 @@ use crate::labels::card_labels;
 
 use crate::protocol::{
     BoardArchiveParams, BoardCreateParams, BoardGetParams, BoardListParams, BoardListResult,
-    BoardOpenParams, BoardRenameParams, BoardSelectParams, BoardSnapshot, CardArchiveParams,
-    CardCreateParams, CardDetail, CardListParams, CardMoveParams, CardUpdateParams,
-    ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams, ColumnUpdateParams,
-    CommentAddParams, CommentDeleteParams, CommentGetParams, CommentHistoryParams,
-    CommentUpdateParams, DeletedResult, Event, LinearIssueDocument, LinearIssueParams,
-    LinearListKind, LinearListParams, LinearListResult, LinearPrDocument, LinearPrParams,
-    LinearSnapshot, LinearSnapshotParams, PaneContext, PaneContextParams, PaneFocusParams,
-    PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
+    BoardOpenParams, BoardRenameParams, BoardSelectParams, BoardSnapshot, CallerResolveParams,
+    CallerResolveResult, CardArchiveParams, CardCreateParams, CardDetail, CardListParams,
+    CardMoveParams, CardUpdateParams, ColumnCreateParams, ColumnDeleteParams, ColumnReorderParams,
+    ColumnUpdateParams, CommentAddParams, CommentDeleteParams, CommentGetParams,
+    CommentHistoryParams, CommentUpdateParams, DeletedResult, Event, LinearIssueDocument,
+    LinearIssueParams, LinearListKind, LinearListParams, LinearListResult, LinearPrDocument,
+    LinearPrParams, LinearSnapshot, LinearSnapshotParams, PaneContext, PaneContextParams,
+    PaneFocusParams, PaneFocusResult, PaneSetTitleParams, PaneSetTitleResult, ProjectArchiveParams,
     ProjectCreateParams, ProjectGetParams, ProjectListParams, ProjectOpenParams, ProjectOpenResult,
     ProjectSelectParams, ProjectSelectedResult, RunActionResult, RunDoneParams, RunFocusParams,
     RunFocusResult, TemplateApplyParams, Trigger,
@@ -67,6 +67,7 @@ pub struct FakeBoardClient {
 pub struct FakeLinear {
     pub snapshot: Result<LinearSnapshot, String>,
     pub focus: Result<PaneFocusResult, String>,
+    pub caller: Result<CallerResolveResult, String>,
     pub lists: std::collections::BTreeMap<LinearListKind, Result<LinearListResult, String>>,
     /// Keyed by the issue asked for, so a test can seed several pages and prove
     /// a result is applied only to the issue still open.
@@ -89,6 +90,7 @@ impl Default for FakeLinear {
                 focused: true,
                 gone: false,
             }),
+            caller: Ok(CallerResolveResult::NotInHerdr),
             lists: std::collections::BTreeMap::new(),
             issues: std::collections::BTreeMap::new(),
             issue_unsupported: false,
@@ -206,6 +208,18 @@ impl FakeBoardClient {
         context: std::sync::Arc<std::sync::Mutex<PaneContext>>,
     ) -> FakeBoardClient {
         self.linear.pane_context = context;
+        self
+    }
+
+    pub fn with_caller_resolve(mut self, result: CallerResolveResult) -> FakeBoardClient {
+        self.linear.caller = Ok(result);
+        self
+    }
+
+    /// Make `caller.resolve` fail with `message`, as the daemon answers when
+    /// herdr cannot be reached (code 4).
+    pub fn with_caller_resolve_error(mut self, message: &str) -> FakeBoardClient {
+        self.linear.caller = Err(message.to_string());
         self
     }
 
@@ -859,6 +873,13 @@ fake_methods!(db, config, linear, now, params, {
             .map_err(|_| anyhow::anyhow!("pane context fixture poisoned"))?
             .clone();
         serde_json::to_value(context)?
+    },
+    "caller.resolve" => {
+        let _: CallerResolveParams = serde_json::from_value(params)?;
+        match &linear.caller {
+            Ok(result) => serde_json::to_value(result.clone())?,
+            Err(message) => return Err(crate::Error::HerdrUnavailable(message.clone()).into()),
+        }
     },
     "linear.snapshot" => {
         let p: LinearSnapshotParams = serde_json::from_value(params)?;

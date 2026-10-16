@@ -25,26 +25,29 @@ Rule of thumb (mirrors [AGENTS.md](../AGENTS.md)): **never assume a herdr
 command, flag, or JSON shape from memory — verify against `api schema` /
 `--help`, and pin the argv you verified in a test comment.**
 
-## Compatibility gate: Herdr 0.9.0–0.9.3 / socket protocol 22
+## Compatibility gate: Herdr 0.9.x / socket protocol 22
 
-The supported matrix: **Herdr 0.9.0, 0.9.1, 0.9.2 or 0.9.3**, **socket protocol 22**,
-board protocol v1, and SQLite schema v17. `board-herdr` rejects any other Herdr version
-or protocol before the daemon performs workspace discovery, pane placement, an agent
-launch, a configured runner action, or a notification mutation. This is a policy
-gate, not a protocol-negotiation fallback. A preview build of a supported release
-(`0.9.N-preview.*`) passes when it reports protocol 22.
+The supported matrix is: **Herdr 0.9.x** (any `0.9.<patch>` release, or a
+`0.9.<patch>-preview.*` build of one), **socket protocol 22**, board protocol v1, and
+SQLite schema v17. `board-herdr` rejects any other Herdr version (0.8.x, 0.10.0, 1.x,
+`0.90.0`, a malformed version) or any other protocol before the daemon performs
+workspace discovery, pane placement, an agent launch, a configured runner action, or a
+notification mutation. This is a policy gate, not a protocol-negotiation fallback:
+protocol 22 is the hard requirement, and the series rule only stops a release that
+happens to report protocol 22 from passing outside the series that was checked.
+The checked-in schema dump, CI and the default sandbox image stay pinned to Herdr 0.9.0;
+`./scripts/sandbox.sh --herdr-version 0.9.3 …` builds and runs a separate 0.9.3 sandbox (see
+"Herdr 0.9.3 compatibility" below).
 
-The accepted list is `SUPPORTED_HERDR_VERSIONS` in `crates/board-herdr/src/lib.rs`.
-`e2e/lib.sh` and the four `e2e/real-*-smoke.sh` scripts repeat the same rule as shell
-patterns (`docs/solutions/integration-issues/a-pinned-version-check-has-a-twin.md`);
-`scripts/tests/test_e2e_ci.py` runs those patterns against accepted and refused versions.
-CI and the default sandbox image run 0.9.0. `./scripts/sandbox.sh --herdr-version 0.9.3 …`
-builds and runs a separate 0.9.3 sandbox (see "Herdr 0.9.3 compatibility" below).
+The rule lives in `is_supported_release` (`crates/board-herdr/src/client.rs`) and is
+repeated in the shell gates: `e2e/lib.sh` (`E2E_HERDR_SERIES_RE`) and the four
+`e2e/real-*-smoke.sh` scripts. Change them together; `scripts/tests/test_e2e_ci.py`
+checks the shell copies agree.
 
 Use these read-only probes before changing a wire call or debugging a live session:
 
 ```bash
-case "$(herdr --version)" in "herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*) ;; *) false ;; esac
+herdr --version   # expect herdr 0.9.<patch>, optionally -preview.*
 herdr api schema --json | python3 -c \
   'import json, sys; s=json.load(sys.stdin); assert s["protocol"] == 22, s'
 herdr api snapshot
@@ -175,7 +178,7 @@ copying them from this page.
 
 The stable transport rule is pane-first and intentionally independent of a
 protocol number: create or split the target pane with its cwd/environment first,
-then start the agent in that existing pane. Under the exact Herdr 0.9.0 / socket
+then start the agent in that existing pane. Under the Herdr 0.9.x / socket
 protocol 22 gate, herdr-board first creates a shell root for a new durable card
 tab and reserves it as `card-<id>-anchor`. When the dispatch itself just created
 the workspace (`new_workspace` with no matching open workspace), the workspace's
@@ -352,8 +355,10 @@ Observed on Herdr 0.9.0 / protocol 22 (2026-09-14), read-only, from a herdr-owne
 pane it owns. `HERDR_PLUGIN_CONTEXT_JSON` (`PluginInvocationContext` in
 `herdr api schema --json`) is set only for a pane opened by `plugin pane open`, and
 every field in it is nullable, `workspace_id` included. The board therefore reads
-`HERDR_WORKSPACE_ID` first and the context's `workspace_id` second; a directory is
-never used as a space identity.
+`HERDR_WORKSPACE_ID` first and the context's `workspace_id` second. A directory alone is
+never a space identity: when a Claude session has lost these variables, its folder only yields
+candidate panes that the caller must confirm (see "Finding the caller's pane without herdr env"
+below).
 
 **How the CLI selects a session.** Three mechanisms, in the order the CLI applies them:
 
@@ -591,15 +596,107 @@ the muted (unfocused) card just under it, muted text (`overlay0`) and muted deta
 They are pinned for gruvbox (`#1e1e1e`, `#262626`, `#928374`, `#7c6f64`) and derived for every
 other theme, darker below the card on dark themes and lighter on light ones.
 
+## Finding the caller's pane without herdr env (observed 2026-10-08)
+
+**Why env is not enough.** Claude Code pre-starts "warm spare" sessions from its own daemon. A
+`claude` typed in a herdr pane can take over a spare, and that session's tools, hooks and MCP
+servers then run without any `HERDR_*` variable, although the pane's shell has them. Reproduced on
+the host with Claude Code 2.1.294 and herdr 0.9.3: a plain shell in the pane printed
+`HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`; the claimed session's `env` held none
+of them. The upstream report is [upstream/claude-code-spare-env.md](upstream/claude-code-spare-env.md).
+
+**The order the board applies.** `board mcp`, `board caller` and the Linear hooks find the caller's
+pane in this order, and stop at the first answer:
+
+1. **An explicit pane.** The caller passes `pane` (an MCP tool argument, or `board caller --pane`)
+   as `<session>/<pane id>`. It wins over env, because the caller named it on purpose and a nested
+   session can inherit a parent's pane id. Pane ids repeat across herdr sessions (`w1:p2` exists in
+   each), so the session name qualifies it.
+2. **Env.** `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID` and `HERDR_SOCKET_PATH`, only when all three are
+   set. No lookup runs.
+3. **A remembered choice.** A pane the caller confirmed earlier, kept by boardd for that Claude
+   session id. boardd checks it with one `pane.get` before using it. A pane herdr reports gone is
+   forgotten. A session that does not answer keeps the memory, but the memory is not used for that
+   call. Either way the lookup moves on.
+4. **Folder candidates.** boardd lists every running herdr session (`herdr session list --json`),
+   connects to each through the 0.9.x / protocol-22 gate, reads `pane.list` (and `workspace.list`
+   for the labels, only when the session has a Claude pane), and keeps the panes whose `agent` is `claude` and whose `cwd` or `foreground_cwd` equals the
+   caller's folder after canonicalization. A session that cannot be reached, or does not answer
+   within about 2 s, is skipped; the sessions are asked one after another, so a hung session
+   costs a lookup about that long. Candidate titles and workspace labels have control and format
+   characters stripped. The lookup is read-only. On herdr 0.9.0, `pane report-agent` alone left a shell pane with no `agent` in
+   `pane.list`; a foreground process named `claude` set it (observed in scenario 48).
+
+**It never guesses.** A folder match is an `unconfirmed` answer, even when exactly one pane
+matches: a Claude session outside herdr in the same folder would otherwise take over another
+pane's identity, and a wrong pane misattributes writes and opens the board in someone else's tab.
+A tool that needs the caller's pane refuses with the candidates and tells the agent to ask the
+person which one is this session (or whether it runs in herdr at all) before passing `pane`. A
+shell pane, whose agent is not `claude`, is never a candidate.
+
+**Which folder.** `board mcp` and `board caller` use their process cwd. The hooks use
+`CLAUDE_PROJECT_DIR` (the session's launch directory) first, then the hook payload's `cwd`: herdr's
+pane cwd is where `claude` started, and a session that later moved into a subdirectory or worktree
+would otherwise stop matching.
+
+**The remembered choice lives in boardd's memory.** A pane that resolves through an explicit `pane`
+is stored against the caller's Claude session id (`CLAUDE_CODE_SESSION_ID` for `board mcp` and
+`board caller`, the payload's `session_id` for hooks; the two are the same value). Every later call
+from that session, in any process, resolves to it without asking the person. `board mcp` asks
+boardd on every call, so boardd's `pane.get` check runs each time; only without a Claude session
+id does `board mcp` keep the confirmed pane in its own process. Nothing is written to SQLite, so
+a daemon restart clears the memory and the agent confirms again. A caller without a Claude session
+id gets no memory. The hooks read the remembered choice but never confirm a pane themselves:
+`board linear report` (like `board linear snapshot`) asks with `remembered_only`, so boardd skips
+the folder lookup, and records activity without a space when nothing is remembered, and
+`board linear session` prints the candidates (or a no-space notice) and exits 0. With `--json`
+that is `{"state":"unconfirmed","candidates":[...]}` or `{"state":"not_in_herdr","reason":...}`
+instead of the session document, which has no `state` field. A `board mcp` tool whose lookup
+fails without a named pane (an older boardd that lacks `caller.resolve`, say) logs the error to
+stderr and runs with the env claims alone.
+
+**What stays env-only, and why.**
+
+- `board done` and `board comment` (the run-identity check). The daemon treats a pane match as
+  proof that the caller is that run's agent, so an inferred pane would widen trust. Panes the daemon
+  spawns always carry env.
+- The TUI, `board tui --session` and the scope path. They run in panes herdr starts itself, with
+  full env.
+- `board linear status-line`. Its 200 ms budget cannot hold a daemon round trip plus one
+  herdr call per session.
+
+Env that is present but wrong (a nested or background session carrying a parent's
+`HERDR_PANE_ID`, above) is out of reach: env comes before any lookup, so the board cannot detect it.
+
+## Herdr 0.9.3 against the 0.9.0 schema (observed 2026-10-05)
+
+Observed on the host with the installed Herdr 0.9.3, read-only: `herdr api schema --json`
+reports **protocol 22**. A semantic diff of that schema against
+[`herdr-0.9.0-schema.json`](herdr-0.9.0-schema.json) (methods, their params, and every
+request/response/event definition) found:
+
+- **Methods added:** `pane.clear`, `pane.link.resolve`, `server.ssh_agent.register`.
+- **Methods removed:** `pane.graphics.clear`, `pane.graphics.info`, `pane.graphics.set`
+  (with their `PaneGraphics*` request definitions). No board code calls them: under
+  `crates/`, `graphics` appears only in the legacy protocol-20 schema fixture.
+- **Params changed on existing methods:** none.
+- **Optional fields added:** `PaneInfo.restore_error`, `AgentInfo.completion_seq`,
+  `PaneReportAgentParams.resume_argv`, `PaneReportAgentSessionParams.resume_argv`,
+  `ServerCapabilities.ssh_agent_registration`; new response definition `PaneLinkRegion`. No
+  field became required, and no event definition changed.
+
+Every method and shape the board uses is unchanged, so the gate accepts the whole 0.9 series
+at protocol 22 instead of exactly 0.9.0. Re-run the same diff before widening it again.
+
 ## Version drift
 
 `board-herdr` deliberately exposes only the typed Herdr methods used by the daemon and tests:
 workspace, tab, pane, agent, notification, session, and events. The upstream worktree methods and
 DTOs are not part of this crate's public surface; repository isolation belongs in the agent prompt.
 The checked-in schema fixture is regenerated from the installed Herdr contract and
-is not rewritten during unrelated API cleanup. The board fixture and typed client
-are currently pinned to **Herdr 0.9.0–0.9.3 / protocol 22** (the schema fixture is the
-0.9.0 dump); board protocol v1 and DB schema v17 remain independent and unchanged.
+is not rewritten during unrelated API cleanup. The board fixture is pinned to the
+**Herdr 0.9.0** schema, and the typed client accepts **Herdr 0.9.x / protocol 22**;
+board protocol v1 and DB schema v17 remain independent and unchanged.
 
 This repo's current Herdr facts — [`docs/research.md`](research.md),
 [`docs/design.md`](design.md), and the wire shapes hard-coded in `board-herdr` —

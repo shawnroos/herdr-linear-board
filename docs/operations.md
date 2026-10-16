@@ -10,7 +10,7 @@ Re-run the install command to update — Herdr has no separate update command, s
 existing plugin:
 
 ```bash
-herdr plugin install nelsonPires5/herdr-board --ref v0.17.0 --yes
+herdr plugin install shawnroos/herdr-linear-board --ref v0.18.1 --yes
 ```
 
 The build step requests a graceful stop (`board daemon --stop`) before recompiling, so the new
@@ -114,8 +114,8 @@ For a checkout you plan to edit, use `scripts/install.sh`. It prints proposed pl
 copies, PATH symlinks, and keybinding changes by default; `--yes` applies them.
 
 ```bash
-git clone https://github.com/nelsonPires5/herdr-board
-cd herdr-board
+git clone https://github.com/shawnroos/herdr-linear-board
+cd herdr-linear-board
 ./scripts/install.sh                         # dry run
 ./scripts/install.sh --yes                   # default key: prefix+shift+k
 ./scripts/install.sh --yes --key prefix+shift+b

@@ -8,31 +8,45 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board and session pane pick up your herdr theme and its custom colours.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode pickers, bind from the board, mouse, card detail, herdr keys in help, roomier cards, pane title and linear list verbs.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear boards show tabs, paged columns, lanes and agent marks you answer with a and x, plus a status line and session side pane.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode reads Linear itself, owns its bindings (import once with board import work-store) and gives agents board mcp tools.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board reads carry each issue's description, milestone and newest pull request, and `board linear issue` lists attachments.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The daemon reads each on-board pull request's checks, blocker, diff and preview with gh, and says why when gh is missing.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board shows the space board alone in a tab and the focused split's issue beside other splits.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Tabs and splits in a Linear-bound space are named after their issue, agent or repo, and names you set by hand are kept.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: `board linear pr <url>` prints a pull request's checks, reviews and merge state for agents and scripts.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board and session pane pick up your herdr theme and its custom colours.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board reads carry each issue's description, milestone and newest pull request, and `board linear issue` lists attachments.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The daemon reads each on-board pull request's checks, blocker, diff and preview with gh, and says why when gh is missing.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board shows the space board alone in a tab and the focused split's issue beside other splits.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Tabs and splits in a Linear-bound space are named after their issue, agent or repo, and names you set by hand are kept.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: `board linear pr <url>` prints a pull request's checks, reviews and merge state for agents and scripts.
 
 ### Changed
 
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board drops column borders for powerline titles, aligned lane lines and cards that show notes and the pull request.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board lanes fold with Return, / filters cards, Esc clears the selection, and ctrl+q quits (plain q does nothing).
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear board columns fit any width, wide columns hold two cards a row, arrow buttons page hidden columns, and cards show PR checks.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The Linear board's bottom bar shows controls, a selection tip and alerts; `?` opens it, and show-requests are answered there.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear cards drop the rows they have nothing for, and z switches to a compact density that fits more cards.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Return on a Linear group alert such as `! 3 needs you` filters the board to those cards, in a full-width filter card.
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear issues open as a window over the faded board, expand with e, pin beside the board with o, and show attachment and PR cards.
-
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: The board works with Herdr 0.9.0 through 0.9.3.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board drops column borders for powerline titles, aligned lane lines and cards that show notes and the pull request.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board lanes fold with Return, / filters cards, Esc clears the selection, and ctrl+q quits (plain q does nothing).
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear board columns fit any width, wide columns hold two cards a row, arrow buttons page hidden columns, and cards show PR checks.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: The Linear board's bottom bar shows controls, a selection tip and alerts; `?` opens it, and show-requests are answered there.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear cards drop the rows they have nothing for, and z switches to a compact density that fits more cards.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Return on a Linear group alert such as `! 3 needs you` filters the board to those cards, in a full-width filter card.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) feat: Linear issues open as a window over the faded board, expand with e, pin beside the board with o, and show attachment and PR cards.
 
 ### Fixed
 
-- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) fix: An opencode or agy model lookup that hangs can no longer stall the board when the CLI left a helper process running.
+- [#12](https://github.com/nelsonPires5/herdr-board/pull/12) fix: An opencode or agy model lookup that hangs can no longer stall the board when the CLI left a helper process running.
+
+## [0.18.1] - 2026-10-15
+
+### Fixed
+
+- [#10](https://github.com/nelsonPires5/herdr-board/pull/10) fix: Board tools and hooks find the agent's herdr pane when Claude Code drops herdr's variables, once the person confirms the pane.
+- [#11](https://github.com/nelsonPires5/herdr-board/pull/11) fix: The install commands in the docs install this fork's board, not the upstream one.
+
+## [0.18.0] - 2026-10-05
+
+### Added
+
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode pickers, bind from the board, mouse, card detail, herdr keys in help, roomier cards, pane title and linear list verbs.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear boards show tabs, paged columns, lanes and agent marks you answer with a and x, plus a status line and session side pane.
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) feat: Linear mode reads Linear itself, owns its bindings (import once with board import work-store) and gives agents board mcp tools.
+
+### Fixed
+
+- [#0](https://github.com/nelsonPires5/herdr-board/pull/0) fix: The board works with any Herdr 0.9.x patch release (such as 0.9.3) on socket protocol 22, not only 0.9.0.
 
 ## [0.17.0] - 2026-09-13
 
@@ -460,7 +474,9 @@ a visible herdr pane. Ships as a single `board` binary (TUI + daemon + CLI) and 
 - **Packaging.** `herdr-plugin.toml` manifest, and `scripts/` for build, install (guarded behind
   `--yes`), the open-or-focus launcher, a raw protocol client, and a live-herdr e2e smoke test.
 
-[Unreleased]: https://github.com/nelsonPires5/herdr-board/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/shawnroos/herdr-linear-board/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/shawnroos/herdr-linear-board/releases/tag/v0.18.1
+[0.18.0]: https://github.com/shawnroos/herdr-linear-board/releases/tag/v0.18.0
 [0.17.0]: https://github.com/nelsonPires5/herdr-board/releases/tag/v0.17.0
 [0.16.1]: https://github.com/nelsonPires5/herdr-board/releases/tag/v0.16.1
 [0.16.0]: https://github.com/nelsonPires5/herdr-board/releases/tag/v0.16.0

@@ -14,7 +14,7 @@
 9. Common failures
 
 Commands below were exercised with Herdr 0.9.0 / protocol 22. This repository
-accepts Herdr 0.9.0–0.9.3 with protocol 22 only; re-verify the installed CLI and session socket before use.
+accepts Herdr 0.9.x with protocol 22 only; re-verify the installed CLI and session socket before use.
 
 ## 1. Preflight
 

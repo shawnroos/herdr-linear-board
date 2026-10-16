@@ -1,18 +1,23 @@
 //! `board mcp`: a stdio MCP server that forwards each tool call to one boardd
-//! method. It holds no state and validates nothing the daemon validates.
+//! method. Its only state is the caller's resolved herdr pane, kept only for
+//! a caller with no Claude session id; it validates nothing the daemon
+//! validates.
 //! stdout carries only the MCP JSON-RPC stream, so nothing here may print
 //! through `render.rs`; diagnostics go to stderr.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{anyhow, Context, Result};
-use board_core::client::{BoardClient, RpcClientError, UnixClient};
+use board_core::client::{BoardClient, UnixClient};
 use board_core::db::clean_owner;
+use board_core::error_code;
 use board_core::protocol::{
     ActivityClaims, BoardNotifyParams, BoardPaneCloseParams, BoardPaneContext, BoardPaneOpenParams,
-    LinearActivityListParams, LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams,
-    LinearNoteSetParams, LinearOwner, LinearShowRequestParams, LinearShowWithdrawParams,
-    LinearState, LinearStateGetParams, LinearUnbindParams, MarkKind,
+    CallerCandidate, CallerLocation, CallerResolveResult, LinearActivityListParams,
+    LinearBindParams, LinearMarkSetParams, LinearMarkUnmarkParams, LinearNoteSetParams,
+    LinearOwner, LinearShowRequestParams, LinearShowWithdrawParams, LinearState,
+    LinearStateGetParams, LinearUnbindParams, MarkKind,
 };
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
@@ -21,7 +26,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::commands::{canonical_text, env_text};
+use crate::caller::{
+    candidate_text, env_id, env_text, resolve, rpc_error, CallerQuery, Source, CLAUDE_SESSION_ENV,
+    HERDR_PANE_ID, HERDR_SOCKET_PATH, HERDR_WORKSPACE_ID,
+};
+use crate::commands::canonical_text;
 use crate::daemon::connect_or_start;
 
 /// Must not contain "linear": the work plugin's PostToolUse matcher is
@@ -36,7 +45,7 @@ pub(crate) fn run() -> Result<()> {
         .build()
         .context("starting the MCP runtime")?;
     runtime.block_on(async {
-        let service = BoardMcp
+        let service = BoardMcp::default()
             .serve(rmcp::transport::stdio())
             .await
             .map_err(|error| anyhow!("MCP initialize failed: {error}"))?;
@@ -51,26 +60,165 @@ pub(crate) fn run() -> Result<()> {
 struct Caller {
     claims: ActivityClaims,
     owner: LinearOwner,
+    /// The location came from boardd's memory or this process's cache, not
+    /// from env or a pane named in this call, so it may name a closed pane.
+    remembered: bool,
+    /// Folder candidates nobody has confirmed. Only a tool that needs the
+    /// caller's pane or space, and was not given one, refuses on them.
+    candidates: Option<Vec<CallerCandidate>>,
 }
 
+/// Why a call cannot learn its caller's pane. Rendered as its own tool error,
+/// never as "board unavailable".
+#[derive(Debug)]
+enum CallerError {
+    Unconfirmed(Vec<CallerCandidate>),
+    UnknownPane(String),
+}
+
+impl std::fmt::Display for CallerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallerError::Unconfirmed(candidates) => {
+                writeln!(
+                    f,
+                    "board could not confirm which herdr pane this session runs in. \
+                     These Claude panes run in this session's folder:"
+                )?;
+                for candidate in candidates {
+                    let (pane, workspace, title) = candidate_text(candidate);
+                    writeln!(
+                        f,
+                        "- pane {pane:?}: workspace {workspace:?}, title {title:?}"
+                    )?;
+                }
+                write!(
+                    f,
+                    "Ask the person whether this session runs in one of these panes, or in herdr \
+                     at all. Only after they confirm one, call this tool again with `pane` set \
+                     to that pane value. If the person says this session is not in herdr, \
+                     call again with an explicit `space`."
+                )
+            }
+            CallerError::UnknownPane(pane) => write!(
+                f,
+                "no running herdr session lists pane {pane:?}. Ask the person which pane this \
+                 session runs in before calling again with `pane`."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CallerError {}
+
 impl Caller {
-    fn from_environment() -> Caller {
-        let herdr_socket = env_text("HERDR_SOCKET_PATH");
-        let herdr_pane_id = env_text("HERDR_PANE_ID");
+    /// With a Claude session id boardd remembers the confirmed pane and checks
+    /// it is still open, so every call asks boardd. Without one, this process
+    /// caches a resolved location instead; an unconfirmed or missing one is
+    /// asked again on the next call. A failed lookup without a named pane
+    /// (an older boardd, say) falls back to the env claims alone.
+    fn locate(
+        confirmed: &Mutex<Option<CallerLocation>>,
+        pane: Option<String>,
+        client: &mut UnixClient,
+    ) -> Result<Caller> {
+        let query = CallerQuery::new(
+            canonical_text(PathBuf::from(cwd_or_current(None))),
+            pane,
+            env_text(CLAUDE_SESSION_ENV),
+        );
+        let cached = match query.claude_session_id {
+            Some(_) => None,
+            None => confirmed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        };
+        let named = query.pane().is_some();
+        let resolution = match resolve(&query, env_text, |params| match (&params.pane, cached) {
+            (None, Some(location)) => Ok(CallerResolveResult::Resolved { location }),
+            _ => client.caller_resolve(params),
+        }) {
+            Ok(resolution) => resolution,
+            Err(error) if !named => {
+                eprintln!("board mcp: pane lookup failed, using env only: {error:#}");
+                return Ok(Caller::at(None, false));
+            }
+            Err(error) => return Err(error),
+        };
+        match resolution.result {
+            CallerResolveResult::Resolved { location } => {
+                if resolution.source == Source::Daemon && query.claude_session_id.is_none() {
+                    *confirmed.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(location.clone());
+                }
+                let remembered = resolution.source == Source::Daemon && !named;
+                Ok(Caller::at(Some(location), remembered))
+            }
+            CallerResolveResult::Unconfirmed { candidates } => Ok(Caller {
+                candidates: Some(candidates),
+                ..Caller::at(None, false)
+            }),
+            CallerResolveResult::NotInHerdr => match query.pane() {
+                Some(pane) => Err(CallerError::UnknownPane(pane.to_string()).into()),
+                None => Ok(Caller::at(None, false)),
+            },
+        }
+    }
+
+    fn at(location: Option<CallerLocation>, remembered: bool) -> Caller {
+        let (herdr_socket, herdr_pane_id, herdr_workspace_id) = match location {
+            Some(location) => (
+                Some(location.socket),
+                Some(location.pane_id),
+                Some(location.workspace_id),
+            ),
+            None => (
+                env_text(HERDR_SOCKET_PATH),
+                env_text(HERDR_PANE_ID),
+                env_text(HERDR_WORKSPACE_ID),
+            ),
+        };
         Caller {
             claims: ActivityClaims {
                 herdr_socket: herdr_socket.clone(),
                 herdr_pane_id: herdr_pane_id.clone(),
-                herdr_workspace_id: env_text("HERDR_WORKSPACE_ID"),
+                herdr_workspace_id,
                 card_id: env_id("BOARD_CARD_ID"),
                 run_id: env_id("BOARD_RUN_ID"),
             },
             owner: LinearOwner {
                 herdr_socket,
                 herdr_pane_id,
-                claude_session_id: env_text("CLAUDE_CODE_SESSION_ID"),
+                claude_session_id: env_text(CLAUDE_SESSION_ENV),
             },
+            remembered,
+            candidates: None,
         }
+    }
+
+    fn require_pane(&self) -> Result<()> {
+        match &self.candidates {
+            Some(candidates) => Err(CallerError::Unconfirmed(candidates.clone()).into()),
+            None => Ok(()),
+        }
+    }
+
+    fn space_or_refuse(&self, given: Option<String>) -> Result<String> {
+        if given.is_none() {
+            self.require_pane()?;
+        }
+        Ok(self.space(given))
+    }
+
+    /// A call that proceeds without a confirmed pane still tells the agent
+    /// which panes it could confirm.
+    fn with_note<T: Serialize>(&self, result: T) -> Result<Value> {
+        let mut value = serde_json::to_value(result)?;
+        if let (Some(candidates), Some(object)) = (&self.candidates, value.as_object_mut()) {
+            object.insert("caller".into(), unconfirmed_body(candidates));
+        }
+        Ok(value)
     }
 
     fn space(&self, given: Option<String>) -> String {
@@ -94,12 +242,6 @@ impl Caller {
     fn origin_pane(&self) -> String {
         self.claims.herdr_pane_id.clone().unwrap_or_default()
     }
-}
-
-/// An empty or malformed id is no claim: a rescued pane carries an empty
-/// `BOARD_RUN_ID` on purpose, so its calls attribute to the card only.
-fn env_id(key: &str) -> Option<i64> {
-    env_text(key).and_then(|value| value.trim().parse().ok())
 }
 
 fn cwd_or_current(given: Option<String>) -> String {
@@ -165,10 +307,29 @@ fn refused(message: &str) -> CallToolResult {
     result
 }
 
+fn rpc_code(error: &anyhow::Error) -> Option<i32> {
+    rpc_error(error).map(|rpc| rpc.code)
+}
+
+fn unconfirmed_body(candidates: &[CallerCandidate]) -> Value {
+    let message = CallerError::Unconfirmed(candidates.to_vec()).to_string();
+    json!({"state": "unconfirmed", "candidates": candidates, "message": message})
+}
+
 fn tool_error(error: &anyhow::Error) -> CallToolResult {
-    let rpc = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RpcClientError>());
+    if let Some(caller) = error.downcast_ref::<CallerError>() {
+        let message = caller.to_string();
+        let body = match caller {
+            CallerError::Unconfirmed(candidates) => unconfirmed_body(candidates),
+            CallerError::UnknownPane(pane) => {
+                json!({"state": "not_in_herdr", "pane": pane, "message": message})
+            }
+        };
+        let mut result = CallToolResult::structured_error(body);
+        result.content = vec![rmcp::model::ContentBlock::text(message)];
+        return result;
+    }
+    let rpc = rpc_error(error);
     let body = match rpc {
         Some(rpc) => json!({
             "code": rpc.code,
@@ -180,6 +341,9 @@ fn tool_error(error: &anyhow::Error) -> CallToolResult {
     };
     let mut result = CallToolResult::structured_error(body);
     let text = match rpc {
+        Some(rpc) if error.chain().count() > 1 => {
+            format!("board refused (code {}): {error:#}", rpc.code)
+        }
         Some(rpc) => format!("board refused (code {}): {}", rpc.code, rpc.message),
         None => format!("board unavailable: {error:#}"),
     };
@@ -189,16 +353,20 @@ fn tool_error(error: &anyhow::Error) -> CallToolResult {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SpaceArgs {
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct IssueArgs {
     /// Linear issue key, for example ENG-123.
     issue: String,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -207,8 +375,10 @@ struct BindArgs {
     issue: String,
     /// A path inside the git worktree to bind; defaults to this session's working directory.
     cwd: Option<String>,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
     branch: Option<String>,
     tab: Option<String>,
     display_name: Option<String>,
@@ -218,8 +388,10 @@ struct BindArgs {
 struct UnbindArgs {
     /// A path inside the bound git worktree; defaults to this session's working directory.
     cwd: Option<String>,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -230,8 +402,10 @@ struct MarkArgs {
     kind: String,
     /// Optional detail shown with the mark, for example the question itself.
     text: Option<String>,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -240,8 +414,10 @@ struct UnmarkArgs {
     issue: String,
     /// needs_you, question or done; without it every mark this caller set on the card clears.
     kind: Option<String>,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -250,14 +426,18 @@ struct NoteArgs {
     issue: String,
     /// The note; it replaces this caller's earlier note on the card.
     body: String,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NotifyArgs {
     title: String,
     body: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -266,8 +446,10 @@ struct AskToShowArgs {
     issue: String,
     /// Why, in a few words.
     reason: Option<String>,
-    /// herdr workspace id; defaults to this pane's HERDR_WORKSPACE_ID.
+    /// herdr workspace id; defaults to the workspace of the pane this session runs in.
     space: Option<String>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -282,6 +464,8 @@ struct OpenBoardArgs {
     card: Option<i64>,
     /// true opens this session's side pane instead: your bound issue, your lane, or the bind hint. Takes no space, issue or card.
     session: Option<bool>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -292,10 +476,29 @@ struct CloseBoardArgs {
     card: Option<i64>,
     /// true closes this session's side pane.
     session: Option<bool>,
+    /// The `<session>/<pane id>` this session runs in, once the person confirmed it from an unconfirmed error's candidates. Overrides the environment. If the person says this session is not in herdr, call again with an explicit `space`.
+    pane: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct BoardMcp;
+#[derive(Debug, Clone, Default)]
+struct BoardMcp {
+    confirmed: Arc<Mutex<Option<CallerLocation>>>,
+}
+
+impl BoardMcp {
+    async fn forward_as<T, F>(&self, pane: Option<String>, call: F) -> CallToolResult
+    where
+        T: Serialize + Send + 'static,
+        F: FnOnce(&mut UnixClient, Caller) -> Result<T> + Send + 'static,
+    {
+        let confirmed = Arc::clone(&self.confirmed);
+        forward(move |client| {
+            let caller = Caller::locate(&confirmed, pane, client)?;
+            call(client, caller)
+        })
+        .await
+    }
+}
 
 #[tool_router]
 impl BoardMcp {
@@ -304,13 +507,14 @@ impl BoardMcp {
         annotations(read_only_hint = true)
     )]
     async fn state(&self, Parameters(args): Parameters<SpaceArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
-        let params = LinearStateGetParams {
-            space: caller.space(args.space),
-            herdr_socket: caller.owner.herdr_socket.clone(),
-        };
-        let owner = caller.owner;
-        forward(move |c| state_for(&owner, c.linear_state_get(&params)?)).await
+        self.forward_as(args.pane, move |c, caller| {
+            let params = LinearStateGetParams {
+                space: caller.space_or_refuse(args.space)?,
+                herdr_socket: caller.owner.herdr_socket.clone(),
+            };
+            state_for(&caller.owner, c.linear_state_get(&params)?)
+        })
+        .await
     }
 
     #[tool(
@@ -318,16 +522,14 @@ impl BoardMcp {
         annotations(read_only_hint = true)
     )]
     async fn panes_for_issue(&self, Parameters(args): Parameters<IssueArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
-        let params = LinearActivityListParams {
-            space: Some(caller.space(args.space)),
-            limit: Some(ACTIVITY_LIMIT),
-            herdr_socket: caller.owner.herdr_socket,
-        };
-        let issue = args.issue;
-        forward(move |c| {
+        self.forward_as(args.pane, move |c, caller| {
+            let params = LinearActivityListParams {
+                space: Some(caller.space_or_refuse(args.space)?),
+                limit: Some(ACTIVITY_LIMIT),
+                herdr_socket: caller.owner.herdr_socket,
+            };
             let listed = c.linear_activity_list(&params)?;
-            Ok(panes_for(&issue, listed.activity))
+            Ok(panes_for(&args.issue, listed.activity))
         })
         .await
     }
@@ -337,16 +539,19 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn bind(&self, Parameters(args): Parameters<BindArgs>) -> CallToolResult {
-        let params = LinearBindParams {
-            cwd: cwd_or_current(args.cwd),
-            issue: args.issue,
-            space: args.space,
-            branch: args.branch,
-            tab: args.tab,
-            display_name: args.display_name,
-            claims: Caller::from_environment().claims,
-        };
-        forward(move |c| c.linear_bind(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            let change = c.linear_bind(&LinearBindParams {
+                cwd: cwd_or_current(args.cwd),
+                issue: args.issue,
+                space: args.space,
+                branch: args.branch,
+                tab: args.tab,
+                display_name: args.display_name,
+                claims: caller.claims.clone(),
+            })?;
+            caller.with_note(change)
+        })
+        .await
     }
 
     #[tool(
@@ -354,12 +559,15 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn unbind(&self, Parameters(args): Parameters<UnbindArgs>) -> CallToolResult {
-        let params = LinearUnbindParams {
-            cwd: cwd_or_current(args.cwd),
-            space: args.space,
-            claims: Caller::from_environment().claims,
-        };
-        forward(move |c| c.linear_unbind(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            let change = c.linear_unbind(&LinearUnbindParams {
+                cwd: cwd_or_current(args.cwd),
+                space: args.space,
+                claims: caller.claims.clone(),
+            })?;
+            caller.with_note(change)
+        })
+        .await
     }
 
     #[tool(
@@ -371,16 +579,17 @@ impl BoardMcp {
             Ok(kind) => kind,
             Err(refusal) => return refusal,
         };
-        let caller = Caller::from_environment();
-        let params = LinearMarkSetParams {
-            space: caller.space(args.space),
-            issue: args.issue,
-            kind,
-            text: args.text,
-            created_by: Some(caller.author()),
-            owner: caller.owner,
-        };
-        forward(move |c| c.linear_mark_set(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            c.linear_mark_set(&LinearMarkSetParams {
+                space: caller.space_or_refuse(args.space)?,
+                issue: args.issue,
+                kind,
+                text: args.text,
+                created_by: Some(caller.author()),
+                owner: caller.owner,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -392,14 +601,15 @@ impl BoardMcp {
             Ok(kind) => kind,
             Err(refusal) => return refusal,
         };
-        let caller = Caller::from_environment();
-        let params = LinearMarkUnmarkParams {
-            space: caller.space(args.space),
-            issue: args.issue,
-            kind,
-            owner: caller.owner,
-        };
-        forward(move |c| c.linear_mark_unmark(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            c.linear_mark_unmark(&LinearMarkUnmarkParams {
+                space: caller.space_or_refuse(args.space)?,
+                issue: args.issue,
+                kind,
+                owner: caller.owner,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -407,15 +617,16 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn note(&self, Parameters(args): Parameters<NoteArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
-        let params = LinearNoteSetParams {
-            space: caller.space(args.space),
-            issue: args.issue,
-            body: args.body,
-            author: caller.author(),
-            owner: caller.owner,
-        };
-        forward(move |c| c.linear_note_set(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            c.linear_note_set(&LinearNoteSetParams {
+                space: caller.space_or_refuse(args.space)?,
+                issue: args.issue,
+                body: args.body,
+                author: caller.author(),
+                owner: caller.owner,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -423,12 +634,15 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn notify(&self, Parameters(args): Parameters<NotifyArgs>) -> CallToolResult {
-        let params = BoardNotifyParams {
-            origin_socket: Caller::from_environment().origin_socket(),
-            title: args.title,
-            body: args.body,
-        };
-        forward(move |c| c.board_notify(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            caller.require_pane()?;
+            c.board_notify(&BoardNotifyParams {
+                origin_socket: caller.origin_socket(),
+                title: args.title,
+                body: args.body,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -436,15 +650,16 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn ask_to_show(&self, Parameters(args): Parameters<AskToShowArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
-        let params = LinearShowRequestParams {
-            space: caller.space(args.space),
-            issue: args.issue,
-            reason: args.reason,
-            requested_by: Some(caller.author()),
-            owner: caller.owner,
-        };
-        forward(move |c| c.linear_show_request(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            c.linear_show_request(&LinearShowRequestParams {
+                space: caller.space_or_refuse(args.space)?,
+                issue: args.issue,
+                reason: args.reason,
+                requested_by: Some(caller.author()),
+                owner: caller.owner,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -452,13 +667,14 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn withdraw_show(&self, Parameters(args): Parameters<IssueArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
-        let params = LinearShowWithdrawParams {
-            space: caller.space(args.space),
-            issue: args.issue,
-            owner: caller.owner,
-        };
-        forward(move |c| c.linear_show_withdraw(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            c.linear_show_withdraw(&LinearShowWithdrawParams {
+                space: caller.space_or_refuse(args.space)?,
+                issue: args.issue,
+                owner: caller.owner,
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -466,27 +682,41 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn open_board(&self, Parameters(args): Parameters<OpenBoardArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
         let session = args.session.unwrap_or(false);
         // The session pane runs in the plugin root, so it reads the agent's
         // worktree from here; canonical, as the status line sends it.
         let session_cwd = session.then(|| canonical_text(PathBuf::from(cwd_or_current(None))));
-        let params = BoardPaneOpenParams {
-            context: BoardPaneContext {
-                space: args.space,
-                issue: args.issue,
-                card: args.card,
-                session,
-            },
-            placement: args.placement.unwrap_or_else(|| "split".to_string()),
-            origin_socket: caller.origin_socket(),
-            origin_pane: caller.origin_pane(),
-            session_cwd,
-            claude_session_id: session
-                .then(|| caller.owner.claude_session_id.clone())
-                .flatten(),
-        };
-        forward(move |c| c.board_pane_open(&params)).await
+        let confirmed = Arc::clone(&self.confirmed);
+        self.forward_as(args.pane, move |c, caller| {
+            caller.require_pane()?;
+            let params = BoardPaneOpenParams {
+                context: BoardPaneContext {
+                    space: args.space,
+                    issue: args.issue,
+                    card: args.card,
+                    session,
+                },
+                placement: args.placement.unwrap_or_else(|| "split".to_string()),
+                origin_socket: caller.origin_socket(),
+                origin_pane: caller.origin_pane(),
+                session_cwd,
+                claude_session_id: session
+                    .then(|| caller.owner.claude_session_id.clone())
+                    .flatten(),
+            };
+            c.board_pane_open(&params).map_err(|error| {
+                if caller.remembered && rpc_code(&error) == Some(error_code::NOT_FOUND) {
+                    *confirmed.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                    error.context(
+                        "the pane this session confirmed earlier may have closed; ask the \
+                         person which pane this session runs in, then call again with `pane`",
+                    )
+                } else {
+                    error
+                }
+            })
+        })
+        .await
     }
 
     #[tool(
@@ -494,19 +724,21 @@ impl BoardMcp {
         annotations(read_only_hint = false)
     )]
     async fn close_board(&self, Parameters(args): Parameters<CloseBoardArgs>) -> CallToolResult {
-        let caller = Caller::from_environment();
         let session = args.session.unwrap_or(false);
-        let params = BoardPaneCloseParams {
-            context: BoardPaneContext {
-                space: args.space,
-                issue: args.issue,
-                card: args.card,
-                session,
-            },
-            origin_socket: caller.origin_socket(),
-            origin_pane: session.then(|| caller.origin_pane()),
-        };
-        forward(move |c| c.board_pane_close(&params)).await
+        self.forward_as(args.pane, move |c, caller| {
+            caller.require_pane()?;
+            c.board_pane_close(&BoardPaneCloseParams {
+                context: BoardPaneContext {
+                    space: args.space,
+                    issue: args.issue,
+                    card: args.card,
+                    session,
+                },
+                origin_socket: caller.origin_socket(),
+                origin_pane: session.then(|| caller.origin_pane()),
+            })
+        })
+        .await
     }
 }
 
@@ -620,15 +852,5 @@ mod tests {
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0]["herdr_pane_id"], "w1:p2");
         assert_eq!(panes[0]["last_at"], "2026-09-30T00:00:03Z");
-    }
-
-    #[test]
-    fn an_empty_or_malformed_id_is_no_claim() {
-        std::env::set_var("BOARD_MCP_TEST_EMPTY_ID", "");
-        std::env::set_var("BOARD_MCP_TEST_BAD_ID", "x7");
-        std::env::set_var("BOARD_MCP_TEST_ID", "7");
-        assert_eq!(env_id("BOARD_MCP_TEST_EMPTY_ID"), None);
-        assert_eq!(env_id("BOARD_MCP_TEST_BAD_ID"), None);
-        assert_eq!(env_id("BOARD_MCP_TEST_ID"), Some(7));
     }
 }

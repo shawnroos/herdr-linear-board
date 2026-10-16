@@ -25,13 +25,13 @@ mod params;
 mod transport;
 mod types;
 
-/// Herdr releases this client accepts, oldest first. Each must speak
-/// [`SUPPORTED_HERDR_PROTOCOL`]; a release that changes the protocol is refused.
-pub const SUPPORTED_HERDR_VERSIONS: &[&str] = &["0.9.0", "0.9.1", "0.9.2", "0.9.3"];
-/// The oldest supported Herdr release; test fakes report it in `ping`.
-pub const SUPPORTED_HERDR_VERSION: &str = SUPPORTED_HERDR_VERSIONS[0];
-/// The supported releases as shown in error messages and docs.
-pub const SUPPORTED_HERDR_RANGE: &str = "0.9.0\u{2013}0.9.3";
+/// The Herdr release series supported by this client: any `0.9.<patch>`
+/// release or `-preview.*` build of one, provided it speaks
+/// [`SUPPORTED_HERDR_PROTOCOL`].
+pub const SUPPORTED_HERDR_SERIES: &str = "0.9";
+/// The Herdr release the checked-in schema dump and test fakes are pinned to.
+/// It is one member of [`SUPPORTED_HERDR_SERIES`], not the runtime gate.
+pub const SUPPORTED_HERDR_VERSION: &str = "0.9.0";
 /// The only Herdr socket protocol supported by this client.
 pub const SUPPORTED_HERDR_PROTOCOL: u32 = 22;
 

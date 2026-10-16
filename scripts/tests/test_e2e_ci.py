@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -11,18 +9,6 @@ from _support import REPO_ROOT as ROOT
 
 HERDR_VERSION = "0.9.0"
 HERDR_PROTOCOL = 22
-# The supported range 0.9.0-0.9.3 as each shell twin spells it.
-CLI_VERSION_CASE = '"herdr 0.9."[0-3]|"herdr 0.9."[0-3]"-preview."*)'
-PING_VERSION_CASE = '"0.9."[0-3]|"0.9."[0-3]"-preview."*)'
-PING_VERSION_JQ = r'test("^0\\.9\\.[0-3](-preview\\..*)?$")'
-ACCEPTED_PING_VERSIONS = (
-    "0.9.0",
-    "0.9.1",
-    "0.9.2",
-    "0.9.3",
-    "0.9.3-preview.2026-09-29-8e78f929d8f0",
-)
-REFUSED_PING_VERSIONS = ("0.8.9", "0.9.4", "0.9.30", "0.9.0-rc1", "1.0.0", "")
 HERDR_SHA256 = "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f"
 HERDR_URL = (
     "https://github.com/herdrdev/herdr/releases/download/"
@@ -128,31 +114,42 @@ class LiveE2ECIContractTests(unittest.TestCase):
         self.assertIn("PROVIDER_SCENARIOS=()", runner)
         self.assertIn("--provider-free", self.wrapper)
 
-    def test_e2e_preflights_and_real_claude_pin_the_same_exact_contract(self) -> None:
-        # The preflight accepts the pinned release OR a preview of it, because a
-        # preview ships that release's socket protocol. Both of lib.sh's
-        # comparisons must say so; pinning the exact string here is what let the
-        # `-preview` gap survive in this file after the runtime client was fixed
+    def test_e2e_preflights_and_real_smokes_share_one_series_rule(self) -> None:
+        # Every shell gate accepts any 0.9.<patch> release or preview of one and
+        # leaves protocol 22 as the hard gate, matching is_supported_release in
+        # crates/board-herdr/src/client.rs. Pinning an exact string here is what
+        # let a stale gate survive before
         # (docs/solutions/integration-issues/a-pinned-version-check-has-a-twin.md).
-        self.assertIn(CLI_VERSION_CASE, self.lib)
-        self.assertIn(PING_VERSION_CASE, self.lib)
+        rule = re.search(r"^E2E_HERDR_SERIES_RE='([^']+)'$", self.lib, re.M)
+        self.assertIsNotNone(rule, "e2e/lib.sh must define E2E_HERDR_SERIES_RE")
+        series = rule.group(1)
+        self.assertIn('[[ "$version" =~ ^herdr\\ $E2E_HERDR_SERIES_RE ]]', self.lib)
+        self.assertIn('[[ "$reported_version" =~ ^$E2E_HERDR_SERIES_RE ]]', self.lib)
         self.assertIn(f'[ "$protocol" = "{HERDR_PROTOCOL}" ]', self.lib)
-        self.assertIn(CLI_VERSION_CASE, self.real_claude)
-        self.assertIn(f".protocol == {HERDR_PROTOCOL}", self.real_claude)
-        self.assertIn(f"herdr_schema_protocol={HERDR_PROTOCOL}", self.real_claude)
-        self.assertIn(
-            f"(.version | {PING_VERSION_JQ}) and .protocol == {HERDR_PROTOCOL}",
-            self.real_claude,
-        )
-        self.assertIn(
-            r"claude:[[:space:]]+current[[:space:]]+\(v7\)",
-            self.real_claude,
-        )
-        for source in (self.lib, self.real_claude):
-            self.assertNotIn("0.7.5", source)
-            self.assertNotIn("protocol 17", source)
-
-    def test_every_real_smoke_gates_on_the_supported_range(self) -> None:
+        for accepted in (
+            "0.9.0",
+            "0.9.1",
+            "0.9.3",
+            "0.9.0-preview.2026-09-09-5a244caa60b0",
+            "0.9.3-preview.2026-10-01-0000",
+        ):
+            with self.subTest(accepted=accepted):
+                self.assertRegex(accepted, "^" + series)
+        for refused in (
+            "",
+            "0.8.2",
+            "0.10.0",
+            "1.9.0",
+            "0.90.0",
+            "0.9",
+            "0.9.x",
+            "0.9.3a",
+            "0.9.00",
+            "0.9.0-rc1",
+        ):
+            with self.subTest(refused=refused):
+                self.assertNotRegex(refused, "^" + series)
+        jq_series = series.replace("\\", "\\\\")
         for name in (
             "real-pi-smoke.sh",
             "real-claude-haiku-smoke.sh",
@@ -161,37 +158,29 @@ class LiveE2ECIContractTests(unittest.TestCase):
         ):
             source = (ROOT / "e2e" / name).read_text(encoding="utf-8")
             with self.subTest(smoke=name):
-                self.assertIn(CLI_VERSION_CASE, source)
-                self.assertNotIn('= "herdr 0.9.0" ]', source)
-                self.assertNotIn('.version == "0.9.0"', source)
-                if name != "real-pi-smoke.sh":
-                    self.assertIn(f"(.version | {PING_VERSION_JQ})", source)
-
-    def test_shell_version_patterns_accept_exactly_the_supported_range(self) -> None:
-        # A string match proves the pattern is present, not that it accepts the
-        # right releases; run each pattern the way the scripts do.
-        for version in ACCEPTED_PING_VERSIONS + REFUSED_PING_VERSIONS:
-            expected = version in ACCEPTED_PING_VERSIONS
-            for pattern, value in (
-                (PING_VERSION_CASE, version),
-                (CLI_VERSION_CASE, f"herdr {version}"),
-            ):
-                with self.subTest(pattern=pattern, value=value):
-                    script = f'case "$1" in {pattern} exit 0 ;; *) exit 1 ;; esac'
-                    result = subprocess.run(["bash", "-c", script, "_", value])
-                    self.assertEqual(result.returncode == 0, expected)
-            with self.subTest(jq=version):
-                result = subprocess.run(
-                    ["jq", "-e", f".version | {PING_VERSION_JQ}"],
-                    input=json.dumps({"version": version}),
-                    text=True,
-                    capture_output=True,
+                self.assertIn(f"HERDR_SERIES_RE='{series}'", source)
+                self.assertIn(
+                    '[[ "$HERDR_VERSION" =~ ^herdr\\ $HERDR_SERIES_RE ]]', source
                 )
-                self.assertEqual(result.returncode == 0, expected, result.stderr)
+                self.assertNotIn('= "herdr 0.9.0" ]', source)
+                if name != "real-pi-smoke.sh":
+                    self.assertIn(
+                        f'(.version | test("^{jq_series}")) '
+                        f"and .protocol == {HERDR_PROTOCOL}",
+                        source,
+                    )
+        self.assertIn(f".protocol == {HERDR_PROTOCOL}", self.real_claude)
+        self.assertIn(f"herdr_schema_protocol={HERDR_PROTOCOL}", self.real_claude)
+        self.assertIn(
+            r"claude:[[:space:]]+current[[:space:]]+\(v7\)",
+            self.real_claude,
+        )
+        for source in (self.lib, self.real_claude):
+            self.assertNotIn("0.7.5", source)
+            self.assertNotIn("protocol 17", source)
 
-    def test_real_pi_pins_exact_herdr_protocol_and_pi_v8(self) -> None:
+    def test_real_pi_pins_herdr_protocol_and_pi_v8(self) -> None:
         source = self.real_pi
-        self.assertIn(CLI_VERSION_CASE, source)
         self.assertIn(f".protocol == {HERDR_PROTOCOL}", source)
         self.assertIn(
             "grep -Eq '^pi:[[:space:]]+current[[:space:]]+\\(v8\\)([[:space:]]+\\(.+\\))?$'",
@@ -235,7 +224,7 @@ class LiveE2ECIContractTests(unittest.TestCase):
             self.assertNotIn("0.7.5", source)
             self.assertNotIn("protocol-17", source)
             self.assertNotIn("protocol 17", source)
-        self.assertIn("Herdr 0.9.0–0.9.3 / socket protocol 22", readme)
+        self.assertIn("Herdr 0.9.x / socket protocol 22", readme)
         self.assertIn("protocol-22/current", readme)
         self.assertIn("Pi integration v8", readme)
         self.assertIn("Pi integration v8", awaiting)

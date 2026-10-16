@@ -90,7 +90,7 @@ about whether the document is valid.
 ### Herdr compatibility and launch boundary
 
 The public boardd socket protocol remains **v1**. That is independent of the upstream Herdr socket
-contract: this version supports **Herdr 0.9.0–0.9.3 / protocol 22**. The daemon opens a fresh
+contract: this version supports **Herdr 0.9.x / protocol 22** (any 0.9 patch release or `-preview.*` build of one). The daemon opens a fresh
 Herdr request connection per operation, so compatibility is checked at each boundary rather than
 only once at startup:
 
@@ -286,7 +286,7 @@ Cards target a **herdr session** plus a space in it. Because two sessions can ea
 
 ### new_workspace flow
 
-On first dispatch of a `new_workspace` card: preflight the selected socket for Herdr 0.9.0–0.9.3 /
+On first dispatch of a `new_workspace` card: preflight the selected socket for Herdr 0.9.x /
 protocol 22, then list the session's workspaces; if one's label matches `space_ref`
 (case-insensitive) reuse it, else `workspace.create {label:space_ref, cwd:space_cwd, focus:false}`.
 Then proceed identically to a `workspace` card (cwd snapshot, pane-first per-card tab placement). An existing `workspace` card may provide `space_cwd` as an explicit override; otherwise its non-empty live pane cwd values must all agree, and heterogeneous candidates fail closed instead of depending on snapshot order. Reused `new_workspace` cards still verify the live workspace rather than treating their creation cwd as an override. If the reused or existing workspace snapshot fails, or contains no live cwd, dispatch fails; it never falls back to process cwd or a stale snapshot. A workspace this dispatch **created** additionally
@@ -772,7 +772,7 @@ opens the script, the residual configured-script orphan is an accepted asynchron
 2. **User drags card → Plan** (TUI → boardd `card.move`).
 3. Column engine: *Plan* is `trigger=auto` → **enqueue run** on the card's space queue.
 4. Dispatcher (respecting per-space serial queue + global cap):
-   a. Resolve the card's session socket and `ping` it. Anything except Herdr 0.9.0–0.9.3 / protocol 22 fails before workspace discovery/creation. Then reuse workspace `w4`, or create/reuse the card's labeled `new_workspace`; repository worktree isolation remains an agent prompt responsibility.
+   a. Resolve the card's session socket and `ping` it. Anything except Herdr 0.9.x / protocol 22 fails before workspace discovery/creation. Then reuse workspace `w4`, or create/reuse the card's labeled `new_workspace`; repository worktree isolation remains an agent prompt responsibility.
    b. Preflight the selected socket again at the spawner boundary. For a new durable run, the card's **`card-<id>` tab** is resolved by exact owned id (reconstructed from the newest matching durable pane in the same session/workspace when boardd restarts), or `tab.create {workspace_id,cwd,env,…}` supplies a new shell anchor — unless the dispatch just created the workspace, in which case the workspace's own initial tab is adopted (verified, then renamed) instead of leaving an unused tab. The anchor is labeled `card-<id>-anchor`, its exact id is persisted on the promoted run (NULL for managed runs, whose anchor is closed after a successful launch), and the run child is always created by `pane.split` from that anchor; `agent.start`/`pane run` never target the root. A renamed anchor is still selected only by exact identity; a closed anchor is recreated only from a durable board-run child in the exact proven tab, and missing proof creates a fresh tab without selecting a duplicate-label user tab. Exact ended children may be reclaimed before a later split so the anchor keeps usable geometry. The child receives the run env; the anchor receives only stable card identity. If multiple historical panes are live, newest run id wins; legacy rows retain their old lookup. Placement, cwd, and environment are not `agent.start` fields; the call receives neither the workspace placement nor the anchor pane id.
     c. For Pi/Claude, write the snapshotted system prompt to a mode-`0600` temporary file; issue `agent.start {name,kind,pane_id,args}` on the split child with prompt-free startup args; a typed `agent_pane_busy` retries the exact request on that same child with bounded 100ms/200ms backoff (never another split); poll `agent.get` for readiness; then send only the task snapshot through `agent.prompt`. Remove the file. For codex/opencode/antigravity, no prompt file exists: after the same readiness poll the daemon bounded-polls `agent.get.agent_session` (at most 5 probes / 10s) for the integration-reported id (expected agent, `kind:"id"`, non-empty `value`; opencode and antigravity also pin the integration source, `herdr:opencode` / `herdr:antigravity_cli`) and persists it atomically with the promotion — **codex captures before delivering the prompt, opencode and antigravity after it** (real OpenCode mints `agent_session` only once the first `agent.prompt` lands; antigravity likewise reports its conversation id only after the first prompt) — and the prompt is a delimited `system + task` block on a Mint, the task alone on a resume/fork fresh pane. Card status → `running`; record the exact child pane/workspace ids. The pane is **visible** — you can watch or type into it anytime.
 
@@ -926,7 +926,7 @@ herdr panes are fully drivable from the CLI (`pane send-keys` with named keys, `
 | 1. Unit | column engine, prompt assembly, queue, transitions | plain Rust tests, in-memory SQLite; no herdr |
 | 2. TUI snapshot | every view/modal/keybind incl. `?` help | ratatui `TestBackend` + fed `KeyEvent`s + `insta` snapshots; no herdr, no terminal |
 | 3. Daemon integration | dispatch → run → done → auto-move, without tokens | config fake harness plus built-in Pi adapter tests; real boardd paths, no provider call |
-| 4. Full E2E | real Herdr wiring | collision-resistant ephemeral named Herdr session plus disposable workspace; the standard suite uses checked-in fake Pi/Claude/Codex/OpenCode/Antigravity (`agy`)/configured harnesses and asserts pane-first placement/prompt/argv contracts against the current Herdr 0.9.0 / protocol 22 gate with zero provider cost. Separate opt-in real-Claude Haiku/low, real-Codex low, and real-OpenCode low smokes are never in `run-all.sh`; each intended contract is one authorized attempt with no retry or fallback (and may incur cost). |
+| 4. Full E2E | real Herdr wiring | collision-resistant ephemeral named Herdr session plus disposable workspace; the standard suite uses checked-in fake Pi/Claude/Codex/OpenCode/Antigravity (`agy`)/configured harnesses and asserts pane-first placement/prompt/argv contracts against the current Herdr 0.9.x / protocol 22 gate with zero provider cost. Separate opt-in real-Claude Haiku/low, real-Codex low, and real-OpenCode low smokes are never in `run-all.sh`; each intended contract is one authorized attempt with no retry or fallback (and may incur cost). |
 
 Isolation rules for level 3–4: `BOARD_DB=/tmp/…` + dedicated daemon socket per test run so tests never touch the real board; every interactive/live test must create and use a collision-resistant ephemeral named Herdr session plus a disposable workspace, never a user's session, workspace, or tab. The session may run headlessly in CI, but it must retain the same named-session and workspace requirements.
 
@@ -955,9 +955,47 @@ space whose store exists says so and names the command. Install and cut-over ste
 [install.md](install.md) → Linear mode and agent tools.
 
 **Identity.** The board identifies its space from `HERDR_WORKSPACE_ID` first, then
-`workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory. `BOARD_SCOPE_PATH` is
+`workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON`, never from a directory alone. `BOARD_SCOPE_PATH` is
 ignored in Linear mode with one line on stderr. Outside herdr neither variable is set and the
 upstream board runs unchanged.
+
+**The caller's pane.** An agent's tools need to know which herdr pane they run in: `open_board`
+splits beside it, and marks, notes and Linear activity are recorded under its space. Claude Code
+can start a session from a pre-started "warm spare" whose tools, hooks and MCP servers have no
+`HERDR_*` variables, although the pane's shell has them. So `board mcp`, `board caller`,
+`board linear report`, `board linear session` and `board linear snapshot` resolve the caller in a
+fixed order:
+
+```text
+explicit pane (`<session>/<pane id>`)   wins over env; the caller named it on purpose
+  → env (HERDR_PANE_ID + HERDR_WORKSPACE_ID + HERDR_SOCKET_PATH, all three)   no lookup
+  → boardd caller.resolve
+      → the pane this Claude session confirmed earlier (daemon memory)
+      → folder lookup across every herdr session: Claude panes whose cwd or foreground_cwd
+        is the caller's folder  → always "unconfirmed" candidates, never a location
+```
+
+The board never guesses between candidates, and never uses even a single match until the caller
+confirms it: a wrong pane misattributes writes and opens the board in someone else's tab. An MCP
+tool that needs the pane refuses with the candidates and tells the agent to ask the person; the
+retry passes `pane`. Shell callers use `board caller --json [--pane X]`, which prints `resolved`,
+`unconfirmed` or `not_in_herdr`.
+
+A pane confirmed with `pane` is remembered by boardd in memory, keyed by the Claude session id, so
+later calls from any process of that session resolve without asking, after one `pane.get` shows
+the pane still exists. A pane herdr reports gone is forgotten; a session that does not answer
+keeps the memory but it is not used for that call. Nothing is written to SQLite; a daemon restart
+clears it. The hooks use `CLAUDE_PROJECT_DIR` (where the session started, which is
+the pane's cwd) before the payload's `cwd`, read the remembered choice, and never confirm a pane:
+`linear report` records activity without a space, and `linear session` prints the candidates or a
+no-space notice and exits 0.
+
+Some surfaces stay env-only. `board done` and `board comment` keep `HERDR_PANE_ID` alone, because
+the daemon treats a pane match as proof of run identity and an inferred pane would widen that
+trust; daemon-spawned agent panes always carry env. The TUI and `board tui --session` run in panes
+herdr starts with full env. `board linear status-line` has a 200 ms budget that a daemon round trip
+plus one herdr call per session cannot meet. Field notes are in [herdr.md](herdr.md) → Finding the
+caller's pane without herdr env.
 
 **Mode decision.** `board tui` decides the mode before any store write. With a space id the CLI
 opens the daemon client and starts the TUI in Linear mode; the upstream path, which persists a
@@ -1028,7 +1066,8 @@ that code as not retryable.
 
 `board linear snapshot [workspace-id] [--json]` is the same read from the command line and prints
 the document as JSON either way. With no positional it reads the space from
-`HERDR_WORKSPACE_ID`, before it connects to the daemon, so a missing id never starts one.
+`HERDR_WORKSPACE_ID`; without that it asks an already running daemon for the pane this Claude
+session confirmed, and never starts one, so a missing id still exits 64.
 `board linear issue <ID>` is the issue read.
 `board linear pr <url> [--force]` reads one pull request through the daemon's `gh` and prints the
 `linear.pr` document as JSON; `gh` missing or logged out is protocol error `8`, a URL that is not a
